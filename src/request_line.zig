@@ -132,7 +132,10 @@ pub const RequestLine = struct {
             switch (stage) {
                 .Method => {
                     self.method = try parse_method(chunk);
-                    std.debug.print("Request Method: {s}\n", .{@tagName(self.method)});
+                    std.debug.print(
+                        "Request Method: {s}\n",
+                        .{@tagName(self.method)},
+                    );
                     stage = .Host;
                 },
 
@@ -144,7 +147,10 @@ pub const RequestLine = struct {
 
                 .Version => {
                     self.version = try parse_http_version(chunk);
-                    std.debug.print("Request Version: {s}\n", .{@tagName(self.version)});
+                    std.debug.print(
+                        "Request Version: {s}\n",
+                        .{@tagName(self.version)},
+                    );
                     stage = .Done;
                     break :parse;
                 },

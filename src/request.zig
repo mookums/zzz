@@ -16,14 +16,16 @@ pub const Request = struct {
 
     pub fn parse(self: *Request, stream: std.net.Stream) !void {
         var buf = std.io.bufferedReader(stream.reader());
-        const request_line_msg = try buf.reader().readUntilDelimiterAlloc(self.allocator, '\n', 1024);
+        var reader = buf.reader();
+
+        const request_line_msg = try reader.readUntilDelimiterAlloc(self.allocator, '\n', 256);
 
         var request_line = RequestLine.init(request_line_msg);
         try request_line.parse();
 
         headers: while (true) {
             // Read out each line, parsing the header.
-            const header_line_msg = try buf.reader().readUntilDelimiterAlloc(self.allocator, '\n', 1024);
+            const header_line_msg = try reader.readUntilDelimiterAlloc(self.allocator, '\n', 1024);
 
             // Breaks when we hit the body of the request.
             // Minimum header length is 3.
