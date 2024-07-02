@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub const Status = enum(u16) {
     Continue = 100,
@@ -61,4 +62,58 @@ pub const Status = enum(u16) {
     @"Loop Detected" = 508,
     @"Not Extended" = 510,
     @"Network Authentication Required" = 511,
+};
+
+const KVPair = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+pub const Response = struct {
+    const Self = @This();
+    status: Status,
+    headers: [32]?KVPair = [_]?KVPair{null} ** 32,
+    headers_idx: usize = 0,
+
+    pub fn init(status: Status) Self {
+        return Self{ .status = status };
+    }
+
+    pub fn add_header(self: *Self, kv: KVPair) void {
+        // Ensure that these are proper headers.
+        assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
+        assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
+
+        if (self.headers_idx < 32) {
+            self.headers[self.headers_idx] = kv;
+            self.headers_idx += 1;
+        } else {
+            @panic("Too many headers!");
+        }
+    }
+
+    /// Writes this response to the given Writer. This is assumed to be a BufferedWriter
+    /// for the TCP stream.
+    pub fn respond(self: *Self, body: []const u8, writer: anytype) !void {
+        // Status Line
+        try writer.writeAll("HTTP/1.1 ");
+        try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
+        try writer.writeAll(" ");
+        try writer.writeAll(@tagName(self.status));
+        try writer.writeAll("\n");
+
+        // Headers
+        for (self.headers) |header| {
+            if (header) |h| {
+                try writer.writeAll(h.key);
+                try writer.writeAll(": ");
+                try writer.writeAll(h.value);
+                try writer.writeAll("\n");
+            }
+        }
+
+        // Body
+        try writer.writeAll("\r\n");
+        try writer.writeAll(body);
+    }
 };
