@@ -31,7 +31,7 @@ pub fn StreamIterator(comptime T: type, comptime buffer_size: comptime_int) type
                         return self.buffer[self.start..self.end];
                     };
 
-                    std.debug.print("Written: {s}\n", .{buffer_stream.getWritten()});
+                    //std.debug.print("Written: {s}\n", .{buffer_stream.getWritten()});
                     const count = buffer_stream.getWritten().len;
 
                     if (count == 0) {
