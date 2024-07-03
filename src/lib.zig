@@ -138,7 +138,7 @@ pub const zzz = struct {
             var resp = Response.init(.OK);
             resp.add_header(.{ .key = "Server", .value = "zzz (z3)" });
 
-            if (self.options.version == .HTTP1D1) {
+            if (self.options.version == .@"HTTP/1.1") {
                 resp.add_header(.{ .key = "Connection", .value = "close" });
             }
 

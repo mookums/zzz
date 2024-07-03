@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const xev = b.dependency("libxev", .{
+        .optimize = optimize,
+        .target = target,
+    }).module("xev");
+
     const exe = b.addExecutable(.{
         .name = "zzz",
         .root_source_file = b.path("src/main.zig"),
@@ -11,6 +16,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    exe.root_module.addImport("xev", xev);
     exe.linkLibC();
     b.installArtifact(exe);
 
