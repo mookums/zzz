@@ -5,7 +5,7 @@ const AcceptJob = struct {
 };
 
 const ReadJob = struct {
-    connection: std.net.Server.Connection,
+    stream: std.net.Stream,
 };
 
 const RespondJob = struct {

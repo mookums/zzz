@@ -1,15 +1,20 @@
 const std = @import("std");
 const Job = @import("job.zig").Job;
 
+pub const WorkerContext = struct {
+    id: usize,
+};
+
 pub const Worker = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
-    func: *const fn (job: Job) void,
+    func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void,
+    context: WorkerContext,
     thread: std.Thread = undefined,
     job_queue: std.DoublyLinkedList(Job) = std.DoublyLinkedList(Job){},
 
-    pub fn init(allocator: std.mem.Allocator, func: *const fn (job: Job) void) Self {
-        return Self{ .allocator = allocator, .func = func };
+    pub fn init(allocator: std.mem.Allocator, context: WorkerContext, func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void) Self {
+        return Self{ .allocator = allocator, .func = func, .context = context };
     }
 
     pub fn deinit(self: *Self) void {
@@ -49,7 +54,8 @@ pub const Worker = struct {
                             return;
                         }
 
-                        @call(std.builtin.CallModifier.auto, s.func, .{node.data});
+                        // Might be faster to just call the s.func...
+                        @call(std.builtin.CallModifier.auto, s.func, .{ node.data, p, s.context });
 
                         // Destroy Job.
                         s.allocator.destroy(node);
@@ -68,8 +74,8 @@ pub const Worker = struct {
                         };
 
                         // Make sure this is correct order.
-                        p.mutex.unlock();
                         s.job_queue.append(new_node);
+                        p.mutex.unlock();
                     }
                 }
             }
@@ -88,12 +94,12 @@ pub const WorkerPool = struct {
     mutex: std.Thread.Mutex = std.Thread.Mutex{},
     condition: std.Thread.Condition = std.Thread.Condition{},
 
-    pub fn init(allocator: std.mem.Allocator, workers: []Worker, func: *const fn (job: Job) void) !WorkerPool {
+    pub fn init(allocator: std.mem.Allocator, workers: []Worker, func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void) !WorkerPool {
         // allocate all of the workers.
         const pool = Self{ .allocator = allocator, .workers = workers };
 
-        for (pool.workers) |*worker| {
-            worker.* = Worker.init(allocator, func);
+        for (pool.workers, 0..) |*worker, i| {
+            worker.* = Worker.init(allocator, WorkerContext{ .id = i }, func);
         }
 
         return pool;
@@ -121,8 +127,8 @@ pub const WorkerPool = struct {
 
         self.mutex.lock();
         self.job_queue.append(node);
-        self.condition.signal();
         self.mutex.unlock();
+        self.condition.signal();
     }
 
     pub fn deinit(self: *Self) void {

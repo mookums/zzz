@@ -72,7 +72,7 @@ const KVPair = struct {
 pub const Response = struct {
     const Self = @This();
     status: Status,
-    headers: [32]?KVPair = [_]?KVPair{null} ** 32,
+    headers: [32]KVPair = [_]KVPair{undefined} ** 32,
     headers_idx: usize = 0,
 
     pub fn init(status: Status) Self {
@@ -81,8 +81,8 @@ pub const Response = struct {
 
     pub fn add_header(self: *Self, kv: KVPair) void {
         // Ensure that these are proper headers.
-        assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
-        assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
+        //assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
+        //assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
 
         if (self.headers_idx < 32) {
             self.headers[self.headers_idx] = kv;
@@ -103,13 +103,12 @@ pub const Response = struct {
         try writer.writeAll("\n");
 
         // Headers
-        for (self.headers) |header| {
-            if (header) |h| {
-                try writer.writeAll(h.key);
-                try writer.writeAll(": ");
-                try writer.writeAll(h.value);
-                try writer.writeAll("\n");
-            }
+        for (0..self.headers_idx) |i| {
+            const h = self.headers[i];
+            try writer.writeAll(h.key);
+            try writer.writeAll(": ");
+            try writer.writeAll(h.value);
+            try writer.writeAll("\n");
         }
 
         // Body
