@@ -68,13 +68,28 @@ pub const zzz = struct {
             defer buf_writer.flush() catch {};
             const writer = buf_writer.writer();
 
-            const RequestLineParsingStage = enum {
+            const RequestLineParsing = enum {
                 Method,
                 Host,
                 Version,
-                Done,
             };
-            var stage: RequestLineParsingStage = .Method;
+
+            const HeaderParsing = enum {
+                Name,
+                Value,
+            };
+
+            const ParsingStages = enum {
+                RequestLine,
+                Headers,
+            };
+
+            const Parsing = union(ParsingStages) {
+                RequestLine: RequestLineParsing,
+                Headers: HeaderParsing,
+            };
+
+            var stage: Parsing = .{ .RequestLine = .Method };
 
             var no_bytes_left = false;
             parse: while (true) {
@@ -83,54 +98,46 @@ pub const zzz = struct {
                     break :blk 0;
                 };
 
-                if (std.ascii.isWhitespace(byte) or no_bytes_left) {
-                    switch (stage) {
-                        .Method => {
-                            stage = .Host;
-                        },
+                switch (stage) {
+                    .RequestLine => |rl| {
+                        if (std.ascii.isWhitespace(byte) or no_bytes_left) {
+                            switch (rl) {
+                                .Method => {
+                                    //std.debug.print("Matched Method!\n", .{});
+                                    stage = .{ .RequestLine = .Version };
+                                },
 
-                        .Host => {
-                            stage = .Version;
-                        },
+                                .Version => {
+                                    //std.debug.print("Matched Version!\n", .{});
+                                    stage = .{ .RequestLine = .Host };
+                                },
 
-                        .Version => {
-                            stage = .Done;
-                            break :parse;
-                        },
-                        .Done => {
-                            break :parse;
-                        },
-                    }
-                }
-            }
-
-            const HeaderParsingStage = enum { Name, Value };
-            var stage_header: HeaderParsingStage = .Name;
-
-            no_bytes_left = false;
-            headers: while (true) {
-                const byte = reader.readByte() catch blk: {
-                    no_bytes_left = true;
-                    break :blk 0;
-                };
-
-                if (byte == ':' or byte == '\n' or no_bytes_left) {
-                    switch (stage_header) {
-                        .Name => {
-                            if (byte == '\n') {
-                                break :headers;
+                                .Host => {
+                                    //std.debug.print("Matched Host!\n", .{});
+                                    stage = .{ .Headers = .Name };
+                                },
                             }
-                            stage_header = .Value;
-                        },
+                        }
+                    },
 
-                        .Value => {
-                            stage_header = .Name;
-                        },
-                    }
-                }
+                    .Headers => |h| {
+                        if (byte == ':' or byte == '\n' or no_bytes_left) {
+                            switch (h) {
+                                .Name => {
+                                    if (byte != ':') {
+                                        break :parse;
+                                    }
 
-                if (no_bytes_left) {
-                    break :headers;
+                                    //std.debug.print("Matched Header Key!\n", .{});
+                                    stage = .{ .Headers = .Value };
+                                },
+                                .Value => {
+                                    //std.debug.print("Matched Header Value!\n", .{});
+                                    stage = .{ .Headers = .Name };
+                                },
+                            }
+                        }
+                    },
                 }
             }
 
