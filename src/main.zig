@@ -28,7 +28,7 @@ pub fn tcp_accept_callback(
 
     const tcp = r catch return xev.CallbackAction.rearm;
 
-    std.debug.print("TCP Accepted!\n", .{});
+    //std.debug.print("TCP Accepted!\n", .{});
     const buf = xev.ReadBuffer{ .array = undefined };
 
     tcp.read(l, c, buf, zzzContext, context, tcp_read_callback);
@@ -48,13 +48,13 @@ pub fn tcp_read_callback(
     var context = ud orelse return xev.CallbackAction.disarm;
     const count = r catch return xev.CallbackAction.disarm;
 
-    std.debug.print("Read: {s}\n", .{b.array[0..count]});
-    std.debug.print("Count: {d}\n", .{count});
+    //std.debug.print("Read: {s}\n", .{b.array[0..count]});
+    //std.debug.print("Count: {d}\n", .{count});
     context.message.appendSlice(b.array[0..count]) catch return xev.CallbackAction.disarm;
 
     // PARSING TIME!! <3
-    if (count < 2) {
-        std.debug.print("Whole: {s}", .{context.message.items});
+    if (std.mem.endsWith(u8, context.message.items, "\r\n\r\n")) {
+        //std.debug.print("Whole: {s}", .{context.message.items});
         const RequestLineParsing = enum {
             Method,
             Host,
@@ -86,17 +86,17 @@ pub fn tcp_read_callback(
                     if (std.ascii.isWhitespace(byte) or no_bytes_left) {
                         switch (rl) {
                             .Method => {
-                                std.debug.print("Matched Method!\n", .{});
+                                //std.debug.print("Matched Method!\n", .{});
                                 stage = .{ .RequestLine = .Version };
                             },
 
                             .Version => {
-                                std.debug.print("Matched Version!\n", .{});
+                                //std.debug.print("Matched Version!\n", .{});
                                 stage = .{ .RequestLine = .Host };
                             },
 
                             .Host => {
-                                std.debug.print("Matched Host!\n", .{});
+                                //std.debug.print("Matched Host!\n", .{});
                                 stage = .{ .Headers = .Name };
                             },
                         }
@@ -111,11 +111,11 @@ pub fn tcp_read_callback(
                                     break :parse;
                                 }
 
-                                std.debug.print("Matched Header Key!\n", .{});
+                                //std.debug.print("Matched Header Key!\n", .{});
                                 stage = .{ .Headers = .Value };
                             },
                             .Value => {
-                                std.debug.print("Matched Header Value!\n", .{});
+                                //std.debug.print("Matched Header Value!\n", .{});
                                 stage = .{ .Headers = .Name };
                             },
                         }
@@ -125,9 +125,9 @@ pub fn tcp_read_callback(
         }
 
         // We can now write out a response...
-        const ret: []const u8 = "HTTP/1.1 200 OK\n\r\n";
-        const slice = context.allocator.dupe(u8, ret) catch unreachable;
-        const buffer = xev.WriteBuffer{ .slice = slice };
+        const file = @embedFile("./sample.html");
+        const ret: []const u8 = "HTTP/1.1 200 OK\n\r\n" ++ file;
+        const buffer = xev.WriteBuffer{ .slice = ret };
 
         const written = context.allocator.create(usize) catch unreachable;
         written.* = 0;
@@ -153,11 +153,11 @@ pub fn tcp_write_callback(
 
     if (false) {
         ud.?.* = count;
-        std.debug.print("Count: {d}\n", .{count});
-        std.debug.print("Rearm Write to TCP\n", .{});
+        //std.debug.print("Count: {d}\n", .{count});
+        //std.debug.print("Rearm Write to TCP\n", .{});
         return xev.CallbackAction.rearm;
     } else {
-        std.debug.print("Disarm Write to TCP\n", .{});
+        //std.debug.print("Disarm Write to TCP\n", .{});
         tcp.close(l, c, void, null, tcp_close_callback);
         return xev.CallbackAction.disarm;
     }
@@ -209,11 +209,11 @@ pub fn main() !void {
     try tcp.bind(addr);
     try tcp.listen(4096);
 
-    var tc: xev.Completion = undefined;
-    const timer = try xev.Timer.init();
-    timer.run(&loop, &tc, 3000, void, null, timerCallback);
+    //var tc: xev.Completion = undefined;
+    //const timer = try xev.Timer.init();
+    //timer.run(&loop, &tc, 3000, void, null, timerCallback);
 
-    const ACCEPT_COUNT = 1;
+    const ACCEPT_COUNT = 50;
     while (true) {
         var completions: [ACCEPT_COUNT]xev.Completion = undefined;
         for (0..ACCEPT_COUNT) |i| {
