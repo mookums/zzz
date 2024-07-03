@@ -3,6 +3,10 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.11.0",
     .dependencies = .{
+        .libxev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/1dd3c9015a542757b049f6d33beb8941f57bce1f.tar.gz",
+            .hash = "1220b644b45718a869b37bc37bbc476e69922b21090003b38c1b68a7218fc365771a",
+        },
     },
 
     .paths = .{
