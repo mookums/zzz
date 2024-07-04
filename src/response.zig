@@ -92,6 +92,18 @@ pub const Response = struct {
         }
     }
 
+    pub fn respond_into_buffer(self: *Self, body: []const u8, buffer: []u8) ![]u8 {
+        var stream = std.io.fixedBufferStream(buffer);
+        try self.respond(body, stream.writer());
+        return try stream.getWritten();
+    }
+
+    pub fn respond_into_alloc(self: *Self, body: []const u8, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+        var stream = std.io.fixedBufferStream(try allocator.alloc(u8, max_size));
+        try self.respond(body, stream.writer());
+        return stream.getWritten();
+    }
+
     /// Writes this response to the given Writer. This is assumed to be a BufferedWriter
     /// for the TCP stream.
     pub fn respond(self: *Self, body: []const u8, writer: anytype) !void {
@@ -100,7 +112,7 @@ pub const Response = struct {
         try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
         try writer.writeAll(" ");
         try writer.writeAll(@tagName(self.status));
-        try writer.writeAll("\n");
+        try writer.writeAll("\r\n");
 
         // Headers
         for (0..self.headers_idx) |i| {
@@ -108,7 +120,7 @@ pub const Response = struct {
             try writer.writeAll(h.key);
             try writer.writeAll(": ");
             try writer.writeAll(h.value);
-            try writer.writeAll("\n");
+            try writer.writeAll("\r\n");
         }
 
         // Body

@@ -3,129 +3,7 @@ const builtin = @import("builtin");
 const zzz = @import("lib.zig").zzz;
 
 const stdout = std.io.getStdOut().writer();
-
-const xev = @import("xev");
-
 const Response = @import("response.zig").Response;
-const Worker = @import("worker.zig").Worker;
-const WorkerContext = @import("worker.zig").WorkerContext;
-const WorkerPool = @import("worker.zig").WorkerPool;
-const Job = @import("job.zig").Job;
-
-pub const RequestContext = struct {
-    pool: *WorkerPool,
-    parent_allocator: *std.mem.Allocator,
-    arena: *std.heap.ArenaAllocator,
-    message: std.ArrayList(u8),
-};
-
-const AcceptContext = struct {
-    pool: *WorkerPool,
-    parent_allocator: *std.mem.Allocator,
-    work_loop: *xev.Loop,
-};
-
-pub fn tcp_accept_callback(
-    ud: ?*AcceptContext,
-    l: *xev.Loop,
-    c: *xev.Completion,
-    r: xev.AcceptError!xev.TCP,
-) xev.CallbackAction {
-    _ = c;
-    _ = l;
-    const context = ud orelse return xev.CallbackAction.rearm;
-    const parent_allocator = context.parent_allocator;
-
-    // Create the arena in the context of the parent allocator.
-    var arena = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return xev.CallbackAction.rearm;
-    arena.* = std.heap.ArenaAllocator.init(parent_allocator.*);
-    var alloc = arena.allocator();
-
-    var r_context = alloc.create(RequestContext) catch return xev.CallbackAction.rearm;
-
-    // Store it in the ontext of the request.
-    r_context.parent_allocator = parent_allocator;
-    r_context.arena = arena;
-    r_context.message = std.ArrayList(u8).init(r_context.arena.allocator());
-    r_context.pool = context.pool;
-
-    const tcp = r catch return xev.CallbackAction.rearm;
-    std.debug.print("TCP Accepted!\n", .{});
-
-    const d: *xev.Completion = r_context.arena.allocator().create(xev.Completion) catch return xev.CallbackAction.rearm;
-    d.* = .{};
-
-    const buffer: xev.ReadBuffer = .{ .slice = r_context.arena.allocator().alloc(u8, 256) catch return xev.CallbackAction.rearm };
-    tcp.read(context.work_loop, d, buffer, RequestContext, r_context, tcp_read_callback);
-    std.debug.print("TCP Read Entered into Queue.\n", .{});
-
-    return xev.CallbackAction.rearm;
-}
-
-pub fn tcp_read_callback(
-    ud: ?*RequestContext,
-    l: *xev.Loop,
-    c: *xev.Completion,
-    s: xev.TCP,
-    b: xev.ReadBuffer,
-    r: xev.ReadError!usize,
-) xev.CallbackAction {
-    _ = c;
-
-    const context = ud orelse return xev.CallbackAction.disarm;
-    const count = r catch return xev.CallbackAction.disarm;
-
-    // Ideally, since we have an arena, we should just allocate slices for reading into.
-    context.pool.addJob(Job{ .NewRead = .{ .tcp = s, .buffer = b.slice[0..count], .context = context, .loop = l } }) catch return xev.CallbackAction.disarm;
-
-    return xev.CallbackAction.disarm;
-}
-
-pub fn tcp_write_callback(
-    ud: ?*usize,
-    l: *xev.Loop,
-    c: *xev.Completion,
-    s: xev.TCP,
-    b: xev.WriteBuffer,
-    r: xev.WriteError!usize,
-) xev.CallbackAction {
-    const tcp = s;
-    const count = ud.?.* + (r catch return xev.CallbackAction.disarm);
-    _ = b;
-
-    if (false) {
-        ud.?.* = count;
-        //std.debug.print("Count: {d}\n", .{count});
-        //std.debug.print("Rearm Write to TCP\n", .{});
-        return xev.CallbackAction.rearm;
-    } else {
-        //std.debug.print("Disarm Write to TCP\n", .{});
-        tcp.close(l, c, void, null, xev.noopCallback);
-        return xev.CallbackAction.disarm;
-    }
-}
-
-pub fn tcp_close_callback(
-    ud: ?*RequestContext,
-    l: *xev.Loop,
-    c: *xev.Completion,
-    s: xev.TCP,
-    r: xev.CloseError!void,
-) xev.CallbackAction {
-    _ = l;
-    _ = c;
-    _ = s;
-    _ = r catch return xev.CallbackAction.disarm;
-    const context = ud orelse return xev.CallbackAction.disarm;
-
-    std.debug.print("TCP Closed!\n", .{});
-    context.arena.deinit();
-
-    const parent_alloc = context.parent_allocator;
-    parent_alloc.destroy(context.arena);
-
-    return xev.CallbackAction.disarm;
-}
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -135,28 +13,6 @@ pub fn main() !void {
     //defer z3.deinit();
     //try z3.bind();
     //try z3.listen();
-
-    const workers = try std.heap.c_allocator.alloc(Worker, 2);
-
-    var pool = try WorkerPool.init(std.heap.c_allocator, workers, struct {
-        fn job_handler(job: Job, p: *WorkerPool, ctx: WorkerContext) void {
-            //std.debug.print("Thread: {d}\n", .{ctx.id});
-            _ = ctx;
-
-            switch (job) {
-                .Respond => |inner| {
-                    //std.debug.print("Read: {s}\n", .{inner.request});
-                    inner.stream.close();
-                },
-
-                else => {},
-            }
-            _ = p;
-        }
-    }.job_handler);
-    defer pool.deinit();
-
-    try pool.start();
 
     const addr = try std.net.Address.resolveIp(host, port);
 
@@ -180,18 +36,154 @@ pub fn main() !void {
         try std.posix.bind(server_socket, &addr.any, socklen);
     }
 
-    try std.posix.listen(server_socket, 512);
+    try std.posix.listen(server_socket, 1024);
 
+    const UringJobType = enum {
+        Accept,
+        Read,
+        Write,
+        Close,
+    };
+
+    const UringAccept = struct {
+        allocator: *std.mem.Allocator,
+    };
+
+    const UringRead = struct {
+        allocator: *std.mem.Allocator,
+        socket: std.posix.socket_t,
+        buffer: []u8,
+        request: *std.ArrayList(u8),
+    };
+
+    const UringWrite = struct {
+        allocator: *std.mem.Allocator,
+        socket: std.posix.socket_t,
+        response: []u8,
+        write_count: i32 = 0,
+    };
+
+    const UringClose = struct {
+        allocator: *std.mem.Allocator,
+    };
+
+    const UringJob = union(UringJobType) {
+        Accept: UringAccept,
+        Read: UringRead,
+        Write: UringWrite,
+        Close: UringClose,
+    };
+
+    const allocator = std.heap.c_allocator;
+    //var uring = try std.os.linux.IoUring.init(256, 0);
+    var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
+        .flags = std.os.linux.IORING_SETUP_SQPOLL,
+        .features = 0,
+        .sq_thread_idle = 500,
+    });
+
+    var uring = try std.os.linux.IoUring.init_params(256, &params);
+
+    var address: std.net.Address = undefined;
+    var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+
+    const job: *UringJob = try allocator.create(UringJob);
+    job.* = .{ .Accept = .{ .allocator = @constCast(&allocator) } };
+
+    _ = try uring.accept_multishot(@as(u64, @intFromPtr(job)), server_socket, &address.any, &address_len, 0);
+    _ = try uring.submit();
+
+    // Event Loop to die for...
     while (true) {
-        var address: std.net.Address = undefined;
-        var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+        const rd_count = uring.cq_ready();
+        if (rd_count > 0) {
+            for (0..rd_count) |_| {
+                const cqe = try uring.copy_cqe();
+                const j: *UringJob = @ptrFromInt(cqe.user_data);
 
-        const socket = std.posix.accept(server_socket, &address.any, &address_len, std.posix.SOCK.CLOEXEC) catch continue;
+                //std.debug.print("Current Job: {s}\n", .{@tagName(j.*)});
 
-        const stream: std.net.Stream = .{ .handle = socket };
-        //std.debug.print("Opened TCP Socket!\n", .{});
-        try pool.addJob(.{ .Read = .{ .stream = stream } });
+                switch (j.*) {
+                    .Accept => |inner| {
+                        const socket: std.posix.socket_t = cqe.res;
+                        const buffer = try inner.allocator.alloc(u8, 16);
+                        const read_buffer = .{ .buffer = buffer };
+
+                        // Create the ArrayList for the Request to get read into.
+                        const request = try inner.allocator.create(std.ArrayList(u8));
+                        request.* = std.ArrayList(u8).init(inner.allocator.*);
+
+                        // Pre-grow the ArrayList.
+                        try request.ensureTotalCapacity(512);
+
+                        const new_job: *UringJob = try allocator.create(UringJob);
+                        new_job.* = .{ .Read = .{ .allocator = inner.allocator, .socket = socket, .buffer = buffer, .request = request } };
+                        _ = try uring.read(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
+                    },
+
+                    .Read => |inner| {
+                        const read_count = cqe.res;
+                        // Append the read chunk into our total request.
+                        try inner.request.appendSlice(inner.buffer[0..@intCast(read_count)]);
+
+                        if (read_count == 0) {
+                            inner.allocator.free(inner.buffer);
+                            inner.request.deinit();
+                            inner.allocator.destroy(inner.request);
+                            j.* = .{ .Close = .{ .allocator = inner.allocator } };
+                            _ = try uring.close(@as(u64, @intFromPtr(j)), inner.socket);
+                            continue;
+                        }
+
+                        // This can probably be faster.
+                        if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
+                            // Free the inner read buffer. We have it all in inner.request now.
+                            inner.allocator.free(inner.buffer);
+
+                            // Parse the Request here.
+
+                            // This is where we will match a router.
+                            // Generate Response.
+                            var resp = Response.init(.OK);
+                            resp.add_header(.{ .key = "Server", .value = "zzz (z3)" });
+                            resp.add_header(.{ .key = "Connection", .value = "close" });
+
+                            const file = @embedFile("sample.html");
+                            const buffer = try resp.respond_into_alloc(file, inner.allocator.*, 512);
+
+                            // Free the inner.request since we already used it.
+                            inner.request.deinit();
+                            inner.allocator.destroy(inner.request);
+
+                            j.* = .{ .Write = .{ .allocator = inner.allocator, .socket = inner.socket, .response = buffer, .write_count = 0 } };
+                            _ = try uring.write(@as(u64, @intFromPtr(j)), inner.socket, buffer, 0);
+                        } else {
+                            _ = try uring.read(@as(u64, @intFromPtr(j)), inner.socket, .{ .buffer = inner.buffer }, 0);
+                        }
+                    },
+
+                    .Write => |inner| {
+                        const write_count = cqe.res;
+
+                        if (inner.write_count + write_count == inner.response.len) {
+                            // Close, we are done.
+                            inner.allocator.free(inner.response);
+                            j.* = .{ .Close = .{ .allocator = inner.allocator } };
+                            _ = try uring.close(@as(u64, @intFromPtr(j)), inner.socket);
+                        } else {
+                            // Keep writing.
+                            j.* = .{ .Write = .{ .allocator = inner.allocator, .socket = inner.socket, .response = inner.response, .write_count = inner.write_count + write_count } };
+                            _ = try uring.write(@as(u64, @intFromPtr(j)), inner.socket, inner.response, @intCast(inner.write_count));
+                        }
+                    },
+
+                    .Close => |inner| {
+                        inner.allocator.destroy(j);
+                    },
+                }
+            }
+
+            _ = try uring.submit();
+        }
     }
-
-    try pool.abort();
 }
