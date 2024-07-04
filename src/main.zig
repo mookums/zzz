@@ -60,7 +60,7 @@ pub fn main() !void {
         allocator: *std.mem.Allocator,
         socket: std.posix.socket_t,
         response: []u8,
-        write_count: i32 = 0,
+        write_count: i32,
     };
 
     const UringClose = struct {
@@ -112,9 +112,6 @@ pub fn main() !void {
                         // Create the ArrayList for the Request to get read into.
                         const request = try inner.allocator.create(std.ArrayList(u8));
                         request.* = std.ArrayList(u8).init(inner.allocator.*);
-
-                        // Pre-grow the ArrayList.
-                        try request.ensureTotalCapacity(512);
 
                         const new_job: *UringJob = try allocator.create(UringJob);
                         new_job.* = .{ .Read = .{ .allocator = inner.allocator, .socket = socket, .buffer = buffer, .request = request } };
