@@ -136,7 +136,7 @@ pub fn main() !void {
     //try z3.bind();
     //try z3.listen();
 
-    const workers = try std.heap.c_allocator.alloc(Worker, 12);
+    const workers = try std.heap.c_allocator.alloc(Worker, 2);
 
     var pool = try WorkerPool.init(std.heap.c_allocator, workers, struct {
         fn job_handler(job: Job, p: *WorkerPool, ctx: WorkerContext) void {
@@ -187,7 +187,6 @@ pub fn main() !void {
         var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
 
         const socket = std.posix.accept(server_socket, &address.any, &address_len, std.posix.SOCK.CLOEXEC) catch continue;
-        errdefer std.posix.close(socket);
 
         const stream: std.net.Stream = .{ .handle = socket };
         //std.debug.print("Opened TCP Socket!\n", .{});

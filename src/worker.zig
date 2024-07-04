@@ -10,6 +10,7 @@ pub const Worker = struct {
     allocator: std.mem.Allocator,
     func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void,
     context: WorkerContext,
+    mutex: std.Thread.Mutex = std.Thread.Mutex{},
     condition: std.Thread.Condition = std.Thread.Condition{},
     submitted: std.atomic.Value(usize) = .{ .raw = 0 },
     thread: std.Thread = undefined,
@@ -45,25 +46,11 @@ pub const Worker = struct {
         const thread = try std.Thread.spawn(.{ .allocator = self.allocator }, struct {
             fn run_jobs(s: *Self, p: *WorkerPool) void {
                 while (true) {
-                    {
-                        p.mutex.lock();
-                        defer p.mutex.unlock();
-
-                        while (s.submitted.load(.monotonic) == 0) {
-                            s.condition.wait(&p.mutex);
-                        }
-
-                        //std.debug.print("Submitted Entry Count: {d}\n", .{s.submitted});
-                    }
-
                     // she IO on my URING until i COMPLETE
                     // she K on my QUEUE till i POP
                     while (s.io_uring.cq_ready() > 0) {
                         const cqe = s.io_uring.copy_cqe() catch continue;
                         const job: *Job = @ptrFromInt(cqe.user_data);
-
-                        // Tick down submitted count.
-                        _ = s.submitted.fetchSub(1, .monotonic);
 
                         if (job.* == .Abort) {
                             s.allocator.destroy(job);
@@ -71,8 +58,21 @@ pub const Worker = struct {
                         }
 
                         @call(.auto, s.func, .{ job.*, p, s.context });
+                        // Tick down submitted count.
+                        _ = s.submitted.fetchSub(1, .monotonic);
 
                         s.allocator.destroy(job);
+                    }
+
+                    {
+                        s.mutex.lock();
+                        defer s.mutex.unlock();
+
+                        while (s.submitted.load(.acquire) == 0) {
+                            s.condition.wait(&s.mutex);
+                        }
+
+                        //std.debug.print("Submitted Entry Count: {d}\n", .{s.submitted});
                     }
                 }
             }
@@ -88,7 +88,6 @@ pub const WorkerPool = struct {
     allocator: std.mem.Allocator,
     workers: []Worker,
     worker_idx: usize = 0,
-    mutex: std.Thread.Mutex = std.Thread.Mutex{},
     condition: std.Thread.Condition = std.Thread.Condition{},
 
     pub fn init(allocator: std.mem.Allocator, workers: []Worker, func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void) !WorkerPool {
@@ -137,7 +136,7 @@ pub const WorkerPool = struct {
         }
 
         _ = worker.submitted.fetchAdd(try worker.io_uring.submit(), .monotonic);
-        worker.condition.signal();
+        worker.condition.broadcast();
     }
 
     pub fn deinit(self: *Self) void {
