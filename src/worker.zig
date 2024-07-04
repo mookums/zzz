@@ -10,17 +10,17 @@ pub const Worker = struct {
     allocator: std.mem.Allocator,
     func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void,
     context: WorkerContext,
+    condition: std.Thread.Condition = std.Thread.Condition{},
+    submitted: std.atomic.Value(usize) = .{ .raw = 0 },
     thread: std.Thread = undefined,
-    job_queue: std.DoublyLinkedList(Job) = std.DoublyLinkedList(Job){},
+    io_uring: std.os.linux.IoUring,
 
     pub fn init(allocator: std.mem.Allocator, context: WorkerContext, func: *const fn (job: Job, pool: *WorkerPool, ctx: WorkerContext) void) Self {
-        return Self{ .allocator = allocator, .func = func, .context = context };
+        return Self{ .allocator = allocator, .func = func, .context = context, .io_uring = std.os.linux.IoUring.init(256, 0) catch unreachable };
     }
 
     pub fn deinit(self: *Self) void {
-        while (self.job_queue.pop()) |node| {
-            self.allocator.destroy(node);
-        }
+        self.io_uring.deinit();
     }
 
     // basically, every worker is just a event loop...
@@ -45,37 +45,34 @@ pub const Worker = struct {
         const thread = try std.Thread.spawn(.{ .allocator = self.allocator }, struct {
             fn run_jobs(s: *Self, p: *WorkerPool) void {
                 while (true) {
-                    while (s.job_queue.popFirst()) |node| {
-                        // Experiment with creating an arena allocator here and giving that to the job.
+                    {
+                        p.mutex.lock();
+                        defer p.mutex.unlock();
 
-                        // We have a job.
-                        if (node.data == .Abort) {
-                            s.allocator.destroy(node);
+                        while (s.submitted.load(.monotonic) == 0) {
+                            s.condition.wait(&p.mutex);
+                        }
+
+                        //std.debug.print("Submitted Entry Count: {d}\n", .{s.submitted});
+                    }
+
+                    // she IO on my URING until i COMPLETE
+                    // she K on my QUEUE till i POP
+                    while (s.io_uring.cq_ready() > 0) {
+                        const cqe = s.io_uring.copy_cqe() catch continue;
+                        const job: *Job = @ptrFromInt(cqe.user_data);
+
+                        // Tick down submitted count.
+                        _ = s.submitted.fetchSub(1, .monotonic);
+
+                        if (job.* == .Abort) {
+                            s.allocator.destroy(job);
                             return;
                         }
 
-                        // Might be faster to just call the s.func...
-                        @call(std.builtin.CallModifier.auto, s.func, .{ node.data, p, s.context });
+                        @call(.auto, s.func, .{ job.*, p, s.context });
 
-                        // Destroy Job.
-                        s.allocator.destroy(node);
-                    } else {
-                        // We don't have a job.
-
-                        // Get a lock on the pool's job queue.
-                        p.mutex.lock();
-                        const new_node = wait_for_job: while (true) {
-                            if (p.job_queue.popFirst()) |node| {
-                                break :wait_for_job node;
-                            } else {
-                                // Wait.
-                                p.condition.wait(&p.mutex);
-                            }
-                        };
-
-                        // Make sure this is correct order.
-                        s.job_queue.append(new_node);
-                        p.mutex.unlock();
+                        s.allocator.destroy(job);
                     }
                 }
             }
@@ -90,7 +87,7 @@ pub const WorkerPool = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
     workers: []Worker,
-    job_queue: std.DoublyLinkedList(Job) = std.DoublyLinkedList(Job){},
+    worker_idx: usize = 0,
     mutex: std.Thread.Mutex = std.Thread.Mutex{},
     condition: std.Thread.Condition = std.Thread.Condition{},
 
@@ -122,13 +119,25 @@ pub const WorkerPool = struct {
     }
 
     pub fn addJob(self: *Self, job: Job) !void {
-        const node = try self.allocator.create(std.DoublyLinkedList(Job).Node);
-        node.* = .{ .data = job };
+        // she ROUND on my ROBIN til i SCHEDULE
+        var worker: *Worker = &self.workers[self.worker_idx];
+        self.worker_idx = (self.worker_idx + 1) % self.workers.len;
 
-        self.mutex.lock();
-        self.job_queue.append(node);
-        self.mutex.unlock();
-        self.condition.signal();
+        switch (job) {
+            .Read => |inner| {
+                const buffer: []u8 = try self.allocator.alloc(u8, 256);
+                const new_job: *Job = try self.allocator.create(Job);
+                new_job.* = Job{ .Respond = .{ .stream = inner.stream, .request = buffer } };
+                _ = try worker.io_uring.read(@as(u64, @intFromPtr(new_job)), inner.stream.handle, .{ .buffer = buffer }, 0);
+            },
+
+            else => {
+                std.debug.print("JOB NOT SUPPORTED YET IDIOT!!!\n", .{});
+            },
+        }
+
+        _ = worker.submitted.fetchAdd(try worker.io_uring.submit(), .monotonic);
+        worker.condition.signal();
     }
 
     pub fn deinit(self: *Self) void {
@@ -137,9 +146,5 @@ pub const WorkerPool = struct {
         }
 
         self.allocator.free(self.workers);
-
-        while (self.job_queue.pop()) |node| {
-            self.allocator.destroy(node);
-        }
     }
 };
