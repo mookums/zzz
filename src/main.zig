@@ -140,126 +140,18 @@ pub fn main() !void {
 
     var pool = try WorkerPool.init(std.heap.c_allocator, workers, struct {
         fn job_handler(job: Job, p: *WorkerPool, ctx: WorkerContext) void {
-            std.debug.print("Thread: {d}\n", .{ctx.id});
+            //std.debug.print("Thread: {d}\n", .{ctx.id});
+            _ = ctx;
 
             switch (job) {
-                .Read => |read_job| {
-                    const stream = read_job.stream;
-                    var buf_reader = std.io.bufferedReader(stream.reader());
-                    const reader = buf_reader.reader();
-
-                    const RequestLineParsing = enum {
-                        Method,
-                        Host,
-                        Version,
-                    };
-
-                    const HeaderParsing = enum {
-                        Name,
-                        Value,
-                    };
-
-                    const ParsingStages = enum {
-                        RequestLine,
-                        Headers,
-                    };
-
-                    const Parsing = union(ParsingStages) {
-                        RequestLine: RequestLineParsing,
-                        Headers: HeaderParsing,
-                    };
-
-                    var stage: Parsing = .{ .RequestLine = .Method };
-
-                    var no_bytes_left = false;
-                    parse: while (true) {
-                        const byte = reader.readByte() catch blk: {
-                            no_bytes_left = true;
-                            break :blk 0;
-                        };
-
-                        switch (stage) {
-                            .RequestLine => |rl| {
-                                if (std.ascii.isWhitespace(byte) or no_bytes_left) {
-                                    switch (rl) {
-                                        .Method => {
-                                            //std.debug.print("Matched Method!\n", .{});
-                                            stage = .{ .RequestLine = .Version };
-                                        },
-
-                                        .Version => {
-                                            //std.debug.print("Matched Version!\n", .{});
-                                            stage = .{ .RequestLine = .Host };
-                                        },
-
-                                        .Host => {
-                                            //std.debug.print("Matched Host!\n", .{});
-                                            stage = .{ .Headers = .Name };
-                                        },
-                                    }
-                                }
-                            },
-
-                            .Headers => |h| {
-                                if (byte == ':' or byte == '\n' or no_bytes_left) {
-                                    switch (h) {
-                                        .Name => {
-                                            if (byte != ':') {
-                                                break :parse;
-                                            }
-
-                                            //std.debug.print("Matched Header Key!\n", .{});
-                                            stage = .{ .Headers = .Value };
-                                        },
-                                        .Value => {
-                                            //std.debug.print("Matched Header Value!\n", .{});
-                                            stage = .{ .Headers = .Name };
-                                        },
-                                    }
-                                }
-                            },
-                        }
-                    }
-
-                    p.addJob(Job{ .Respond = .{ .stream = stream, .request = "" } }) catch return;
-                },
-                .Respond => |respond_job| {
-                    const stream = respond_job.stream;
-
-                    var buf_writer = std.io.bufferedWriter(stream.writer());
-                    const writer = buf_writer.writer();
-
-                    const file: []const u8 = @embedFile("sample.html");
-
-                    var resp = Response.init(.OK);
-                    resp.add_header(.{ .key = "Server", .value = "zzz (z3)" });
-
-                    var buf = [1]u8{undefined} ** 16;
-                    const len = std.fmt.formatIntBuf(&buf, file.len, 10, .lower, .{});
-                    resp.add_header(.{ .key = "Content-Length", .value = buf[0..len] });
-
-                    // We do not support keep-alive (right now).
-                    resp.add_header(.{ .key = "Connection", .value = "close" });
-
-                    resp.respond(file, writer) catch return;
-                    buf_writer.flush() catch return;
-                    stream.close();
+                .Respond => |inner| {
+                    //std.debug.print("Read: {s}\n", .{inner.request});
+                    inner.stream.close();
                 },
 
-                .NewRead => |curr_job| {
-                    std.debug.print("Read: {s}\n", .{curr_job.buffer});
-
-                    // For now, we just close it here.
-                    const d: *xev.Completion = curr_job.context.arena.allocator().create(xev.Completion) catch return;
-                    d.* = .{};
-                    curr_job.tcp.close(curr_job.loop, d, RequestContext, curr_job.context, tcp_close_callback);
-                    std.debug.print("Submitted TCP Close into Queue.\n", .{});
-                },
-
-                else => {
-                    std.debug.print("Job: {s}\n", .{@tagName(job)});
-                },
+                else => {},
             }
+            _ = p;
         }
     }.job_handler);
     defer pool.deinit();
@@ -268,65 +160,39 @@ pub fn main() !void {
 
     const addr = try std.net.Address.resolveIp(host, port);
 
-    // NOTES FOR TOMORROW:
-    //
-    // You could try using libxev again...
-    // Use the raw API for interacting with the socket.
-    // When the socket accepts, add an accept job.
-    // When the socket reads, add a read job.
-    // This might help us by allowing workers do do other things while requests are in flight.
-    var accept_loop = try xev.Loop.init(.{});
-    defer accept_loop.deinit();
-
-    var work_loop = try xev.Loop.init(.{});
-    defer work_loop.deinit();
-
-    var tcp = try xev.TCP.init(addr);
-    try tcp.bind(addr);
-    try tcp.listen(1024);
     std.log.debug("zzz listening...", .{});
 
-    var accept_ctx: AcceptContext = .{ .pool = &pool, .parent_allocator = @constCast(&std.heap.c_allocator), .work_loop = &work_loop };
+    const server_socket = blk: {
+        const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
+        break :blk try std.posix.socket(addr.any.family, socket_flags, std.posix.IPPROTO.TCP);
+    };
 
-    var c: xev.Completion = .{};
-    tcp.accept(&accept_loop, &c, AcceptContext, &accept_ctx, tcp_accept_callback);
-    while (true) {
-        // Loop for accepting requests.
-        try accept_loop.run(.no_wait);
-        // Loop for all the work we do on requests.
-        try work_loop.run(.no_wait);
+    if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
+        try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT_LB, &std.mem.toBytes(@as(c_int, 1)));
+    } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
+        try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+    } else {
+        try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
     }
 
-    //const server_socket = blk: {
-    //    const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
-    //    break :blk try std.posix.socket(addr.any.family, socket_flags, std.posix.IPPROTO.TCP);
-    //};
+    {
+        const socklen = addr.getOsSockLen();
+        try std.posix.bind(server_socket, &addr.any, socklen);
+    }
 
-    //if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
-    //    try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT_LB, &std.mem.toBytes(@as(c_int, 1)));
-    //} else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
-    //    try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-    //} else {
-    //    try std.posix.setsockopt(server_socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    //}
+    try std.posix.listen(server_socket, 512);
 
-    //{
-    //    const socklen = addr.getOsSockLen();
-    //    try std.posix.bind(server_socket, &addr.any, socklen);
-    //}
+    while (true) {
+        var address: std.net.Address = undefined;
+        var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
 
-    //try std.posix.listen(server_socket, 512);
+        const socket = std.posix.accept(server_socket, &address.any, &address_len, std.posix.SOCK.CLOEXEC) catch continue;
+        errdefer std.posix.close(socket);
 
-    //while (true) {
-    //    var address: std.net.Address = undefined;
-    //    var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-
-    //    const socket = std.posix.accept(server_socket, &address.any, &address_len, std.posix.SOCK.CLOEXEC) catch continue;
-    //    errdefer std.posix.close(socket);
-
-    //    const stream: std.net.Stream = .{ .handle = socket };
-    //    try pool.addJob(.{ .Read = .{ .stream = stream } });
-    //}
+        const stream: std.net.Stream = .{ .handle = socket };
+        //std.debug.print("Opened TCP Socket!\n", .{});
+        try pool.addJob(.{ .Read = .{ .stream = stream } });
+    }
 
     try pool.abort();
 }
