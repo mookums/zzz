@@ -142,8 +142,6 @@ pub fn main() !void {
                             // This is where we will match a router.
                             // Generate Response.
                             var resp = Response.init(.OK);
-                            resp.add_header(.{ .key = "Server", .value = "zzz (z3)" });
-                            resp.add_header(.{ .key = "Connection", .value = "close" });
 
                             const file = @embedFile("sample.html");
                             const buffer = try resp.respond_into_alloc(file, inner.allocator.*, 512);
