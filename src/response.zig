@@ -106,13 +106,19 @@ pub const Response = struct {
 
     /// Writes this response to the given Writer. This is assumed to be a BufferedWriter
     /// for the TCP stream.
-    pub fn respond(self: *Self, body: []const u8, writer: anytype) !void {
+    pub fn respond(self: *Self, body: ?[]const u8, writer: anytype) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
         try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
         try writer.writeAll(" ");
         try writer.writeAll(@tagName(self.status));
         try writer.writeAll("\r\n");
+
+        // Standard Headers.
+        try writer.writeAll("Server: zzz (z3)\r\n");
+        try writer.writeAll("Connection: close\r\n");
+
+        // Content Length if we have a body.
 
         // Headers
         for (0..self.headers_idx) |i| {
@@ -123,8 +129,13 @@ pub const Response = struct {
             try writer.writeAll("\r\n");
         }
 
-        // Body
-        try writer.writeAll("\r\n");
-        try writer.writeAll(body);
+        // If we have a body...
+        if (body) |b| {
+            try writer.writeAll("Content-Length: ");
+            try std.fmt.formatInt(b.len, 10, .lower, .{}, writer);
+            try writer.writeAll("\r\n");
+            try writer.writeAll("\r\n");
+            try writer.writeAll(b);
+        }
     }
 };
