@@ -1,9 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const zzz = @import("lib.zig").zzz;
-
 const stdout = std.io.getStdOut().writer();
-const Response = @import("response.zig").Response;
+const zzz = @import("lib.zig").zzz;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
