@@ -1,11 +1,13 @@
 const std = @import("std");
-pub const Response = @import("response.zig").Response;
-pub const Version = @import("util.zig").Version;
 pub const UringJob = @import("job.zig").UringJob;
+
+pub const Response = @import("tcp/http/lib.zig").Response;
+pub const Request = @import("tcp/http/lib.zig").Request;
+pub const KVPair = @import("tcp/http/lib.zig").KVPair;
 
 pub const zzzOptions = struct {
     allocator: std.mem.Allocator,
-    version: Version = .@"HTTP/1.1",
+    version: std.http.Version = .@"HTTP/1.1",
     kernel_backlog: u31 = 1024,
     uring_entries: u16 = 256,
     maximum_request_header_size: usize = 1024 * 4,
@@ -96,6 +98,9 @@ pub const zzz = struct {
                             const request = try inner.allocator.create(std.ArrayList(u8));
                             request.* = std.ArrayList(u8).init(inner.allocator.*);
 
+                            // Preallocate some space.
+                            try request.*.ensureTotalCapacity(512);
+
                             const new_job: *UringJob = try allocator.create(UringJob);
                             new_job.* = .{ .Read = .{ .allocator = inner.allocator, .socket = socket, .buffer = buffer, .request = request } };
                             _ = try uring.read(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
@@ -117,6 +122,7 @@ pub const zzz = struct {
 
                             // This can probably be faster.
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
+                                var request = Request(.{ .headers_size = 32 }).init();
                                 // Free the inner read buffer. We have it all in inner.request now.
                                 inner.allocator.free(inner.buffer);
 
@@ -146,7 +152,7 @@ pub const zzz = struct {
 
                                 var start: usize = 0;
                                 var no_bytes_left = false;
-                                no_bytes_left = false;
+                                var key_value: KVPair = .{ .key = undefined, .value = undefined };
 
                                 parse: for (0..self.options.maximum_request_header_size) |i| {
                                     // Our byte is either valid or we set the no_bytes_left flag.
@@ -164,20 +170,21 @@ pub const zzz = struct {
                                             if (std.ascii.isWhitespace(byte) or no_bytes_left) {
                                                 switch (rl) {
                                                     .Method => {
-                                                        std.debug.print("Matched Method: {s}\n", .{inner.request.items[start..i]});
-                                                        start = i + 1;
+                                                        request.add_method(@enumFromInt(std.http.Method.parse(inner.request.items[start..i])));
+                                                        start = i;
                                                         stage = .{ .RequestLine = .Host };
                                                     },
 
                                                     .Host => {
-                                                        std.debug.print("Matched Host: {s}\n", .{inner.request.items[start..i]});
-                                                        start = i + 1;
+                                                        request.add_host(inner.request.items[start + 1 .. i]);
+                                                        start = i;
                                                         stage = .{ .RequestLine = .Version };
                                                     },
 
                                                     .Version => {
-                                                        std.debug.print("Matched Version: {s}\n", .{inner.request.items[start..i]});
-                                                        start = i;
+                                                        // TODO: Parse This.
+                                                        request.add_version(std.http.Version.@"HTTP/1.1");
+                                                        start = i + 1;
                                                         stage = .{ .Headers = .Name };
                                                     },
                                                 }
@@ -185,18 +192,37 @@ pub const zzz = struct {
                                         },
 
                                         .Headers => |h| {
+                                            // Possible Delimters...
                                             if (byte == ':' or byte == '\n' or no_bytes_left) {
                                                 switch (h) {
                                                     .Name => {
+                                                        if (byte == '\r' or byte == '\n') {
+                                                            continue;
+                                                        }
+
                                                         if (byte != ':') {
                                                             break :parse;
                                                         }
 
-                                                        //std.debug.print("Matched Header Key!\n", .{});
+                                                        const key = std.mem.trimLeft(u8, inner.request.items[start..i], &std.ascii.whitespace);
+                                                        key_value.key = key;
+
+                                                        // We want to skip the colon.
+                                                        start = i + 1;
                                                         stage = .{ .Headers = .Value };
                                                     },
+
                                                     .Value => {
-                                                        //std.debug.print("Matched Header Value!\n", .{});
+                                                        // Ignore colons in the Header Value.
+                                                        if (byte == ':') {
+                                                            continue;
+                                                        }
+
+                                                        const value = std.mem.trimLeft(u8, inner.request.items[start..i], &std.ascii.whitespace);
+                                                        key_value.value = value;
+
+                                                        request.add_header(key_value);
+                                                        start = i;
                                                         stage = .{ .Headers = .Name };
                                                     },
                                                 }
@@ -205,9 +231,12 @@ pub const zzz = struct {
                                     }
                                 }
 
+                                //std.debug.print("M: {s} | P: {s} | V: {s}\n", .{ @tagName(request.method), request.host, @tagName(request.version) });
                                 // This is where we will match a router.
+                                // We have our Request (request).
+
                                 // Generate Response.
-                                var resp = Response.init(.OK);
+                                var resp = Response(.{ .headers_size = 1 }).init(.OK);
 
                                 const file = @embedFile("sample.html");
                                 const buffer = try resp.respond_into_alloc(file, inner.allocator.*, 512);
