@@ -24,6 +24,15 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(base);
 
+    const trial = b.addExecutable(.{
+        .name = "trial",
+        .root_source_file = b.path("src/trial.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    b.installArtifact(trial);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
@@ -36,11 +45,20 @@ pub fn build(b: *std.Build) void {
         base_cmd.addArgs(args);
     }
 
+    const trial_cmd = b.addRunArtifact(trial);
+    trial_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        trial_cmd.addArgs(args);
+    }
+
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
     const base_step = b.step("base", "Run stdlib HTTP Server");
     base_step.dependOn(&base_cmd.step);
+
+    const trial_step = b.step("trial", "Run trial HTTP Server");
+    trial_step.dependOn(&trial_cmd.step);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
