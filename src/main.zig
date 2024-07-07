@@ -7,8 +7,11 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var z3 = try zzz.init(host, port, .{ .allocator = std.heap.c_allocator });
-    defer z3.deinit();
-    try z3.bind();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    var z3 = zzz.init(.{ .allocator = allocator, .uring_entries = 1024, .kernel_backlog = 1024 });
+    try z3.bind(host, port);
     try z3.listen();
 }

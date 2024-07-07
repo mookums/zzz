@@ -1,5 +1,8 @@
 const std = @import("std");
+const assert = std.debug.assert;
+
 pub const UringJob = @import("job.zig").UringJob;
+pub const Pool = @import("pool.zig").Pool;
 
 pub const Response = @import("tcp/http/lib.zig").Response;
 pub const Request = @import("tcp/http/lib.zig").Request;
@@ -10,377 +13,164 @@ pub const zzzOptions = struct {
     version: std.http.Version = .@"HTTP/1.1",
     kernel_backlog: u31 = 1024,
     uring_entries: u16 = 256,
-    maximum_request_header_size: usize = 1024 * 4,
+    size_request_header: usize = 1024 * 4,
+    size_read_buffer: usize = 512,
 };
 
+// TODO: Maybe update this so that it is a comptime fn and the zzz instance has all of its settings burned in.
 pub const zzz = struct {
     const Self = @This();
     options: zzzOptions,
-    addr: std.net.Address,
-    socket: std.posix.socket_t = undefined,
+    socket: ?std.posix.socket_t = null,
 
-    /// Create a zzz server, attaching
-    pub fn init(name: []const u8, port: u16, options: zzzOptions) !Self {
-        const addr = try std.net.Address.resolveIp(name, port);
-        std.log.debug("initializing zzz on {s}:{d}", .{ name, port });
-
-        return Self{ .addr = addr, .options = options };
+    /// Initalize an instance of zzz.
+    pub fn init(options: zzzOptions) Self {
+        return Self{ .options = options };
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.socket != undefined) {
-            std.posix.close(self.socket);
+        if (self.socket) |socket| {
+            std.posix.close(socket);
         }
     }
 
-    pub fn bind(self: *Self) !void {
-        self.socket = blk: {
+    pub fn bind(self: *Self, name: []const u8, port: u16) !void {
+        assert(name.len > 0);
+        assert(port > 0);
+        defer assert(self.socket != null);
+
+        const addr = try std.net.Address.resolveIp(name, port);
+        std.log.debug("binding zzz on {s}:{d}", .{ name, port });
+
+        const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
-            break :blk try std.posix.socket(self.addr.any.family, socket_flags, std.posix.IPPROTO.TCP);
+            break :blk try std.posix.socket(addr.any.family, socket_flags, std.posix.IPPROTO.TCP);
         };
 
         if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
-            try std.posix.setsockopt(self.socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT_LB, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT_LB, &std.mem.toBytes(@as(c_int, 1)));
         } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
-            try std.posix.setsockopt(self.socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
         } else {
-            try std.posix.setsockopt(self.socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
         }
 
-        {
-            const socklen = self.addr.getOsSockLen();
-            try std.posix.bind(self.socket, &self.addr.any, socklen);
-        }
+        self.socket = socket;
+        try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
     pub fn listen(self: *Self) !void {
+        assert(self.socket != null);
+        const zzz_socket = self.socket.?;
+        defer std.posix.close(zzz_socket);
+
         std.log.debug("zzz listening...", .{});
-        try std.posix.listen(self.socket, self.options.kernel_backlog);
+        try std.posix.listen(zzz_socket, self.options.kernel_backlog);
 
         const allocator = self.options.allocator;
-        //var uring = try std.os.linux.IoUring.init(256, 0);
-        var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
-            .flags = std.os.linux.IORING_SETUP_SQPOLL,
-            .features = 0,
-            .sq_thread_idle = 1000,
-        });
 
-        var uring = try std.os.linux.IoUring.init_params(self.options.uring_entries, &params);
+        // Create our Ring.
+        var uring = try std.os.linux.IoUring.init(self.options.uring_entries, std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER);
+        defer uring.deinit();
 
-        var address: std.net.Address = undefined;
-        var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+        // Create a buffer of Completion Queue Events to copy into.
+        var cqes = [_]std.os.linux.io_uring_cqe{undefined} ** 1024;
 
-        const job: *UringJob = try allocator.create(UringJob);
-        errdefer self.options.allocator.destroy(job);
+        // What if we had a set of "pools"?
+        // Like a generic pool interface that allows you to initalize
+        var buffer_pool = Pool([1024]u8, 1024).init(null, .{});
+        var job_pool = Pool(UringJob, 1024).init(null, .{});
+        var request_pool = Pool(std.ArrayList(u8), 1024).init(struct {
+            fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
+                for (buffer) |*item| {
+                    var list = std.ArrayList(u8).init(a);
+                    list.ensureTotalCapacity(512) catch unreachable;
+                    item.* = list;
+                }
+            }
+        }.init_hook, allocator);
 
-        job.* = .{ .Accept = .{ .allocator = @constCast(&allocator) } };
+        // Only needed since we do some allocations within the init hook.
+        defer request_pool.deinit(struct {
+            fn deinit_hook(buffer: []std.ArrayList(u8)) void {
+                for (buffer) |item| {
+                    item.deinit();
+                }
+            }
+        }.deinit_hook);
 
-        _ = try uring.accept_multishot(@as(u64, @intFromPtr(job)), self.socket, &address.any, &address_len, 0);
-        _ = try uring.submit();
+        // Create and send the first Job.
+        const job: UringJob = .{ .Accept = .{} };
+        _ = try uring.accept_multishot(@as(u64, @intFromPtr(&job)), zzz_socket, null, null, 0);
 
-        // Event Loop to die for...
         while (true) {
-            const rd_count = uring.cq_ready();
-            if (rd_count > 0) {
-                for (0..rd_count) |_| {
-                    const cqe = try uring.copy_cqe();
-                    const j: *UringJob = @ptrFromInt(cqe.user_data);
+            const rd_count = try uring.copy_cqes(cqes[0..], 0);
+            for (0..rd_count) |i| {
+                const cqe = cqes[i];
+                const j: *UringJob = @ptrFromInt(cqe.user_data);
 
-                    //std.debug.print("Current Job: {s}\n", .{@tagName(j.*)});
+                switch (j.*) {
+                    .Accept => {
+                        const socket: std.posix.socket_t = cqe.res;
+                        const buffer = buffer_pool.get(@mod(@as(usize, @intCast(cqe.res)), buffer_pool.items.len));
+                        const read_buffer = .{ .buffer = buffer };
 
-                    switch (j.*) {
-                        .Accept => |inner| {
-                            const socket: std.posix.socket_t = cqe.res;
-                            const buffer = try inner.allocator.alloc(u8, 64);
-                            const read_buffer = .{ .buffer = buffer };
+                        // Create the ArrayList for the Request to get read into.
+                        const request = request_pool.get(@mod(@as(usize, @intCast(cqe.res)), request_pool.items.len));
 
-                            // Create the ArrayList for the Request to get read into.
-                            const request = try inner.allocator.create(std.ArrayList(u8));
-                            request.* = std.ArrayList(u8).init(inner.allocator.*);
+                        // Empty it out!
+                        //
+                        // Consideration: What if we have a request come in that tries to use a request ArrayList
+                        // that is already being used for a connection? We should have a way to prevent these collisions.
+                        // We are basically doing a very primitive hash table that is array backed. Might be worth it to
+                        // include some sort of collision prevention.
+                        //
+                        // This is faster though.
+                        if (request.items.len > 0) {
+                            request.clearAndFree();
+                        }
 
-                            // Preallocate some space.
-                            try request.*.ensureTotalCapacity(512);
+                        const new_job: *UringJob = job_pool.get(@mod(@as(usize, @intCast(cqe.res)), job_pool.items.len));
+                        new_job.* = .{ .Read = .{ .socket = socket, .buffer = buffer, .request = request } };
+                        _ = try uring.recv(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
+                    },
 
-                            const new_job: *UringJob = try allocator.create(UringJob);
-                            new_job.* = .{ .Read = .{ .allocator = inner.allocator, .socket = socket, .buffer = buffer, .request = request } };
-                            _ = try uring.read(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
-                        },
+                    .Read => |inner| {
+                        const read_count = cqe.res;
 
-                        .Read => |inner| {
-                            const read_count = cqe.res;
-                            // Append the read chunk into our total request.
-                            try inner.request.appendSlice(inner.buffer[0..@intCast(read_count)]);
-
-                            if (read_count == 0) {
-                                inner.allocator.free(inner.buffer);
-                                inner.request.deinit();
-                                inner.allocator.destroy(inner.request);
-                                j.* = .{ .Close = .{ .allocator = inner.allocator } };
-                                _ = try uring.close(@as(u64, @intFromPtr(j)), inner.socket);
-                                continue;
-                            }
-
-                            // This can probably be faster.
+                        if (read_count > 0) {
+                            try inner.request.appendSlice(inner.buffer[0..@as(usize, @intCast(read_count))]);
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
-                                var request = Request(.{ .headers_size = 32 }).init();
-                                // Free the inner read buffer. We have it all in inner.request now.
-                                inner.allocator.free(inner.buffer);
-
-                                // Parse the Request here.
-                                const RequestLineParsing = enum {
-                                    Method,
-                                    Host,
-                                    Version,
-                                };
-
-                                const HeaderParsing = enum {
-                                    Name,
-                                    Value,
-                                };
-
-                                const ParsingStages = enum {
-                                    RequestLine,
-                                    Headers,
-                                };
-
-                                const Parsing = union(ParsingStages) {
-                                    RequestLine: RequestLineParsing,
-                                    Headers: HeaderParsing,
-                                };
-
-                                var stage: Parsing = .{ .RequestLine = .Method };
-
-                                var start: usize = 0;
-                                var no_bytes_left = false;
-                                var key_value: KVPair = .{ .key = undefined, .value = undefined };
-
-                                parse: for (0..self.options.maximum_request_header_size) |i| {
-                                    // Our byte is either valid or we set the no_bytes_left flag.
-                                    const byte = blk: {
-                                        if (i < inner.request.items.len) {
-                                            break :blk inner.request.items[i];
-                                        } else {
-                                            no_bytes_left = true;
-                                            break :blk 0;
-                                        }
-                                    };
-
-                                    switch (stage) {
-                                        .RequestLine => |rl| {
-                                            if (std.ascii.isWhitespace(byte) or no_bytes_left) {
-                                                switch (rl) {
-                                                    .Method => {
-                                                        request.add_method(@enumFromInt(std.http.Method.parse(inner.request.items[start..i])));
-                                                        start = i;
-                                                        stage = .{ .RequestLine = .Host };
-                                                    },
-
-                                                    .Host => {
-                                                        request.add_host(inner.request.items[start + 1 .. i]);
-                                                        start = i;
-                                                        stage = .{ .RequestLine = .Version };
-                                                    },
-
-                                                    .Version => {
-                                                        // TODO: Parse This.
-                                                        request.add_version(std.http.Version.@"HTTP/1.1");
-                                                        start = i + 1;
-                                                        stage = .{ .Headers = .Name };
-                                                    },
-                                                }
-                                            }
-                                        },
-
-                                        .Headers => |h| {
-                                            // Possible Delimters...
-                                            if (byte == ':' or byte == '\n' or no_bytes_left) {
-                                                switch (h) {
-                                                    .Name => {
-                                                        if (byte == '\r' or byte == '\n') {
-                                                            continue;
-                                                        }
-
-                                                        if (byte != ':') {
-                                                            break :parse;
-                                                        }
-
-                                                        const key = std.mem.trimLeft(u8, inner.request.items[start..i], &std.ascii.whitespace);
-                                                        key_value.key = key;
-
-                                                        // We want to skip the colon.
-                                                        start = i + 1;
-                                                        stage = .{ .Headers = .Value };
-                                                    },
-
-                                                    .Value => {
-                                                        // Ignore colons in the Header Value.
-                                                        if (byte == ':') {
-                                                            continue;
-                                                        }
-
-                                                        const value = std.mem.trimLeft(u8, inner.request.items[start..i], &std.ascii.whitespace);
-                                                        key_value.value = value;
-
-                                                        request.add_header(key_value);
-                                                        start = i;
-                                                        stage = .{ .Headers = .Name };
-                                                    },
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-
-                                //std.debug.print("M: {s} | P: {s} | V: {s}\n", .{ @tagName(request.method), request.host, @tagName(request.version) });
-                                // This is where we will match a router.
-                                // We have our Request (request).
-
-                                // Generate Response.
+                                // This is the end of the headers.
+                                //std.debug.print("Request: {s}\n", .{inner.request.items});
                                 var resp = Response(.{ .headers_size = 1 }).init(.OK);
 
-                                const file = @embedFile("sample.html");
-                                const buffer = try resp.respond_into_alloc(file, inner.allocator.*, 512);
+                                // We can reuse the inner.buffer since the request is now fully parsed and we can use it to send the response.
+                                const response = try resp.respond_into_buffer(@embedFile("sample.html"), inner.buffer);
+                                j.* = .{ .Write = .{ .socket = inner.socket, .response = response, .write_count = 0 } };
 
-                                // Free the inner.request since we already used it.
-                                inner.request.deinit();
-                                inner.allocator.destroy(inner.request);
-
-                                j.* = .{ .Write = .{ .allocator = inner.allocator, .socket = inner.socket, .response = buffer, .write_count = 0 } };
-                                _ = try uring.write(@as(u64, @intFromPtr(j)), inner.socket, buffer, 0);
+                                _ = try uring.send(cqe.user_data, inner.socket, response, 0);
                             } else {
-                                _ = try uring.read(@as(u64, @intFromPtr(j)), inner.socket, .{ .buffer = inner.buffer }, 0);
+                                _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = inner.buffer }, 0);
                             }
-                        },
+                        }
+                    },
 
-                        .Write => |inner| {
-                            const write_count = cqe.res;
+                    .Write => |inner| {
+                        const write_count = cqe.res;
+                        _ = write_count;
+                        const buffer = buffer_pool.get(@mod(@as(usize, @intCast(inner.socket)), buffer_pool.items.len));
+                        const request = request_pool.get(@mod(@as(usize, @intCast(inner.socket)), request_pool.items.len));
 
-                            if (inner.write_count + write_count == inner.response.len) {
-                                // Close, we are done.
-                                inner.allocator.free(inner.response);
-                                j.* = .{ .Close = .{ .allocator = inner.allocator } };
-                                _ = try uring.close(@as(u64, @intFromPtr(j)), inner.socket);
-                            } else {
-                                // Keep writing.
-                                j.* = .{ .Write = .{
-                                    .allocator = inner.allocator,
-                                    .socket = inner.socket,
-                                    .response = inner.response,
-                                    .write_count = inner.write_count + write_count,
-                                } };
-                                _ = try uring.write(@as(u64, @intFromPtr(j)), inner.socket, inner.response, @intCast(inner.write_count));
-                            }
-                        },
+                        j.* = .{ .Read = .{ .socket = inner.socket, .buffer = buffer, .request = request } };
+                        _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = buffer }, 0);
+                    },
 
-                        .Close => |inner| {
-                            inner.allocator.destroy(j);
-                        },
-                    }
+                    .Close => {},
                 }
-
-                _ = try uring.submit();
             }
+
+            _ = try uring.submit_and_wait(1);
         }
-
-        //while (true) {
-        //    var address: std.net.Address = undefined;
-        //    var address_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-
-        //    const socket = std.posix.accept(self.socket, &address.any, &address_len, std.posix.SOCK.CLOEXEC) catch continue;
-        //    errdefer std.posix.close(socket);
-
-        //    const stream: std.net.Stream = .{ .handle = socket };
-        //    defer stream.close();
-
-        //    var buf_reader = std.io.bufferedReader(stream.reader());
-        //    const reader = buf_reader.reader();
-
-        //    var buf_writer = std.io.bufferedWriter(stream.writer());
-        //    defer buf_writer.flush() catch {};
-        //    const writer = buf_writer.writer();
-
-        //    const RequestLineParsing = enum {
-        //        Method,
-        //        Host,
-        //        Version,
-        //    };
-
-        //    const HeaderParsing = enum {
-        //        Name,
-        //        Value,
-        //    };
-
-        //    const ParsingStages = enum {
-        //        RequestLine,
-        //        Headers,
-        //    };
-
-        //    const Parsing = union(ParsingStages) {
-        //        RequestLine: RequestLineParsing,
-        //        Headers: HeaderParsing,
-        //    };
-
-        //    var stage: Parsing = .{ .RequestLine = .Method };
-
-        //    var no_bytes_left = false;
-        //    parse: while (true) {
-        //        const byte = reader.readByte() catch blk: {
-        //            no_bytes_left = true;
-        //            break :blk 0;
-        //        };
-
-        //        switch (stage) {
-        //            .RequestLine => |rl| {
-        //                if (std.ascii.isWhitespace(byte) or no_bytes_left) {
-        //                    switch (rl) {
-        //                        .Method => {
-        //                            //std.debug.print("Matched Method!\n", .{});
-        //                            stage = .{ .RequestLine = .Version };
-        //                        },
-
-        //                        .Version => {
-        //                            //std.debug.print("Matched Version!\n", .{});
-        //                            stage = .{ .RequestLine = .Host };
-        //                        },
-
-        //                        .Host => {
-        //                            //std.debug.print("Matched Host!\n", .{});
-        //                            stage = .{ .Headers = .Name };
-        //                        },
-        //                    }
-        //                }
-        //            },
-
-        //            .Headers => |h| {
-        //                if (byte == ':' or byte == '\n' or no_bytes_left) {
-        //                    switch (h) {
-        //                        .Name => {
-        //                            if (byte != ':') {
-        //                                break :parse;
-        //                            }
-
-        //                            //std.debug.print("Matched Header Key!\n", .{});
-        //                            stage = .{ .Headers = .Value };
-        //                        },
-        //                        .Value => {
-        //                            //std.debug.print("Matched Header Value!\n", .{});
-        //                            stage = .{ .Headers = .Name };
-        //                        },
-        //                    }
-        //                }
-        //            },
-        //        }
-        //    }
-
-        //    const file = @embedFile("./sample.html");
-        //    var resp = Response.init(.OK);
-        //    resp.add_header(.{ .key = "Server", .value = "zzz (z3)" });
-
-        //    if (self.options.version == .@"HTTP/1.1") {
-        //        resp.add_header(.{ .key = "Connection", .value = "close" });
-        //    }
-
-        //    resp.respond(file, writer) catch return;
-        //}
     }
 };
