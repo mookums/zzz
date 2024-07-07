@@ -35,7 +35,7 @@ pub fn Response(comptime options: ResponseOptions) type {
         pub fn respond_into_buffer(self: *Self, body: []const u8, buffer: []u8) ![]u8 {
             var stream = std.io.fixedBufferStream(buffer);
             try self.respond(body, stream.writer());
-            return try stream.getWritten();
+            return stream.getWritten();
         }
 
         pub fn respond_into_alloc(self: *Self, body: []const u8, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
@@ -56,7 +56,7 @@ pub fn Response(comptime options: ResponseOptions) type {
 
             // Standard Headers.
             try writer.writeAll("Server: zzz (z3)\r\n");
-            try writer.writeAll("Connection: close\r\n");
+            //try writer.writeAll("Connection: close\r\n");
 
             // Content Length if we have a body.
 

@@ -7,27 +7,21 @@ const UringJobType = enum {
     Close,
 };
 
-const UringAccept = struct {
-    allocator: *std.mem.Allocator,
-};
+const UringAccept = struct {};
 
 const UringRead = struct {
-    allocator: *std.mem.Allocator,
     socket: std.posix.socket_t,
     buffer: []u8,
     request: *std.ArrayList(u8),
 };
 
 const UringWrite = struct {
-    allocator: *std.mem.Allocator,
     socket: std.posix.socket_t,
-    response: []u8,
+    response: []const u8,
     write_count: i32,
 };
 
-const UringClose = struct {
-    allocator: *std.mem.Allocator,
-};
+const UringClose = struct {};
 
 pub const UringJob = union(UringJobType) {
     Accept: UringAccept,
