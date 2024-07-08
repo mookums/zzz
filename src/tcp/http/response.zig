@@ -58,8 +58,6 @@ pub fn Response(comptime options: ResponseOptions) type {
             try writer.writeAll("Server: zzz (z3)\r\n");
             //try writer.writeAll("Connection: close\r\n");
 
-            // Content Length if we have a body.
-
             // Headers
             for (0..self.headers_idx) |i| {
                 const h = self.headers[i];

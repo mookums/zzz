@@ -17,7 +17,8 @@ pub const zzzOptions = struct {
     size_read_buffer: usize = 512,
 };
 
-// TODO: Maybe update this so that it is a comptime fn and the zzz instance has all of its settings burned in.
+// TODO: Maybe update this so that it is a comptime fn and the zzz instance
+// has all of its settings burned in.
 pub const zzz = struct {
     const Self = @This();
     options: zzzOptions,
@@ -44,15 +45,34 @@ pub const zzz = struct {
 
         const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
-            break :blk try std.posix.socket(addr.any.family, socket_flags, std.posix.IPPROTO.TCP);
+            break :blk try std.posix.socket(
+                addr.any.family,
+                socket_flags,
+                std.posix.IPPROTO.TCP,
+            );
         };
 
         if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
-            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT_LB, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(
+                socket,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.REUSEPORT_LB,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
         } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
-            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(
+                socket,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.REUSEPORT,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
         } else {
-            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try std.posix.setsockopt(
+                socket,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.REUSEADDR,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
         }
 
         self.socket = socket;
@@ -70,7 +90,10 @@ pub const zzz = struct {
         const allocator = self.options.allocator;
 
         // Create our Ring.
-        var uring = try std.os.linux.IoUring.init(self.options.uring_entries, std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER);
+        var uring = try std.os.linux.IoUring.init(
+            self.options.uring_entries,
+            std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
+        );
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
@@ -84,6 +107,9 @@ pub const zzz = struct {
             fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
                 for (buffer) |*item| {
                     var list = std.ArrayList(u8).init(a);
+                    // We pre-initalize some space in the ArrayList, this is
+                    // so that we can prevent some allocations if we are only
+                    // handling short requests (which most end up being).
                     list.ensureTotalCapacity(512) catch unreachable;
                     item.* = list;
                 }
@@ -112,11 +138,17 @@ pub const zzz = struct {
                 switch (j.*) {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
-                        const buffer = buffer_pool.get(@mod(@as(usize, @intCast(cqe.res)), buffer_pool.items.len));
+                        const buffer = buffer_pool.get(@mod(
+                            @as(usize, @intCast(cqe.res)),
+                            buffer_pool.items.len,
+                        ));
                         const read_buffer = .{ .buffer = buffer };
 
                         // Create the ArrayList for the Request to get read into.
-                        const request = request_pool.get(@mod(@as(usize, @intCast(cqe.res)), request_pool.items.len));
+                        const request = request_pool.get(@mod(
+                            @as(usize, @intCast(cqe.res)),
+                            request_pool.items.len,
+                        ));
 
                         // Empty it out!
                         //
@@ -124,8 +156,6 @@ pub const zzz = struct {
                         // that is already being used for a connection? We should have a way to prevent these collisions.
                         // We are basically doing a very primitive hash table that is array backed. Might be worth it to
                         // include some sort of collision prevention.
-                        //
-                        // This is faster though.
                         if (request.items.len > 0) {
                             request.clearAndFree();
                         }
@@ -143,6 +173,15 @@ pub const zzz = struct {
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
                                 // This is the end of the headers.
                                 //std.debug.print("Request: {s}\n", .{inner.request.items});
+
+                                // This is where the request header should be parsed.
+                                //
+                                //
+                                // we need to decide what to do regarding the request body?
+                                // different bodies need to parsed differently, depending on "Content-Type" header.
+                                //
+                                // if application/xx
+
                                 var resp = Response(.{ .headers_size = 1 }).init(.OK);
 
                                 // We can reuse the inner.buffer since the request is now fully parsed and we can use it to send the response.
