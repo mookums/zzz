@@ -7,6 +7,7 @@ pub const Pool = @import("pool.zig").Pool;
 pub const Response = @import("tcp/http/lib.zig").Response;
 pub const Request = @import("tcp/http/lib.zig").Request;
 pub const KVPair = @import("tcp/http/lib.zig").KVPair;
+pub const Mime = @import("tcp/http/lib.zig").Mime;
 
 pub const zzzOptions = struct {
     allocator: std.mem.Allocator,
@@ -150,12 +151,6 @@ pub const zzz = struct {
                             request_pool.items.len,
                         ));
 
-                        // Empty it out!
-                        //
-                        // Consideration: What if we have a request come in that tries to use a request ArrayList
-                        // that is already being used for a connection? We should have a way to prevent these collisions.
-                        // We are basically doing a very primitive hash table that is array backed. Might be worth it to
-                        // include some sort of collision prevention.
                         if (request.items.len > 0) {
                             request.clearAndFree();
                         }
@@ -171,21 +166,44 @@ pub const zzz = struct {
                         if (read_count > 0) {
                             try inner.request.appendSlice(inner.buffer[0..@as(usize, @intCast(read_count))]);
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
+                                // This chunk here all the way down to the clearAndFree is unacceptably slow.
+                                // We might need to bring back the WorkerPool and delegate jobs over to it.
+                                // These jobs would likely be parsing and routing...
+                                //
+                                // Another issue is that the clearAndFree is needed for Connection: keep-alive to work.
+                                //
+                                // We could try making a pool of Rings and running each loop in a thread? This would allow for more
+                                // tasks to be done at once BUT it might also make connections on the current ring lag.
+                                //
+                                // WorkerPool seems to be the best option where it can create new entires in the ring whenever.
+                                // But we are technically not supposed to share rings? soooo..... maybe message passing...
+                                std.debug.print("Request: {s}\n", .{inner.request.items});
+
                                 // This is the end of the headers.
-                                //std.debug.print("Request: {s}\n", .{inner.request.items});
+                                const request = try Request(.{ .headers_size = 32, .request_max_size = 8196 }).parse(inner.request.items);
 
-                                // This is where the request header should be parsed.
-                                //
-                                //
-                                // we need to decide what to do regarding the request body?
-                                // different bodies need to parsed differently, depending on "Content-Type" header.
-                                //
-                                // if application/xx
+                                std.debug.print("Host: {s}\n", .{request.host});
+                                for (request.headers[0..request.headers_idx]) |kv| {
+                                    std.debug.print("Key: {s} | Value: {s}\n", .{ kv.key, kv.value });
+                                }
+                                std.debug.print("\n", .{});
 
-                                var resp = Response(.{ .headers_size = 1 }).init(.OK);
+                                // Clear and free it out, allowing us to handle future requests.
+                                inner.request.clearAndFree();
+
+                                // This is where we will send it to the router. Router will return our Response for us.
+                                // We will just send this response via our uring.
+
+                                var resp = Response(.{ .headers_size = 8 }).init(.OK);
+                                // Temporary since keep-alive isn't working good rn.
+                                //try resp.add_header(.{ .key = "Connection", .value = "close" });
 
                                 // We can reuse the inner.buffer since the request is now fully parsed and we can use it to send the response.
-                                const response = try resp.respond_into_buffer(@embedFile("sample.html"), inner.buffer);
+                                const response = try resp.respond_into_buffer(
+                                    inner.buffer,
+                                    @embedFile("sample.html"),
+                                    Mime.HTML,
+                                );
                                 j.* = .{ .Write = .{ .socket = inner.socket, .response = response, .write_count = 0 } };
 
                                 _ = try uring.send(cqe.user_data, inner.socket, response, 0);
