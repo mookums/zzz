@@ -11,11 +11,10 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var z3 = zzz.init(.{
+    var z3 = zzz(.{}).init(.{
         .allocator = allocator,
-        .uring_entries = 1024,
-        .kernel_backlog = 1024,
     });
+
     try z3.bind(host, port);
     try z3.listen();
 }
