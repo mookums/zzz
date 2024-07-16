@@ -11,9 +11,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var z3 = zzz(.{}).init(.{
-        .allocator = allocator,
-    });
+    var z3 = zzz.init(.{ .allocator = allocator });
 
     try z3.bind(host, port);
     try z3.listen();
