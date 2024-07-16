@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.zzz);
 const assert = std.debug.assert;
 
 pub const UringJob = @import("job.zig").UringJob;
@@ -15,9 +16,9 @@ pub const zzzConfig = struct {
     /// The allocator that zzz will use.
     allocator: std.mem.Allocator,
     /// Kernel Backlog Value.
-    kernel_backlog: u31 = 1024,
+    backlog_kernel: u31 = 1024,
     /// Number of Uring Entries.
-    uring_entries: u16 = 256,
+    entries_uring: u16 = 256,
     /// Maximum size (in bytes) of the Request header.
     size_request_header_max: u32 = 1024 * 4,
     /// Size of the Read Buffer for reading out of the Socket.
@@ -49,7 +50,7 @@ pub const zzz = struct {
         defer assert(self.socket != null);
 
         const addr = try std.net.Address.resolveIp(name, port);
-        std.log.debug("binding zzz on {s}:{d}", .{ name, port });
+        log.info("binding zzz on {s}:{d}", .{ name, port });
 
         const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
@@ -92,25 +93,26 @@ pub const zzz = struct {
         const zzz_socket = self.socket.?;
         defer std.posix.close(zzz_socket);
 
-        std.log.debug("zzz listening...", .{});
-        try std.posix.listen(zzz_socket, self.config.kernel_backlog);
+        log.info("zzz listening...", .{});
+        try std.posix.listen(zzz_socket, self.config.backlog_kernel);
 
         const allocator = self.config.allocator;
 
         // Create our Ring.
         var uring = try std.os.linux.IoUring.init(
-            self.config.uring_entries,
+            self.config.entries_uring,
             std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
         );
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.uring_entries, null, null);
+        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.entries_uring, null, null);
         defer cqes.deinit(null, null);
 
-        var buffer_pool = try Pool([]u8).init(allocator, self.config.uring_entries, struct {
+        var buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
                 for (buffer) |*item| {
+                    // There is no handling this failure. If this happens, we need to crash.
                     item.* = info.allocator.alloc(u8, info.size) catch unreachable;
                 }
             }
@@ -124,10 +126,10 @@ pub const zzz = struct {
             }
         }.deinit_hook, allocator);
 
-        var job_pool = try Pool(UringJob).init(allocator, self.config.uring_entries, null, null);
+        var job_pool = try Pool(UringJob).init(allocator, self.config.entries_uring, null, null);
         defer job_pool.deinit(null, null);
 
-        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, self.config.uring_entries, struct {
+        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, self.config.entries_uring, struct {
             fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
                 for (buffer) |*item| {
                     item.* = std.ArrayList(u8).initCapacity(a, 512) catch unreachable;
@@ -150,6 +152,7 @@ pub const zzz = struct {
 
         while (true) {
             const rd_count = try uring.copy_cqes(cqes.items[0..], 0);
+
             for (0..rd_count) |i| {
                 const cqe = cqes.items[i];
                 const j: *UringJob = @ptrFromInt(cqe.user_data);
@@ -180,17 +183,6 @@ pub const zzz = struct {
                         if (read_count > 0) {
                             try inner.request.appendSlice(inner.buffer[0..@as(usize, @intCast(read_count))]);
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
-                                // This chunk here all the way down to the clearAndFree is unacceptably slow.
-                                // We might need to bring back the WorkerPool and delegate jobs over to it.
-                                // These jobs would likely be parsing and routing...
-                                //
-                                // Another issue is that the clearAndFree is needed for Connection: keep-alive to work.
-                                //
-                                // We could try making a pool of Rings and running each loop in a thread? This would allow for more
-                                // tasks to be done at once BUT it might also make connections on the current ring lag.
-                                //
-                                // WorkerPool seems to be the best option where it can create new entires in the ring whenever.
-                                // But we are technically not supposed to share rings? soooo..... maybe message passing...
                                 //std.debug.print("Request: {s}\n", .{inner.request.items});
 
                                 //// This is the end of the headers.
@@ -249,6 +241,9 @@ pub const zzz = struct {
             }
 
             _ = try uring.submit_and_wait(1);
+            assert(uring.cq_ready() >= 1);
         }
+
+        unreachable;
     }
 };
