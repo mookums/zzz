@@ -73,6 +73,11 @@ pub fn Response(comptime options: ResponseOptions) type {
                 try writer.writeAll("Content-Type: ");
                 try writer.writeAll(m.content_type);
                 try writer.writeAll("\r\n");
+            } else {
+                // By default, we should just send as an octet-stream for safety.
+                try writer.writeAll("Content-Type: ");
+                try writer.writeAll(Mime.BIN.content_type);
+                try writer.writeAll("\r\n");
             }
 
             // If we are sending a body.
