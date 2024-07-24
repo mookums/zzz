@@ -20,12 +20,19 @@ pub const Router = struct {
         self.routes.deinit();
     }
 
-    pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: Mime, comptime bytes: []const u8) !void {
-        const route = Route{ .path = path, .methods = &.{.GET}, .handler_fn = struct {
+    pub fn serve_fs_dir(self: *Router, dir_path: []const u8) !void {
+        _ = self;
+        const dir = try std.fs.openDirAbsolute(dir_path, .{});
+        _ = dir;
+        @panic("TODO!");
+    }
+
+    pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {
+        const route = try Route.init(path).get(struct {
             pub fn handler_fn(_: Request) Response {
                 return Response.init(.OK, mime, bytes);
             }
-        }.handler_fn };
+        }.handler_fn);
 
         try self.serve_route(route);
     }

@@ -5,11 +5,13 @@ const assert = std.debug.assert;
 pub const UringJob = @import("job.zig").UringJob;
 pub const Pool = @import("pool.zig").Pool;
 
-pub const Response = @import("tcp/http/lib.zig").Response;
-pub const Request = @import("tcp/http/lib.zig").Request;
-pub const KVPair = @import("tcp/http/lib.zig").KVPair;
-pub const Mime = @import("tcp/http/lib.zig").Mime;
-pub const Router = @import("tcp/http/lib.zig").Router;
+pub const HTTP = @import("tcp/http/lib.zig");
+const Response = HTTP.Response;
+const Request = HTTP.Request;
+const KVPair = HTTP.KVPair;
+const Mime = HTTP.Mime;
+const Route = HTTP.Route;
+const Router = HTTP.Router;
 
 /// This is provided at compile time so that we can
 /// create correctly sized buffers.
@@ -30,6 +32,13 @@ pub const ServerConfig = struct {
     response_headers_max: u8 = 8,
 };
 
+// This all currently very HTTP specific. The purpose of zzz is to allow for
+// various backends to be supported, with HTTP being one of various.
+//
+// There needs to be an effort in moving all of the HTTP specific stuff into some sort of
+// back-end struct that various other implementations can use.
+//
+// Hoping to later implement FTP, SSH, and maybe a UDP based protocol.
 pub const Server = struct {
     config: ServerConfig,
     router: Router,
@@ -197,22 +206,15 @@ pub const Server = struct {
                                 const response = blk: {
                                     const route = self.router.get_route_from_host(request.host);
                                     if (route) |r| {
-                                        // Checks to ensure our request's Method is an allowed one.
-                                        var method_check: bool = true;
-                                        method: for (r.methods) |m| {
-                                            if (m == request.method) {
-                                                method_check = false;
-                                                break :method;
-                                            }
-                                        }
+                                        const handler = r.get_handler(request.method);
 
-                                        if (method_check) {
+                                        if (handler) |func| {
+                                            const resp = func(request);
+                                            break :blk try resp.respond_into_buffer(inner.buffer);
+                                        } else {
                                             const resp = Response.init(.@"Method Not Allowed", Mime.HTML, "");
                                             break :blk try resp.respond_into_buffer(inner.buffer);
                                         }
-
-                                        const resp = r.handler_fn(request);
-                                        break :blk try resp.respond_into_buffer(inner.buffer);
                                     }
 
                                     // Default Response.
