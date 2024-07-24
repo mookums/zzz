@@ -1,7 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const stdout = std.io.getStdOut().writer();
-const zzz = @import("lib.zig").zzz;
+const zzz = @import("lib.zig");
+const Server = zzz.Server;
+const Router = zzz.Router;
+const Request = zzz.Request;
+const Response = zzz.Response;
+const Mime = zzz.Mime;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -11,8 +16,10 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var z3 = zzz.init(.{ .allocator = allocator });
+    var router = zzz.Router.init(allocator);
+    try router.serve_embedded_file("/", Mime.HTML, @embedFile("sample.html"));
 
-    try z3.bind(host, port);
-    try z3.listen();
+    var server = Server.init(.{ .allocator = allocator }, router);
+    try server.bind(host, port);
+    try server.listen();
 }
