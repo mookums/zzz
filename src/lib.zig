@@ -9,11 +9,12 @@ pub const Response = @import("tcp/http/lib.zig").Response;
 pub const Request = @import("tcp/http/lib.zig").Request;
 pub const KVPair = @import("tcp/http/lib.zig").KVPair;
 pub const Mime = @import("tcp/http/lib.zig").Mime;
+pub const Router = @import("tcp/http/lib.zig").Router;
 
 /// This is provided at compile time so that we can
 /// create correctly sized buffers.
-pub const zzzConfig = struct {
-    /// The allocator that zzz will use.
+pub const ServerConfig = struct {
+    /// The allocator that server will use.
     allocator: std.mem.Allocator,
     /// Kernel Backlog Value.
     backlog_kernel: u31 = 1024,
@@ -29,28 +30,30 @@ pub const zzzConfig = struct {
     response_headers_max: u8 = 8,
 };
 
-pub const zzz = struct {
-    const Self = @This();
-    config: zzzConfig,
+pub const Server = struct {
+    config: ServerConfig,
+    router: Router,
     socket: ?std.posix.socket_t = null,
 
-    pub fn init(config: zzzConfig) Self {
-        return Self{ .config = config };
+    pub fn init(config: ServerConfig, router: Router) Server {
+        return Server{ .config = config, .router = router };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Server) void {
         if (self.socket) |socket| {
             std.posix.close(socket);
         }
+
+        self.router.deinit();
     }
 
-    pub fn bind(self: *Self, name: []const u8, port: u16) !void {
+    pub fn bind(self: *Server, name: []const u8, port: u16) !void {
         assert(name.len > 0);
         assert(port > 0);
         defer assert(self.socket != null);
 
         const addr = try std.net.Address.resolveIp(name, port);
-        log.info("binding zzz on {s}:{d}", .{ name, port });
+        log.info("binding zzz server on {s}:{d}", .{ name, port });
 
         const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
@@ -88,13 +91,13 @@ pub const zzz = struct {
         try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
-    pub fn listen(self: *Self) !void {
+    pub fn listen(self: *Server) !void {
         assert(self.socket != null);
-        const zzz_socket = self.socket.?;
-        defer std.posix.close(zzz_socket);
+        const server_socket = self.socket.?;
+        defer std.posix.close(server_socket);
 
-        log.info("zzz listening...", .{});
-        try std.posix.listen(zzz_socket, self.config.backlog_kernel);
+        log.info("server listening...", .{});
+        try std.posix.listen(server_socket, self.config.backlog_kernel);
 
         const allocator = self.config.allocator;
 
@@ -148,7 +151,7 @@ pub const zzz = struct {
 
         // Create and send the first Job.
         const job: UringJob = .{ .Accept = .{} };
-        _ = try uring.accept_multishot(@as(u64, @intFromPtr(&job)), zzz_socket, null, null, 0);
+        _ = try uring.accept_multishot(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
 
         while (true) {
             const rd_count = try uring.copy_cqes(cqes.items[0..], 0);
@@ -183,40 +186,40 @@ pub const zzz = struct {
                         if (read_count > 0) {
                             try inner.request.appendSlice(inner.buffer[0..@as(usize, @intCast(read_count))]);
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
-                                //std.debug.print("Request: {s}\n", .{inner.request.items});
-
                                 //// This is the end of the headers.
-                                const request = try Request(.{
-                                    .headers_size = 32,
+                                const request = try Request.parse(.{
                                     .request_max_size = 4096,
-                                }).parse(inner.request.items);
-                                _ = request;
-
-                                //std.debug.print("Host: {s}\n", .{request.host});
-                                //for (request.headers[0..request.headers_idx]) |kv| {
-                                //    std.debug.print("Key: {s} | Value: {s}\n", .{ kv.key, kv.value });
-                                //}
-                                //std.debug.print("\n", .{});
+                                }, inner.request.items);
 
                                 // Clear and free it out, allowing us to handle future requests.
                                 inner.request.items.len = 0;
-                                //inner.request.clearAndFree();
 
-                                // This is where we will send it to the router. Router will return our Response for us.
-                                // We will just send this response via our uring.
+                                const response = blk: {
+                                    const route = self.router.get_route_from_host(request.host);
+                                    if (route) |r| {
+                                        // Checks to ensure our request's Method is an allowed one.
+                                        var method_check: bool = true;
+                                        method: for (r.methods) |m| {
+                                            if (m == request.method) {
+                                                method_check = false;
+                                                break :method;
+                                            }
+                                        }
 
-                                var resp = Response(.{
-                                    .headers_size = 32,
-                                }).init(.OK);
-                                // Temporary since keep-alive isn't working good rn.
-                                //try resp.add_header(.{ .key = "Connection", .value = "close" });
+                                        if (method_check) {
+                                            const resp = Response.init(.@"Method Not Allowed", Mime.HTML, "");
+                                            break :blk try resp.respond_into_buffer(inner.buffer);
+                                        }
 
-                                // We can reuse the inner.buffer since the request is now fully parsed and we can use it to send the response.
-                                const response = try resp.respond_into_buffer(
-                                    inner.buffer,
-                                    @embedFile("sample.html"),
-                                    Mime.HTML,
-                                );
+                                        const resp = r.handler_fn(request);
+                                        break :blk try resp.respond_into_buffer(inner.buffer);
+                                    }
+
+                                    // Default Response.
+                                    var resp = Response.init(.@"Not Found", Mime.HTML, "");
+                                    break :blk try resp.respond_into_buffer(inner.buffer);
+                                };
+
                                 j.* = .{ .Write = .{ .socket = inner.socket, .response = response, .write_count = 0 } };
 
                                 _ = try uring.send(cqe.user_data, inner.socket, response, 0);
