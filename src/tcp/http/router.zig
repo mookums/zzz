@@ -28,7 +28,7 @@ pub const Router = struct {
     }
 
     pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {
-        const route = try Route.init(path).get(struct {
+        const route = Route.init(path).get(struct {
             pub fn handler_fn(_: Request) Response {
                 return Response.init(.OK, mime, bytes);
             }
