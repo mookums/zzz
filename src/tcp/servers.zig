@@ -20,3 +20,11 @@ pub const TCPProtocol = struct {
 // iocp -> windows
 // custom (maybe)
 pub const HTTP = @import("http/server.zig");
+
+// const zzz = @import("zzz").Servers.TCP;
+// const z3 = zzz.init();
+// z3.useProtocol(.HTTP)
+// z3.useProtocol({ .Custom = .{ xyz }});
+// z3.setup();
+// z3.listen();
+// defer z3.deinit();
