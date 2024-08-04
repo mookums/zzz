@@ -18,8 +18,8 @@ pub fn build(b: *std.Build) void {
 
     zzz.addImport("core", core);
 
-    addExample(b, "http", target, optimize, zzz);
-    addExample(b, "http_blocking", target, optimize, zzz);
+    addExample(b, "basic", target, optimize, zzz);
+    addExample(b, "embed", target, optimize, zzz);
 }
 
 fn addExample(
