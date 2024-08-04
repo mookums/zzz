@@ -27,6 +27,8 @@
             nativeBuildInputs = with pkgs; [
                 zig
                 zls
+                # Debugging
+                gdb
                 # Benchmarking
                 linuxPackages_latest.perf
                 wrk
