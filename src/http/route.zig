@@ -32,30 +32,30 @@ pub const Route = struct {
     pub fn get(self: Route, handler_fn: *const fn (request: Request) Response) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.GET)] = handler_fn;
-        return Route{ .path = self.path, .handlers = new_handlers };
+        return Route{ .handlers = new_handlers };
     }
 
     pub fn post(self: Route, handler_fn: *const fn (request: Request) Response) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.POST)] = handler_fn;
-        return Route{ .path = self.path, .handlers = self.handlers };
+        return Route{ .handlers = self.handlers };
     }
 
     pub fn put(self: Route, handler_fn: *const fn (request: Request) Response) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.PUT)] = handler_fn;
-        return Route{ .path = self.path, .handlers = self.handlers };
+        return Route{ .handlers = self.handlers };
     }
 
     pub fn delete(self: Route, handler_fn: *const fn (request: Request) Response) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.DELETE)] = handler_fn;
-        return Route{ .path = self.path, .handlers = self.handlers };
+        return Route{ .handlers = self.handlers };
     }
 
     pub fn patch(self: Route, handler_fn: *const fn (request: Request) Response) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.PATCH)] = handler_fn;
-        return Route{ .path = self.path, .handlers = self.handlers };
+        return Route{ .handlers = self.handlers };
     }
 };

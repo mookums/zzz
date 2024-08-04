@@ -37,10 +37,10 @@ fn addExample(
     });
 
     example.root_module.addImport("zzz", zzz_module);
-    b.installArtifact(example);
+    const install_artifact = b.addInstallArtifact(example, .{});
 
     const run_cmd = b.addRunArtifact(example);
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(&install_artifact.step);
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }

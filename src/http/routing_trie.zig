@@ -55,7 +55,6 @@ const TokenEnum = enum(u8) {
 const TokenMatch = enum {
     Integer,
     Float,
-    Bool,
 };
 
 const Token = union(TokenEnum) {
@@ -70,7 +69,6 @@ const Token = union(TokenEnum) {
             switch (chunk[1]) {
                 'i' => return .{ .Match = .Integer },
                 'f' => return .{ .Match = .Float },
-                'b' => return .{ .Match = .Bool },
                 else => @panic("Unsupported Match!"),
             }
         } else {
@@ -84,10 +82,10 @@ pub const RoutingTrie = struct {
     pub const Node = struct {
         allocator: std.mem.Allocator,
         token: Token,
-        route: Route,
+        route: ?Route = null,
         children: TokenHashMap(*Node),
 
-        pub fn init(allocator: std.mem.Allocator, token: Token, route: Route) !*Node {
+        pub fn init(allocator: std.mem.Allocator, token: Token, route: ?Route) !*Node {
             const node_ptr: *Node = try allocator.create(Node);
             node_ptr.* = Node{
                 .allocator = allocator,
@@ -158,7 +156,7 @@ pub const RoutingTrie = struct {
                     try Node.init(
                         self.allocator,
                         token,
-                        Route.init(),
+                        null,
                     ),
                 );
 
@@ -169,9 +167,44 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
-    pub fn get_route(self: *RoutingTrie, path: []const u8) Route {
-        _ = self;
-        _ = path;
+    pub fn get_route(self: RoutingTrie, path: []const u8) ?Route {
+        var iter = std.mem.tokenizeScalar(u8, path, '/');
+
+        var current = self.root;
+
+        while (iter.next()) |chunk| {
+            const fragment = Token{ .Fragment = chunk };
+
+            // If it is the fragment, match it here.
+            if (current.children.get(fragment)) |child| {
+                current = child;
+                continue;
+            }
+
+            // Match on Integer.
+            if (std.fmt.parseInt(i64, chunk, 10)) |value| {
+                _ = value;
+                const int_fragment = Token{ .Match = .Integer };
+                if (current.children.get(int_fragment)) |child| {
+                    current = child;
+                    continue;
+                }
+            } else |_| {}
+
+            // Match on Float.
+            if (std.fmt.parseFloat(f64, chunk)) |value| {
+                _ = value;
+                const float_fragment = Token{ .Match = .Float };
+                if (current.children.get(float_fragment)) |child| {
+                    current = child;
+                    continue;
+                }
+            } else |_| {}
+
+            return null;
+        }
+
+        return current.route;
     }
 };
 
@@ -188,16 +221,14 @@ test "Chunk Parsing (Fragment)" {
 }
 
 test "Chunk Parsing (Match)" {
-    const chunks: [3][]const u8 = .{
+    const chunks: [2][]const u8 = .{
         "$i",
         "$f",
-        "$b",
     };
 
-    const matches: [3]TokenMatch = .{
+    const matches: [2]TokenMatch = .{
         TokenMatch.Integer,
         TokenMatch.Float,
-        TokenMatch.Bool,
     };
 
     for (chunks, matches) |chunk, match| {
@@ -244,10 +275,10 @@ test "Custom Hashing" {
     }
 
     {
-        try s.put(.{ .Match = .Bool }, true);
+        try s.put(.{ .Match = .Integer }, true);
         try s.put(.{ .Match = .Float }, false);
 
-        const state = s.get(.{ .Match = .Bool }).?;
+        const state = s.get(.{ .Match = .Integer }).?;
         try testing.expect(state);
 
         const should_be_false = s.get(.{ .Match = .Float }).?;
@@ -268,4 +299,24 @@ test "Constructing Routing from Path" {
     try s.add_route("/item/list", Route.init());
 
     try testing.expectEqual(1, s.root.children.count());
+}
+
+test "Routing with Paths" {
+    var s = try RoutingTrie.init(testing.allocator);
+    defer s.deinit();
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/$i/description", Route.init());
+    try s.add_route("/item/$i/hello", Route.init());
+    try s.add_route("/item/$f/price_float", Route.init());
+    try s.add_route("/item/list", Route.init());
+
+    try testing.expectEqual(null, s.get_route("/settings"));
+    try testing.expectEqual(Route.init(), s.get_route("/item"));
+
+    try testing.expectEqual(Route.init(), s.get_route("/item/200/hello"));
+    try testing.expectEqual(null, s.get_route("/item/10.12/hello"));
+
+    try testing.expectEqual(Route.init(), s.get_route("/item/99999.1000/price_float"));
+    try testing.expectEqual(null, s.get_route("/item/10/price_float"));
 }
