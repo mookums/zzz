@@ -53,8 +53,10 @@ const TokenEnum = enum(u8) {
 };
 
 const TokenMatch = enum {
-    Integer,
+    Unsigned,
+    Signed,
     Float,
+    String,
 };
 
 const Token = union(TokenEnum) {
@@ -62,13 +64,15 @@ const Token = union(TokenEnum) {
     Match: TokenMatch,
 
     pub fn parse_chunk(chunk: []const u8) Token {
-        if (std.mem.startsWith(u8, chunk, "$")) {
-            // Needs to be only $ and an identifier.
+        if (std.mem.startsWith(u8, chunk, "%")) {
+            // Needs to be only % and an identifier.
             assert(chunk.len == 2);
 
             switch (chunk[1]) {
-                'i' => return .{ .Match = .Integer },
+                'i', 'd' => return .{ .Match = .Signed },
+                'u' => return .{ .Match = .Unsigned },
                 'f' => return .{ .Match = .Float },
+                's' => return .{ .Match = .String },
                 else => @panic("Unsupported Match!"),
             }
         } else {
@@ -181,11 +185,20 @@ pub const RoutingTrie = struct {
                 continue;
             }
 
-            // Match on Integer.
+            // Match on Integers.
             if (std.fmt.parseInt(i64, chunk, 10)) |value| {
                 _ = value;
-                const int_fragment = Token{ .Match = .Integer };
+                const int_fragment = Token{ .Match = .Signed };
                 if (current.children.get(int_fragment)) |child| {
+                    current = child;
+                    continue;
+                }
+            } else |_| {}
+
+            if (std.fmt.parseInt(u64, chunk, 10)) |value| {
+                _ = value;
+                const uint_fragment = Token{ .Match = .Unsigned };
+                if (current.children.get(uint_fragment)) |child| {
                     current = child;
                     continue;
                 }
@@ -200,6 +213,13 @@ pub const RoutingTrie = struct {
                     continue;
                 }
             } else |_| {}
+
+            // Match on String as last option.
+            const string_fragment = Token{ .Match = .String };
+            if (current.children.get(string_fragment)) |child| {
+                current = child;
+                continue;
+            }
 
             return null;
         }
@@ -221,14 +241,20 @@ test "Chunk Parsing (Fragment)" {
 }
 
 test "Chunk Parsing (Match)" {
-    const chunks: [2][]const u8 = .{
-        "$i",
-        "$f",
+    const chunks: [5][]const u8 = .{
+        "%i",
+        "%d",
+        "%u",
+        "%f",
+        "%s",
     };
 
-    const matches: [2]TokenMatch = .{
-        TokenMatch.Integer,
+    const matches = [_]TokenMatch{
+        TokenMatch.Signed,
+        TokenMatch.Signed,
+        TokenMatch.Unsigned,
         TokenMatch.Float,
+        TokenMatch.String,
     };
 
     for (chunks, matches) |chunk, match| {
@@ -242,11 +268,11 @@ test "Chunk Parsing (Match)" {
 }
 
 test "Path Parsing (Mixed)" {
-    const path = "/item/$i/description";
+    const path = "/item/%i/description";
 
     const parsed: [3]Token = .{
         .{ .Fragment = "item" },
-        .{ .Match = .Integer },
+        .{ .Match = .Signed },
         .{ .Fragment = "description" },
     };
 
@@ -275,14 +301,18 @@ test "Custom Hashing" {
     }
 
     {
-        try s.put(.{ .Match = .Integer }, true);
+        try s.put(.{ .Match = .Unsigned }, true);
         try s.put(.{ .Match = .Float }, false);
+        try s.put(.{ .Match = .String }, false);
 
-        const state = s.get(.{ .Match = .Integer }).?;
+        const state = s.get(.{ .Match = .Unsigned }).?;
         try testing.expect(state);
 
         const should_be_false = s.get(.{ .Match = .Float }).?;
         try testing.expect(!should_be_false);
+
+        const string_state = s.get(.{ .Match = .String }).?;
+        try testing.expect(!string_state);
     }
 
     defer s.deinit();
@@ -293,9 +323,10 @@ test "Constructing Routing from Path" {
     defer s.deinit();
 
     try s.add_route("/item", Route.init());
-    try s.add_route("/item/$i/description", Route.init());
-    try s.add_route("/item/$i/hello", Route.init());
-    try s.add_route("/item/$f/price_float", Route.init());
+    try s.add_route("/item/%i/description", Route.init());
+    try s.add_route("/item/%i/hello", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%s", Route.init());
     try s.add_route("/item/list", Route.init());
 
     try testing.expectEqual(1, s.root.children.count());
@@ -306,10 +337,14 @@ test "Routing with Paths" {
     defer s.deinit();
 
     try s.add_route("/item", Route.init());
-    try s.add_route("/item/$i/description", Route.init());
-    try s.add_route("/item/$i/hello", Route.init());
-    try s.add_route("/item/$f/price_float", Route.init());
+    try s.add_route("/item/%i/description", Route.init());
+    try s.add_route("/item/%i/hello", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%s", Route.init());
     try s.add_route("/item/list", Route.init());
+
+    try testing.expectEqual(null, s.get_route("/item/name"));
+    try testing.expectEqual(Route.init(), s.get_route("/item/name/HELLO"));
 
     try testing.expectEqual(null, s.get_route("/settings"));
     try testing.expectEqual(Route.init(), s.get_route("/item"));
