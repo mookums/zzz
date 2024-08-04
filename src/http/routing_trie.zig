@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/routing_trie");
+
 const Route = @import("lib.zig").Route;
 
 fn TokenHashMap(comptime V: type) type {
@@ -52,14 +53,23 @@ const TokenEnum = enum(u8) {
     Match = 1,
 };
 
-const TokenMatch = enum {
+pub const TokenMatch = enum {
     Unsigned,
     Signed,
     Float,
     String,
+
+    pub fn as_type(match: TokenMatch) type {
+        switch (match) {
+            .Unsigned => return u64,
+            .Signed => return i64,
+            .Float => return f64,
+            .String => return []const u8,
+        }
+    }
 };
 
-const Token = union(TokenEnum) {
+pub const Token = union(TokenEnum) {
     Fragment: []const u8,
     Match: TokenMatch,
 
@@ -172,6 +182,7 @@ pub const RoutingTrie = struct {
     }
 
     pub fn get_route(self: RoutingTrie, path: []const u8) ?Route {
+        // We need some way of also returning the capture groups here.
         var iter = std.mem.tokenizeScalar(u8, path, '/');
 
         var current = self.root;
@@ -186,8 +197,7 @@ pub const RoutingTrie = struct {
             }
 
             // Match on Integers.
-            if (std.fmt.parseInt(i64, chunk, 10)) |value| {
-                _ = value;
+            if (std.fmt.parseInt(TokenMatch.Signed.as_type(), chunk, 10)) |_| {
                 const int_fragment = Token{ .Match = .Signed };
                 if (current.children.get(int_fragment)) |child| {
                     current = child;
@@ -195,8 +205,7 @@ pub const RoutingTrie = struct {
                 }
             } else |_| {}
 
-            if (std.fmt.parseInt(u64, chunk, 10)) |value| {
-                _ = value;
+            if (std.fmt.parseInt(TokenMatch.Unsigned.as_type(), chunk, 10)) |_| {
                 const uint_fragment = Token{ .Match = .Unsigned };
                 if (current.children.get(uint_fragment)) |child| {
                     current = child;
@@ -205,8 +214,7 @@ pub const RoutingTrie = struct {
             } else |_| {}
 
             // Match on Float.
-            if (std.fmt.parseFloat(f64, chunk)) |value| {
-                _ = value;
+            if (std.fmt.parseFloat(TokenMatch.Float.as_type(), chunk)) |_| {
                 const float_fragment = Token{ .Match = .Float };
                 if (current.children.get(float_fragment)) |child| {
                     current = child;

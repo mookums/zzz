@@ -9,6 +9,7 @@ const Router = @import("router.zig").Router;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
+const Context = @import("context.zig").Context;
 
 pub const ServerConfig = struct {
     /// The allocator that server will use.
@@ -18,9 +19,14 @@ pub const ServerConfig = struct {
     /// Number of Uring Entries.
     entries_uring: u16 = 256,
     /// Maximum size (in bytes) of the Request header.
-    size_request_header_max: u32 = 1024 * 4,
+    /// Default: 2 MB.
+    size_request_header_max: u32 = 1024 * 1024 * 2,
     /// Size of the Read Buffer for reading out of the Socket.
+    /// Default: 512 B.
     size_read_buffer: u32 = 512,
+    /// Size of the Context Buffer.
+    /// Default: 2MB.
+    size_context_buffer: u32 = 1024 * 1024 * 2,
     /// Maximum number of headers per Request.
     request_headers_max: u8 = 32,
     /// Maximum number of headers per Response.
@@ -126,6 +132,23 @@ pub const Server = struct {
             }
         }.deinit_hook, allocator);
 
+        var context_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
+            fn init_hook(buffer: [][]u8, info: anytype) void {
+                for (buffer) |*item| {
+                    // There is no handling this failure. If this happens, we need to crash.
+                    item.* = info.allocator.alloc(u8, info.size) catch unreachable;
+                }
+            }
+        }.init_hook, .{ .allocator = allocator, .size = self.config.size_read_buffer });
+
+        defer context_buffer_pool.deinit(struct {
+            fn deinit_hook(buffer: [][]u8, a: anytype) void {
+                for (buffer) |item| {
+                    a.free(item);
+                }
+            }
+        }.deinit_hook, allocator);
+
         var job_pool = try Pool(UringJob).init(allocator, self.config.entries_uring, null, null);
         defer job_pool.deinit(null, null);
 
@@ -194,10 +217,16 @@ pub const Server = struct {
                                 const response = blk: {
                                     const route = self.router.get_route_from_host(request.host);
                                     if (route) |r| {
+                                        const context: Context = Context.init(request.host, context_buffer_pool.get(
+                                            @mod(
+                                                @as(usize, @intCast(cqe.res)),
+                                                context_buffer_pool.items.len,
+                                            ),
+                                        ));
                                         const handler = r.get_handler(request.method);
 
                                         if (handler) |func| {
-                                            const resp = func(request);
+                                            const resp = func(request, context);
                                             break :blk try resp.respond_into_buffer(inner.buffer);
                                         } else {
                                             const resp = Response.init(.@"Method Not Allowed", Mime.HTML, "");
