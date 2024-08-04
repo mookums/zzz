@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     zzz.addImport("core", core);
 
     addExample(b, "basic", target, optimize, zzz);
+    addExample(b, "minram", target, optimize, zzz);
     addExample(b, "embed", target, optimize, zzz);
     addExample(b, "count", target, optimize, zzz);
 }
