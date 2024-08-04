@@ -28,6 +28,7 @@
                 zig
                 zls
                 # Benchmarking
+                linuxPackages_latest.perf
                 wrk
             ];
         };
