@@ -5,12 +5,14 @@ const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
 const log = std.log.scoped(.router);
 
+const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
+
 pub const Router = struct {
     allocator: std.mem.Allocator,
-    routes: std.StringHashMap(Route),
+    routes: RoutingTrie,
 
     pub fn init(allocator: std.mem.Allocator) Router {
-        const routes = std.StringHashMap(Route).init(allocator);
+        const routes = RoutingTrie.init(allocator) catch unreachable;
         return Router{ .allocator = allocator, .routes = routes };
     }
 
@@ -19,7 +21,6 @@ pub const Router = struct {
     }
 
     pub fn serve_fs_dir(self: *Router, dir_path: []const u8) !void {
-        // We will be adding a new route to the Router, that will be "dir_path'
         _ = self;
         const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
         defer dir.close();
@@ -27,20 +28,20 @@ pub const Router = struct {
     }
 
     pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {
-        const route = Route.init(path).get(struct {
+        const route = Route.init().get(struct {
             pub fn handler_fn(_: Request) Response {
                 return Response.init(.OK, mime, bytes);
             }
         }.handler_fn);
 
-        try self.serve_route(route);
+        try self.serve_route(path, route);
     }
 
-    pub fn serve_route(self: *Router, route: Route) !void {
-        try self.routes.put(route.path, route);
+    pub fn serve_route(self: *Router, path: []const u8, route: Route) !void {
+        try self.routes.add_route(path, route);
     }
 
     pub fn get_route_from_host(self: Router, host: []const u8) ?Route {
-        return self.routes.get(host);
+        return self.routes.get_route(host);
     }
 };

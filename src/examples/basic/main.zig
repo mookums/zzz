@@ -11,7 +11,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     var router = zzz.Router.init(allocator);
-    try router.serve_route(zzz.Route.init("/").get(struct {
+    try router.serve_route("/", zzz.Route.init().get(struct {
         pub fn handler_fn(request: zzz.Request) zzz.Response {
             const body =
                 \\ <!DOCTYPE html>
