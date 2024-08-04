@@ -9,8 +9,6 @@ pub const Router = struct {
     allocator: std.mem.Allocator,
     routes: std.StringHashMap(Route),
 
-    // TODO: Routing needs to be partly re-done. We need to have a single
-    // path have support for a variety of handler fns depending on method.
     pub fn init(allocator: std.mem.Allocator) Router {
         const routes = std.StringHashMap(Route).init(allocator);
         return Router{ .allocator = allocator, .routes = routes };
@@ -21,10 +19,11 @@ pub const Router = struct {
     }
 
     pub fn serve_fs_dir(self: *Router, dir_path: []const u8) !void {
+        // We will be adding a new route to the Router, that will be "dir_path'
         _ = self;
-        const dir = try std.fs.openDirAbsolute(dir_path, .{});
-        _ = dir;
-        @panic("TODO!");
+        const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+        defer dir.close();
+        @panic("TODO");
     }
 
     pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {

@@ -4,7 +4,6 @@ const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 
 pub const Route = struct {
-    path: []const u8,
     handlers: [9]?*const fn (request: Request) Response = [_]?*const fn (request: Request) Response{null} ** 9,
 
     fn method_to_index(method: Method) u32 {
@@ -22,8 +21,8 @@ pub const Route = struct {
         };
     }
 
-    pub fn init(path: []const u8) Route {
-        return Route{ .path = path };
+    pub fn init() Route {
+        return Route{ .handlers = [_]?*const fn (request: Request) Response{null} ** 9 };
     }
 
     pub fn get_handler(self: Route, method: Method) ?*const fn (request: Request) Response {

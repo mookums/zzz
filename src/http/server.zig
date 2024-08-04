@@ -5,10 +5,10 @@ const log = std.log.scoped(.@"zzz/tcp/http/server");
 const Pool = @import("core").Pool;
 const UringJob = @import("core").UringJob;
 
-pub const Router = @import("router.zig").Router;
-pub const Request = @import("request.zig").Request;
-pub const Response = @import("response.zig").Response;
-pub const Mime = @import("mime.zig").Mime;
+const Router = @import("router.zig").Router;
+const Request = @import("request.zig").Request;
+const Response = @import("response.zig").Response;
+const Mime = @import("mime.zig").Mime;
 
 pub const ServerConfig = struct {
     /// The allocator that server will use.
