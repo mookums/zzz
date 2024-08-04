@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
 
     addExample(b, "basic", target, optimize, zzz);
     addExample(b, "embed", target, optimize, zzz);
+    addExample(b, "count", target, optimize, zzz);
 }
 
 fn addExample(

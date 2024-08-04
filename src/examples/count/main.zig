@@ -1,6 +1,26 @@
 const std = @import("std");
 const zzz = @import("zzz");
-const log = std.log.scoped(.@"examples/basic");
+const log = std.log.scoped(.@"examples/count");
+
+fn count_handler(request: zzz.Request, context: zzz.Context) zzz.Response {
+    _ = request;
+
+    const count = zzz.Extractor(.Unsigned).extract_or(context, 1, 0) catch 0;
+
+    const body = std.fmt.bufPrintZ(context.buffer,
+        \\ <!DOCTYPE html>
+        \\ <html>
+        \\ <body>
+        \\ <h1>Hello, World!</h1>
+        \\ <a href="/">click to go home!</a>
+        \\ <p>Current Value: {d}</p>
+        \\ <a href="/count/{d}">click here to increment!</a>
+        \\ </body>
+        \\ </html>
+    , .{ count, count + 1 }) catch "";
+
+    return zzz.Response.init(.OK, zzz.Mime.HTML, body);
+}
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -13,22 +33,27 @@ pub fn main() !void {
     var router = zzz.Router.init(allocator);
     try router.serve_route("/", zzz.Route.init().get(struct {
         pub fn handler_fn(request: zzz.Request, context: zzz.Context) zzz.Response {
+            _ = request;
             _ = context;
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
                 \\ <body>
-                \\ <h1>Hello, World!</h1>
+                \\ <h1>Hello!</h1>
+                \\ <a href="/count/0">click here to go to count!</a>
                 \\ </body>
                 \\ </html>
             ;
 
-            _ = request;
             return zzz.Response.init(.OK, zzz.Mime.HTML, body[0..]);
         }
     }.handler_fn));
 
+    try router.serve_route("/count/%i", zzz.Route.init().get(count_handler));
+
     var server = zzz.Server.init(.{ .allocator = allocator }, router);
+    defer server.deinit();
+
     try server.bind(host, port);
     try server.listen();
 }

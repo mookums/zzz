@@ -11,3 +11,5 @@ pub const Request = http.Request;
 pub const Response = http.Response;
 pub const Router = http.Router;
 pub const Route = http.Route;
+pub const Context = http.Context;
+pub const Extractor = http.Extractor;

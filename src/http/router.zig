@@ -3,6 +3,7 @@ const Route = @import("route.zig").Route;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
+const Context = @import("context.zig").Context;
 const log = std.log.scoped(.router);
 
 const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
@@ -16,7 +17,7 @@ pub const Router = struct {
         return Router{ .allocator = allocator, .routes = routes };
     }
 
-    pub fn deinit(self: Router) void {
+    pub fn deinit(self: *Router) void {
         self.routes.deinit();
     }
 
@@ -29,7 +30,7 @@ pub const Router = struct {
 
     pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {
         const route = Route.init().get(struct {
-            pub fn handler_fn(_: Request) Response {
+            pub fn handler_fn(_: Request, _: Context) Response {
                 return Response.init(.OK, mime, bytes);
             }
         }.handler_fn);
