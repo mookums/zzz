@@ -15,20 +15,24 @@ pub const ServerConfig = struct {
     /// The allocator that server will use.
     allocator: std.mem.Allocator,
     /// Kernel Backlog Value.
-    backlog_kernel: u31 = 1024,
+    backlog_kernel: u31 = 512,
     /// Number of Uring Entries.
     entries_uring: u16 = 256,
-    /// Maximum size (in bytes) of the Request header.
-    /// Default: 2 MB.
-    size_request_header_max: u32 = 1024 * 1024 * 2,
+    /// Maximum size (in bytes) of the Request.
+    /// This does not affect memory usage, just an
+    /// upper bound when parsing.
+    ///
+    /// Default: 2MB.
+    size_request_max: u32 = 1024 * 1024 * 2,
     /// Size of the Read Buffer for reading out of the Socket.
     /// Default: 512 B.
     size_read_buffer: u32 = 512,
+    /// Size of the Read Buffer for writing into the Socket.
+    /// Default: 512 B.
+    size_write_buffer: u32 = 512,
     /// Size of the Context Buffer.
-    /// Default: 2MB.
-    size_context_buffer: u32 = 1024 * 1024 * 2,
-    /// Maximum number of headers per Request.
-    request_headers_max: u8 = 32,
+    /// Default: 1MB.
+    size_context_buffer: u32 = 1024 * 1024,
     /// Maximum number of headers per Response.
     response_headers_max: u8 = 8,
 };
@@ -115,7 +119,7 @@ pub const Server = struct {
         var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.entries_uring, null, null);
         defer cqes.deinit(null, null);
 
-        var buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
+        var read_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
                 for (buffer) |*item| {
                     // There is no handling this failure. If this happens, we need to crash.
@@ -124,13 +128,30 @@ pub const Server = struct {
             }
         }.init_hook, .{ .allocator = allocator, .size = self.config.size_read_buffer });
 
-        defer buffer_pool.deinit(struct {
+        defer read_buffer_pool.deinit(struct {
             fn deinit_hook(buffer: [][]u8, a: anytype) void {
                 for (buffer) |item| {
                     a.free(item);
                 }
             }
         }.deinit_hook, allocator);
+
+        //var write_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
+        //    fn init_hook(buffer: [][]u8, info: anytype) void {
+        //        for (buffer) |*item| {
+        //            // There is no handling this failure. If this happens, we need to crash.
+        //            item.* = info.allocator.alloc(u8, info.size) catch unreachable;
+        //        }
+        //    }
+        //}.init_hook, .{ .allocator = allocator, .size = self.config.size_write_buffer });
+
+        //defer write_buffer_pool.deinit(struct {
+        //    fn deinit_hook(buffer: [][]u8, a: anytype) void {
+        //        for (buffer) |item| {
+        //            a.free(item);
+        //        }
+        //    }
+        //}.deinit_hook, allocator);
 
         var context_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
@@ -139,7 +160,7 @@ pub const Server = struct {
                     item.* = info.allocator.alloc(u8, info.size) catch unreachable;
                 }
             }
-        }.init_hook, .{ .allocator = allocator, .size = self.config.size_read_buffer });
+        }.init_hook, .{ .allocator = allocator, .size = self.config.size_context_buffer });
 
         defer context_buffer_pool.deinit(struct {
             fn deinit_hook(buffer: [][]u8, a: anytype) void {
@@ -183,13 +204,16 @@ pub const Server = struct {
                 switch (j.*) {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
-                        const buffer = buffer_pool.get(@mod(
+                        const buffer = read_buffer_pool.get(@mod(
                             @as(usize, @intCast(cqe.res)),
-                            buffer_pool.items.len,
+                            read_buffer_pool.items.len,
                         ));
                         const read_buffer = .{ .buffer = buffer };
 
                         // Create the ArrayList for the Request to get read into.
+
+                        // TODO: This will need to be fixed at some point. This is our ONLY
+                        // source of runtime allocation and should not exist.
                         const request = request_pool.get_ptr(@mod(
                             @as(usize, @intCast(cqe.res)),
                             request_pool.items.len,
@@ -208,11 +232,13 @@ pub const Server = struct {
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
                                 //// This is the end of the headers.
                                 const request = try Request.parse(.{
-                                    .request_max_size = 4096,
+                                    .request_max_size = self.config.size_request_max,
                                 }, inner.request.items);
 
                                 // Clear and free it out, allowing us to handle future requests.
                                 inner.request.items.len = 0;
+
+                                // TODO: Responding into the buffer should use the write_buffers.
 
                                 const response = blk: {
                                     const route = self.router.get_route_from_host(request.host);
@@ -251,7 +277,7 @@ pub const Server = struct {
                     .Write => |inner| {
                         const write_count = cqe.res;
                         _ = write_count;
-                        const buffer = buffer_pool.get(@mod(@as(usize, @intCast(inner.socket)), buffer_pool.items.len));
+                        const buffer = read_buffer_pool.get(@mod(@as(usize, @intCast(inner.socket)), read_buffer_pool.items.len));
                         const request = request_pool.get_ptr(@mod(@as(usize, @intCast(inner.socket)), request_pool.items.len));
 
                         j.* = .{ .Read = .{ .socket = inner.socket, .buffer = buffer, .request = request } };
