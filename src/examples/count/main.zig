@@ -2,12 +2,10 @@ const std = @import("std");
 const zzz = @import("zzz");
 const log = std.log.scoped(.@"examples/count");
 
-fn count_handler(request: zzz.Request, context: zzz.Context) zzz.Response {
-    _ = request;
-
+fn count_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
     const count = zzz.Extractor(.Unsigned).extract_or(context, 1, 0) catch 0;
 
-    const body = std.fmt.bufPrintZ(context.buffer,
+    const body = std.fmt.allocPrint(context.allocator,
         \\ <!DOCTYPE html>
         \\ <html>
         \\ <body>
@@ -32,9 +30,7 @@ pub fn main() !void {
 
     var router = zzz.Router.init(allocator);
     try router.serve_route("/", zzz.Route.init().get(struct {
-        pub fn handler_fn(request: zzz.Request, context: zzz.Context) zzz.Response {
-            _ = request;
-            _ = context;
+        pub fn handler_fn(_: zzz.Request, _: zzz.Context) zzz.Response {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>

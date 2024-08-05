@@ -15,13 +15,29 @@ pub const ServerConfig = struct {
     /// The allocator that server will use.
     allocator: std.mem.Allocator,
     /// Kernel Backlog Value.
-    backlog_kernel: u31 = 512,
-    /// Number of Uring Entries.
-    entries_uring: u16 = 256,
-    /// Maximum size (in bytes) of the Request.
-    /// This does not affect memory usage, just an
-    /// upper bound when parsing.
+    size_backlog_kernel: u31 = 512,
+    /// Number of Maximum Concurrnet Connections.
     ///
+    /// zzz will drop/close any connections greater
+    /// than this.
+    ///
+    /// You want to tune this to your expected number
+    /// of maximum connections.
+    ///
+    /// Default: 1024.
+    size_connections_max: u16 = 1024,
+    /// Amount of allocated memory retained
+    /// after an arena is cleared.
+    ///
+    /// A higher value will increase memory usage but
+    /// should make allocators faster.
+    ///
+    /// A lower value will reduce memory usage but
+    /// will make allocators slower.
+    ///
+    /// Default: 1KB.
+    size_context_arena_retain: u32 = 1024,
+    /// Maximum size (in bytes) of the Request.
     /// Default: 2MB.
     size_request_max: u32 = 1024 * 1024 * 2,
     /// Size of the Read Buffer for reading out of the Socket.
@@ -30,9 +46,6 @@ pub const ServerConfig = struct {
     /// Size of the Read Buffer for writing into the Socket.
     /// Default: 512 B.
     size_write_buffer: u32 = 512,
-    /// Size of the Context Buffer.
-    /// Default: 1MB.
-    size_context_buffer: u32 = 1024 * 1024,
     /// Maximum number of headers per Response.
     response_headers_max: u8 = 8,
 };
@@ -44,6 +57,9 @@ pub const Server = struct {
     connections: u32 = 0,
 
     pub fn init(config: ServerConfig, router: Router) Server {
+        // Must be a power of 2.
+        assert(config.size_connections_max % 2 == 0);
+
         return Server{
             .config = config,
             .router = router,
@@ -109,22 +125,22 @@ pub const Server = struct {
         defer std.posix.close(server_socket);
 
         log.info("server listening...", .{});
-        try std.posix.listen(server_socket, self.config.backlog_kernel);
+        try std.posix.listen(server_socket, self.config.size_backlog_kernel);
 
         const allocator = self.config.allocator;
 
         // Create our Ring.
         var uring = try std.os.linux.IoUring.init(
-            self.config.entries_uring,
+            self.config.size_connections_max,
             std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
         );
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.entries_uring, null, null);
+        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.size_connections_max, null, null);
         defer cqes.deinit(null, null);
 
-        var read_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
+        var read_buffer_pool = try Pool([]u8).init(allocator, self.config.size_connections_max, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
                 for (buffer) |*item| {
                     // There is no handling this failure. If this happens, we need to crash.
@@ -141,27 +157,10 @@ pub const Server = struct {
             }
         }.deinit_hook, allocator);
 
-        var context_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
-            fn init_hook(buffer: [][]u8, info: anytype) void {
-                for (buffer) |*item| {
-                    // There is no handling this failure. If this happens, we need to crash.
-                    item.* = info.allocator.alloc(u8, info.size) catch unreachable;
-                }
-            }
-        }.init_hook, .{ .allocator = allocator, .size = self.config.size_context_buffer });
-
-        defer context_buffer_pool.deinit(struct {
-            fn deinit_hook(buffer: [][]u8, a: anytype) void {
-                for (buffer) |item| {
-                    a.free(item);
-                }
-            }
-        }.deinit_hook, allocator);
-
-        var job_pool = try Pool(UringJob).init(allocator, self.config.entries_uring, null, null);
+        var job_pool = try Pool(UringJob).init(allocator, self.config.size_connections_max, null, null);
         defer job_pool.deinit(null, null);
 
-        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, self.config.entries_uring, struct {
+        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, self.config.size_connections_max, struct {
             fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
                 for (buffer) |*item| {
                     item.* = std.ArrayList(u8).initCapacity(a, 512) catch unreachable;
@@ -172,6 +171,23 @@ pub const Server = struct {
         // Only needed since we do some allocations within the init hook.
         defer request_pool.deinit(struct {
             fn deinit_hook(buffer: []std.ArrayList(u8), _: anytype) void {
+                for (buffer) |item| {
+                    item.deinit();
+                }
+            }
+        }.deinit_hook, null);
+
+        // These arenas are passed down to the handlers so they can do whatever allocations and logic needed.
+        var arena_pool = try Pool(std.heap.ArenaAllocator).init(allocator, self.config.size_connections_max, struct {
+            fn init_hook(buffer: []std.heap.ArenaAllocator, a: anytype) void {
+                for (buffer) |*item| {
+                    item.* = std.heap.ArenaAllocator.init(a);
+                }
+            }
+        }.init_hook, allocator);
+
+        defer arena_pool.deinit(struct {
+            fn deinit_hook(buffer: []std.heap.ArenaAllocator, _: anytype) void {
                 for (buffer) |item| {
                     item.deinit();
                 }
@@ -193,11 +209,20 @@ pub const Server = struct {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
-                        if (self.connections >= self.config.entries_uring) {
+                        if (self.connections >= self.config.size_connections_max) {
+                            std.posix.close(socket);
                             continue;
                         }
 
                         self.connections += 1;
+
+                        // Context Arena, not used by zzz but
+                        // it is passed to the request handlers
+                        // and used later on.
+                        const arena = arena_pool.get_ptr(@mod(
+                            @as(usize, @intCast(cqe.res)),
+                            arena_pool.items.len,
+                        ));
 
                         const buffer = read_buffer_pool.get(@mod(
                             @as(usize, @intCast(cqe.res)),
@@ -208,13 +233,21 @@ pub const Server = struct {
                         // Create the ArrayList for the Request to get read into.
                         // TODO: This will need to be fixed at some point. This is our ONLY
                         // source of runtime allocation and should not exist.
-                        const request = request_pool.get_ptr(@mod(
-                            @as(usize, @intCast(cqe.res)),
-                            request_pool.items.len,
-                        ));
+                        const request = request_pool.get_ptr(
+                            @mod(@as(usize, @intCast(cqe.res)), request_pool.items.len),
+                        );
 
-                        const new_job: *UringJob = job_pool.get_ptr(@mod(@as(usize, @intCast(cqe.res)), job_pool.items.len));
-                        new_job.* = .{ .Read = .{ .socket = socket, .buffer = buffer, .request = request } };
+                        const new_job: *UringJob = job_pool.get_ptr(
+                            @mod(@as(usize, @intCast(cqe.res)), job_pool.items.len),
+                        );
+
+                        new_job.* = .{ .Read = .{
+                            .socket = socket,
+                            .arena = arena,
+                            .buffer = buffer,
+                            .request = request,
+                        } };
+
                         _ = try uring.recv(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
                     },
 
@@ -232,17 +265,10 @@ pub const Server = struct {
                                 // Clear and free it out, allowing us to handle future requests.
                                 inner.request.items.len = 0;
 
-                                // TODO: Responding into the buffer should use the write_buffers.
-
                                 const response = blk: {
                                     const route = self.router.get_route_from_host(request.host);
                                     if (route) |r| {
-                                        const context: Context = Context.init(request.host, context_buffer_pool.get(
-                                            @mod(
-                                                @as(usize, @intCast(cqe.res)),
-                                                context_buffer_pool.items.len,
-                                            ),
-                                        ));
+                                        const context: Context = Context.init(inner.arena.allocator(), request.host);
                                         const handler = r.get_handler(request.method);
 
                                         if (handler) |func| {
@@ -259,13 +285,18 @@ pub const Server = struct {
                                     break :blk try resp.respond_into_buffer(inner.buffer);
                                 };
 
-                                j.* = .{ .Write = .{ .socket = inner.socket, .response = response, .write_count = 0 } };
-
+                                j.* = .{ .Write = .{
+                                    .socket = inner.socket,
+                                    .arena = inner.arena,
+                                    .response = response,
+                                    .write_count = 0,
+                                } };
                                 _ = try uring.send(cqe.user_data, inner.socket, response, 0);
                             } else {
                                 _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = inner.buffer }, 0);
                             }
                         } else {
+                            _ = inner.arena.reset(.{ .retain_with_limit = self.config.size_context_arena_retain });
                             self.connections -= 1;
                         }
                     },
@@ -273,10 +304,14 @@ pub const Server = struct {
                     .Write => |inner| {
                         const write_count = cqe.res;
                         _ = write_count;
-                        const buffer = read_buffer_pool.get(@mod(@as(usize, @intCast(inner.socket)), read_buffer_pool.items.len));
-                        const request = request_pool.get_ptr(@mod(@as(usize, @intCast(inner.socket)), request_pool.items.len));
+                        const buffer = read_buffer_pool.get(
+                            @mod(@as(usize, @intCast(inner.socket)), read_buffer_pool.items.len),
+                        );
+                        const request = request_pool.get_ptr(
+                            @mod(@as(usize, @intCast(inner.socket)), request_pool.items.len),
+                        );
 
-                        j.* = .{ .Read = .{ .socket = inner.socket, .buffer = buffer, .request = request } };
+                        j.* = .{ .Read = .{ .socket = inner.socket, .arena = inner.arena, .buffer = buffer, .request = request } };
                         _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = buffer }, 0);
                     },
 
@@ -284,7 +319,7 @@ pub const Server = struct {
                 }
             }
 
-            if (self.connections < self.config.entries_uring) {
+            if (self.connections < self.config.size_connections_max) {
                 _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
             }
 

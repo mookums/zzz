@@ -47,13 +47,11 @@ pub fn Extractor(comptime M: TokenMatch) type {
 }
 
 pub const Context = struct {
+    allocator: std.mem.Allocator,
     path: []const u8,
-    /// Buffer for anything to use.
-    /// Owned by zzz.
-    buffer: []u8,
 
-    pub fn init(path: []const u8, buffer: []u8) Context {
-        return Context{ .path = path, .buffer = buffer };
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) Context {
+        return Context{ .allocator = allocator, .path = path };
     }
 
     /// Extracts the n-th occurance of this match.
