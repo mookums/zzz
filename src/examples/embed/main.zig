@@ -11,7 +11,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     var router = zzz.Router.init(allocator);
-    try router.serve_embedded_file("/", zzz.Mime.HTML, @embedFile("sample.html"));
+    try router.serve_embedded_file("/", zzz.Mime.HTML, @embedFile("index.html"));
 
     var server = zzz.Server.init(.{ .allocator = allocator }, router);
     try server.bind(host, port);
