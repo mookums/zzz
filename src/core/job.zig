@@ -7,8 +7,6 @@ const UringJobType = enum {
     Close,
 };
 
-const UringAccept = struct {};
-
 const UringRead = struct {
     socket: std.posix.socket_t,
     buffer: []u8,
@@ -21,11 +19,9 @@ const UringWrite = struct {
     write_count: i32,
 };
 
-const UringClose = struct {};
-
 pub const UringJob = union(UringJobType) {
-    Accept: UringAccept,
+    Accept,
     Read: UringRead,
     Write: UringWrite,
-    Close: UringClose,
+    Close,
 };

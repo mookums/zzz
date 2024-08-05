@@ -41,9 +41,14 @@ pub const Server = struct {
     config: ServerConfig,
     router: Router,
     socket: ?std.posix.socket_t = null,
+    connections: u32 = 0,
 
     pub fn init(config: ServerConfig, router: Router) Server {
-        return Server{ .config = config, .router = router };
+        return Server{
+            .config = config,
+            .router = router,
+            .connections = 0,
+        };
     }
 
     pub fn deinit(self: *Server) void {
@@ -136,23 +141,6 @@ pub const Server = struct {
             }
         }.deinit_hook, allocator);
 
-        //var write_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
-        //    fn init_hook(buffer: [][]u8, info: anytype) void {
-        //        for (buffer) |*item| {
-        //            // There is no handling this failure. If this happens, we need to crash.
-        //            item.* = info.allocator.alloc(u8, info.size) catch unreachable;
-        //        }
-        //    }
-        //}.init_hook, .{ .allocator = allocator, .size = self.config.size_write_buffer });
-
-        //defer write_buffer_pool.deinit(struct {
-        //    fn deinit_hook(buffer: [][]u8, a: anytype) void {
-        //        for (buffer) |item| {
-        //            a.free(item);
-        //        }
-        //    }
-        //}.deinit_hook, allocator);
-
         var context_buffer_pool = try Pool([]u8).init(allocator, self.config.entries_uring, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
                 for (buffer) |*item| {
@@ -191,8 +179,8 @@ pub const Server = struct {
         }.deinit_hook, null);
 
         // Create and send the first Job.
-        const job: UringJob = .{ .Accept = .{} };
-        _ = try uring.accept_multishot(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
+        const job: UringJob = .Accept;
+        _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
 
         while (true) {
             const rd_count = try uring.copy_cqes(cqes.items[0..], 0);
@@ -204,6 +192,13 @@ pub const Server = struct {
                 switch (j.*) {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
+
+                        if (self.connections >= self.config.entries_uring) {
+                            continue;
+                        }
+
+                        self.connections += 1;
+
                         const buffer = read_buffer_pool.get(@mod(
                             @as(usize, @intCast(cqe.res)),
                             read_buffer_pool.items.len,
@@ -211,7 +206,6 @@ pub const Server = struct {
                         const read_buffer = .{ .buffer = buffer };
 
                         // Create the ArrayList for the Request to get read into.
-
                         // TODO: This will need to be fixed at some point. This is our ONLY
                         // source of runtime allocation and should not exist.
                         const request = request_pool.get_ptr(@mod(
@@ -271,6 +265,8 @@ pub const Server = struct {
                             } else {
                                 _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = inner.buffer }, 0);
                             }
+                        } else {
+                            self.connections -= 1;
                         }
                     },
 
@@ -286,6 +282,10 @@ pub const Server = struct {
 
                     .Close => {},
                 }
+            }
+
+            if (self.connections < self.config.entries_uring) {
+                _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
             }
 
             _ = try uring.submit_and_wait(1);
