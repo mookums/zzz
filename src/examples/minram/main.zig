@@ -32,13 +32,7 @@ pub fn main() !void {
 
     var server = zzz.Server.init(.{
         .allocator = allocator,
-        // Limit Uring Entries.
-        .backlog_kernel = 256,
-        // This causes deadlocks if our # of connections is ~3x this number.
-        // TODO: Fix and make it stable at any uring count, just slower.
-        //
-        // This can be done by tracking the number of active connections, only allowing an accept to fire IF
-        // it is <= 80% of this number.
+        .backlog_kernel = 32,
         .entries_uring = 32,
         // If we are not using matching functionality,
         // we can set this to 0.
