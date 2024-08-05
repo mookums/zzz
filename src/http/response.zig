@@ -10,7 +10,7 @@ pub const Response = struct {
     mime: ?Mime = null,
     body: []const u8 = undefined,
     headers: [32]KVPair = [_]KVPair{undefined} ** 32,
-    headers_idx: usize = 0,
+    headers_idx: u32 = 0,
 
     pub fn init(status: Status, mime: ?Mime, body: []const u8) Response {
         return Response{
@@ -39,7 +39,7 @@ pub const Response = struct {
         return stream.getWritten();
     }
 
-    pub fn respond_into_alloc(self: Response, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+    pub fn respond_into_alloc(self: Response, allocator: std.mem.Allocator, max_size: u32) ![]u8 {
         var stream = std.io.fixedBufferStream(try allocator.alloc(u8, max_size));
         try self.respond(stream.writer(), self.body, self.mime);
         return stream.getWritten();

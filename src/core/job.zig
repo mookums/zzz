@@ -9,12 +9,14 @@ const UringJobType = enum {
 
 const UringRead = struct {
     socket: std.posix.socket_t,
+    arena: *std.heap.ArenaAllocator,
     buffer: []u8,
     request: *std.ArrayList(u8),
 };
 
 const UringWrite = struct {
     socket: std.posix.socket_t,
+    arena: *std.heap.ArenaAllocator,
     response: []const u8,
     write_count: i32,
 };
