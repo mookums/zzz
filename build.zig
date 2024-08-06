@@ -18,16 +18,17 @@ pub fn build(b: *std.Build) void {
 
     zzz.addImport("core", core);
 
-    addExample(b, "basic", target, optimize, zzz);
-    addExample(b, "minram", target, optimize, zzz);
-    addExample(b, "embed", target, optimize, zzz);
-    addExample(b, "count", target, optimize, zzz);
-    addExample(b, "multithread", target, optimize, zzz);
+    addExample(b, "basic", false, target, optimize, zzz);
+    addExample(b, "minram", false, target, optimize, zzz);
+    addExample(b, "embed", false, target, optimize, zzz);
+    addExample(b, "count", false, target, optimize, zzz);
+    addExample(b, "multithread", false, target, optimize, zzz);
 }
 
 fn addExample(
     b: *std.Build,
     name: []const u8,
+    link_libc: bool,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
     zzz_module: *std.Build.Module,
@@ -38,6 +39,10 @@ fn addExample(
         .target = target,
         .optimize = optimize,
     });
+
+    if (link_libc) {
+        example.linkLibC();
+    }
 
     example.root_module.addImport("zzz", zzz_module);
     const install_artifact = b.addInstallArtifact(example, .{});
