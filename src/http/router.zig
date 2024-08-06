@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const Route = @import("route.zig").Route;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
@@ -11,10 +12,13 @@ const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
 pub const Router = struct {
     allocator: std.mem.Allocator,
     routes: RoutingTrie,
+    /// This makes the router immutable, also making it
+    /// thread-safe when shared.
+    locked: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Router {
         const routes = RoutingTrie.init(allocator) catch unreachable;
-        return Router{ .allocator = allocator, .routes = routes };
+        return Router{ .allocator = allocator, .routes = routes, .locked = false };
     }
 
     pub fn deinit(self: *Router) void {
@@ -28,7 +32,13 @@ pub const Router = struct {
         @panic("TODO");
     }
 
-    pub fn serve_embedded_file(self: *Router, path: []const u8, comptime mime: ?Mime, comptime bytes: []const u8) !void {
+    pub fn serve_embedded_file(
+        self: *Router,
+        path: []const u8,
+        comptime mime: ?Mime,
+        comptime bytes: []const u8,
+    ) !void {
+        assert(!self.locked);
         const route = Route.init().get(struct {
             pub fn handler_fn(_: Request, _: Context) Response {
                 return Response.init(.OK, mime, bytes);
@@ -39,6 +49,7 @@ pub const Router = struct {
     }
 
     pub fn serve_route(self: *Router, path: []const u8, route: Route) !void {
+        assert(!self.locked);
         try self.routes.add_route(path, route);
     }
 

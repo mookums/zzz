@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const log = std.log.scoped(.@"zzz/tcp/http/server");
+const log = std.log.scoped(.@"zzz/server");
 
 const Pool = @import("core").Pool;
 const UringJob = @import("core").UringJob;
@@ -11,9 +11,14 @@ const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
 const Context = @import("context.zig").Context;
 
+const ServerThreadCount = union(enum) {
+    auto,
+    count: u32,
+};
+
 const ServerThreading = union(enum) {
     single_threaded,
-    multi_threaded: u32,
+    multi_threaded: ServerThreadCount,
 };
 
 pub const ServerConfig = struct {
@@ -27,6 +32,7 @@ pub const ServerConfig = struct {
     size_backlog_kernel: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
     ///
+    /// This is applied PER thread if using multi-threading.
     /// zzz will drop/close any connections greater
     /// than this.
     ///
@@ -128,15 +134,9 @@ pub const Server = struct {
 
     /// This function assumes that the socket is set up and
     /// is already listening.
-    fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t) !void {
+    fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, uring: *std.os.linux.IoUring) !void {
         var connections: u64 = 0;
         const allocator = config.allocator;
-
-        // Create our Ring.
-        var uring = try std.os.linux.IoUring.init(
-            config.size_connections_max,
-            std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
-        );
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
@@ -336,16 +336,33 @@ pub const Server = struct {
     pub fn listen(self: *Server) !void {
         assert(self.socket != null);
         const server_socket = self.socket.?;
-        defer std.posix.close(server_socket);
+
+        // Lock the Router.
+        self.router.locked = true;
 
         log.info("server listening...", .{});
+        log.info("threading mode: {s}", .{@tagName(self.config.threading)});
         try std.posix.listen(server_socket, self.config.size_backlog_kernel);
 
+        // Create our Ring.
+        var uring = try std.os.linux.IoUring.init(
+            self.config.size_connections_max,
+            std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
+        );
+        const fd = uring.fd;
+
         switch (self.config.threading) {
-            .single_threaded => try run(self.config, self.router, server_socket),
-            .multi_threaded => |thread_count| {
+            .single_threaded => try run(self.config, self.router, server_socket, &uring),
+            .multi_threaded => |count| {
                 const allocator = self.config.allocator;
                 var threads = std.ArrayList(std.Thread).init(allocator);
+
+                const thread_count = blk: {
+                    switch (count) {
+                        .auto => break :blk try std.Thread.getCpuCount(),
+                        .count => |inner| break :blk inner,
+                    }
+                };
 
                 for (0..thread_count) |_| {
                     try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
@@ -353,13 +370,25 @@ pub const Server = struct {
                             config: ServerConfig,
                             router: Router,
                             s_socket: std.posix.socket_t,
+                            uring_fd: std.posix.fd_t,
                         ) void {
-                            run(config, router, s_socket) catch unreachable;
+                            var flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
+                            flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                            flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
+
+                            var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
+                                .wq_fd = @as(u32, @intCast(uring_fd)),
+                                .flags = flags,
+                            });
+
+                            var thread_uring = std.os.linux.IoUring.init_params(config.size_connections_max, &params) catch unreachable;
+
+                            run(config, router, s_socket, &thread_uring) catch unreachable;
                         }
-                    }.handler_fn, .{ self.config, self.router, server_socket }));
+                    }.handler_fn, .{ self.config, self.router, server_socket, fd }));
                 }
 
-                try run(self.config, self.router, server_socket);
+                try run(self.config, self.router, server_socket, &uring);
             },
         }
     }
