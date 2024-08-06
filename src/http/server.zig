@@ -11,9 +11,18 @@ const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
 const Context = @import("context.zig").Context;
 
+const ServerThreading = union(enum) {
+    single_threaded,
+    multi_threaded: u32,
+};
+
 pub const ServerConfig = struct {
     /// The allocator that server will use.
     allocator: std.mem.Allocator,
+    /// Threading Model to use.
+    ///
+    /// Default: .single_threaded
+    threading: ServerThreading = .single_threaded,
     /// Kernel Backlog Value.
     size_backlog_kernel: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
@@ -54,7 +63,6 @@ pub const Server = struct {
     config: ServerConfig,
     router: Router,
     socket: ?std.posix.socket_t = null,
-    connections: u32 = 0,
 
     pub fn init(config: ServerConfig, router: Router) Server {
         // Must be a power of 2.
@@ -63,7 +71,6 @@ pub const Server = struct {
         return Server{
             .config = config,
             .router = router,
-            .connections = 0,
         };
     }
 
@@ -119,35 +126,31 @@ pub const Server = struct {
         try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
-    pub fn listen(self: *Server) !void {
-        assert(self.socket != null);
-        const server_socket = self.socket.?;
-        defer std.posix.close(server_socket);
-
-        log.info("server listening...", .{});
-        try std.posix.listen(server_socket, self.config.size_backlog_kernel);
-
-        const allocator = self.config.allocator;
+    /// This function assumes that the socket is set up and
+    /// is already listening.
+    fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t) !void {
+        var connections: u64 = 0;
+        const allocator = config.allocator;
 
         // Create our Ring.
         var uring = try std.os.linux.IoUring.init(
-            self.config.size_connections_max,
+            config.size_connections_max,
             std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
         );
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, self.config.size_connections_max, null, null);
+        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, config.size_connections_max, null, null);
         defer cqes.deinit(null, null);
 
-        var read_buffer_pool = try Pool([]u8).init(allocator, self.config.size_connections_max, struct {
+        var read_buffer_pool = try Pool([]u8).init(allocator, config.size_connections_max, struct {
             fn init_hook(buffer: [][]u8, info: anytype) void {
                 for (buffer) |*item| {
                     // There is no handling this failure. If this happens, we need to crash.
                     item.* = info.allocator.alloc(u8, info.size) catch unreachable;
                 }
             }
-        }.init_hook, .{ .allocator = allocator, .size = self.config.size_read_buffer });
+        }.init_hook, .{ .allocator = allocator, .size = config.size_read_buffer });
 
         defer read_buffer_pool.deinit(struct {
             fn deinit_hook(buffer: [][]u8, a: anytype) void {
@@ -157,10 +160,10 @@ pub const Server = struct {
             }
         }.deinit_hook, allocator);
 
-        var job_pool = try Pool(UringJob).init(allocator, self.config.size_connections_max, null, null);
+        var job_pool = try Pool(UringJob).init(allocator, config.size_connections_max, null, null);
         defer job_pool.deinit(null, null);
 
-        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, self.config.size_connections_max, struct {
+        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, config.size_connections_max, struct {
             fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
                 for (buffer) |*item| {
                     item.* = std.ArrayList(u8).initCapacity(a, 512) catch unreachable;
@@ -178,7 +181,7 @@ pub const Server = struct {
         }.deinit_hook, null);
 
         // These arenas are passed down to the handlers so they can do whatever allocations and logic needed.
-        var arena_pool = try Pool(std.heap.ArenaAllocator).init(allocator, self.config.size_connections_max, struct {
+        var arena_pool = try Pool(std.heap.ArenaAllocator).init(allocator, config.size_connections_max, struct {
             fn init_hook(buffer: []std.heap.ArenaAllocator, a: anytype) void {
                 for (buffer) |*item| {
                     item.* = std.heap.ArenaAllocator.init(a);
@@ -209,12 +212,12 @@ pub const Server = struct {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
-                        if (self.connections >= self.config.size_connections_max) {
+                        if (connections >= config.size_connections_max) {
                             std.posix.close(socket);
                             continue;
                         }
 
-                        self.connections += 1;
+                        connections += 1;
 
                         // Context Arena, not used by zzz but
                         // it is passed to the request handlers
@@ -259,14 +262,14 @@ pub const Server = struct {
                             if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
                                 //// This is the end of the headers.
                                 const request = try Request.parse(.{
-                                    .request_max_size = self.config.size_request_max,
+                                    .request_max_size = config.size_request_max,
                                 }, inner.request.items);
 
                                 // Clear and free it out, allowing us to handle future requests.
                                 inner.request.items.len = 0;
 
                                 const response = blk: {
-                                    const route = self.router.get_route_from_host(request.host);
+                                    const route = router.get_route_from_host(request.host);
                                     if (route) |r| {
                                         const context: Context = Context.init(inner.arena.allocator(), request.host);
                                         const handler = r.get_handler(request.method);
@@ -296,8 +299,8 @@ pub const Server = struct {
                                 _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = inner.buffer }, 0);
                             }
                         } else {
-                            _ = inner.arena.reset(.{ .retain_with_limit = self.config.size_context_arena_retain });
-                            self.connections -= 1;
+                            _ = inner.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            connections -= 1;
                         }
                     },
 
@@ -319,7 +322,7 @@ pub const Server = struct {
                 }
             }
 
-            if (self.connections < self.config.size_connections_max) {
+            if (connections < config.size_connections_max) {
                 _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
             }
 
@@ -328,5 +331,32 @@ pub const Server = struct {
         }
 
         unreachable;
+    }
+
+    pub fn listen(self: *Server) !void {
+        assert(self.socket != null);
+        const server_socket = self.socket.?;
+        defer std.posix.close(server_socket);
+
+        log.info("server listening...", .{});
+        try std.posix.listen(server_socket, self.config.size_backlog_kernel);
+
+        switch (self.config.threading) {
+            .single_threaded => try run(self.config, self.router, server_socket),
+            .multi_threaded => |thread_count| {
+                const allocator = self.config.allocator;
+                var threads = std.ArrayList(std.Thread).init(allocator);
+
+                for (0..thread_count) |_| {
+                    try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
+                        fn handler_fn(config: ServerConfig, router: Router, s_socket: std.posix.socket_t) void {
+                            run(config, router, s_socket) catch unreachable;
+                        }
+                    }.handler_fn, .{ self.config, self.router, server_socket }));
+                }
+
+                try run(self.config, self.router, server_socket);
+            },
+        }
     }
 };
