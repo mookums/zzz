@@ -349,7 +349,11 @@ pub const Server = struct {
 
                 for (0..thread_count) |_| {
                     try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
-                        fn handler_fn(config: ServerConfig, router: Router, s_socket: std.posix.socket_t) void {
+                        fn handler_fn(
+                            config: ServerConfig,
+                            router: Router,
+                            s_socket: std.posix.socket_t,
+                        ) void {
                             run(config, router, s_socket) catch unreachable;
                         }
                     }.handler_fn, .{ self.config, self.router, server_socket }));
