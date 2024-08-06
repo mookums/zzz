@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     addExample(b, "minram", target, optimize, zzz);
     addExample(b, "embed", target, optimize, zzz);
     addExample(b, "count", target, optimize, zzz);
+    addExample(b, "multithread", target, optimize, zzz);
 }
 
 fn addExample(
