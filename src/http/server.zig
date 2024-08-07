@@ -344,10 +344,12 @@ pub const Server = struct {
         log.info("threading mode: {s}", .{@tagName(self.config.threading)});
         try std.posix.listen(server_socket, self.config.size_backlog_kernel);
 
+        const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+
         // Create our Ring.
         var uring = try std.os.linux.IoUring.init(
             self.config.size_connections_max,
-            std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER,
+            base_flags,
         );
         const fd = uring.fd;
 
@@ -372,8 +374,7 @@ pub const Server = struct {
                             s_socket: std.posix.socket_t,
                             uring_fd: std.posix.fd_t,
                         ) void {
-                            var flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
-                            flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                            var flags: u32 = base_flags;
                             flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
 
                             var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
