@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
 const Pool = @import("core").Pool;
-const UringJob = @import("core").UringJob;
+const Job = @import("core").Job;
 
 const Router = @import("router.zig").Router;
 const Request = @import("request.zig").Request;
@@ -160,7 +160,7 @@ pub const Server = struct {
             }
         }.deinit_hook, allocator);
 
-        var job_pool = try Pool(UringJob).init(allocator, config.size_connections_max, null, null);
+        var job_pool = try Pool(Job).init(allocator, config.size_connections_max, null, null);
         defer job_pool.deinit(null, null);
 
         var request_pool = try Pool(std.ArrayList(u8)).init(allocator, config.size_connections_max, struct {
@@ -198,7 +198,7 @@ pub const Server = struct {
         }.deinit_hook, null);
 
         // Create and send the first Job.
-        const job: UringJob = .Accept;
+        const job: Job = .Accept;
         _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
 
         while (true) {
@@ -206,7 +206,7 @@ pub const Server = struct {
 
             for (0..rd_count) |i| {
                 const cqe = cqes.items[i];
-                const j: *UringJob = @ptrFromInt(cqe.user_data);
+                const j: *Job = @ptrFromInt(cqe.user_data);
 
                 switch (j.*) {
                     .Accept => {
@@ -234,13 +234,11 @@ pub const Server = struct {
                         const read_buffer = .{ .buffer = buffer };
 
                         // Create the ArrayList for the Request to get read into.
-                        // TODO: This will need to be fixed at some point. This is our ONLY
-                        // source of runtime allocation and should not exist.
                         const request = request_pool.get_ptr(
                             @mod(@as(usize, @intCast(cqe.res)), request_pool.items.len),
                         );
 
-                        const new_job: *UringJob = job_pool.get_ptr(
+                        const new_job: *Job = job_pool.get_ptr(
                             @mod(@as(usize, @intCast(cqe.res)), job_pool.items.len),
                         );
 
@@ -366,13 +364,14 @@ pub const Server = struct {
                     }
                 };
 
-                for (0..thread_count) |_| {
+                for (0..thread_count) |i| {
                     try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
                         fn handler_fn(
                             config: ServerConfig,
                             router: Router,
                             s_socket: std.posix.socket_t,
                             uring_fd: std.posix.fd_t,
+                            thread_id: usize,
                         ) void {
                             var flags: u32 = base_flags;
                             flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
@@ -384,9 +383,11 @@ pub const Server = struct {
 
                             var thread_uring = std.os.linux.IoUring.init_params(config.size_connections_max, &params) catch unreachable;
 
-                            run(config, router, s_socket, &thread_uring) catch unreachable;
+                            run(config, router, s_socket, &thread_uring) catch {
+                                log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
+                            };
                         }
-                    }.handler_fn, .{ self.config, self.router, server_socket, fd }));
+                    }.handler_fn, .{ self.config, self.router, server_socket, fd, i }));
                 }
 
                 try run(self.config, self.router, server_socket, &uring);

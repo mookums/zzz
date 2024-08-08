@@ -42,6 +42,8 @@ pub fn main() !void {
         .allocator = allocator,
         .threading = .{ .multi_threaded = .auto },
         .size_read_buffer = 1024,
+        .size_connections_max = 32,
+        .size_context_arena_retain = 256,
     }, router);
     defer server.deinit();
     try server.bind(host, port);
