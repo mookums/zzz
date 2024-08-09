@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub fn ComptimePool(comptime T: type, comptime size: comptime_int) type {
     return struct {
@@ -35,17 +36,26 @@ pub fn ComptimePool(comptime T: type, comptime size: comptime_int) type {
     };
 }
 
+fn Borrow(comptime T: type) type {
+    return struct {
+        index: usize,
+        item: *T,
+    };
+}
+
 pub fn Pool(comptime T: type) type {
     return struct {
         const Self = @This();
         // Buffer for the Pool.
         items: []T,
+        dirty: std.DynamicBitSet,
         allocator: std.mem.Allocator,
+        full: bool = false,
 
         /// Initalizes our items buffer as undefined.
         pub fn init(allocator: std.mem.Allocator, size: u32, init_hook: ?*const fn (buffer: []T, args: anytype) void, args: anytype) !Self {
             const items: []T = try allocator.alloc(T, size);
-            const self = Self{ .allocator = allocator, .items = items };
+            const self = Self{ .allocator = allocator, .items = items, .dirty = try std.DynamicBitSet.initEmpty(allocator, size) };
 
             if (init_hook) |hook| {
                 @call(.auto, hook, .{ self.items, args });
@@ -55,20 +65,56 @@ pub fn Pool(comptime T: type) type {
         }
 
         /// Deinitalizes our items buffer with a passed in hook.
-        pub fn deinit(self: Self, deinit_hook: ?*const fn (buffer: []T, args: anytype) void, args: anytype) void {
+        pub fn deinit(self: *Self, deinit_hook: ?*const fn (buffer: []T, args: anytype) void, args: anytype) void {
             if (deinit_hook) |hook| {
                 @call(.auto, hook, .{ self.items, args });
             }
 
             self.allocator.free(self.items);
+            self.dirty.deinit();
         }
 
-        pub fn get(self: Self, index: usize) T {
+        fn get(self: Self, index: usize) T {
             return self.items[index];
         }
 
-        pub fn get_ptr(self: *Self, index: usize) *T {
+        fn get_ptr(self: *Self, index: usize) *T {
             return &self.items[index];
+        }
+
+        // The ident is supposed to be a unique identification for
+        // this element. It gets hashed and used to find an empty element.
+        //
+        // Returns a tuple of the index into the pool and a pointer to the item.
+        // Returns null otherwise.
+        pub fn borrow(self: *Self, id: u32) !Borrow(T) {
+            const bytes = std.mem.toBytes(id)[0..];
+            const hash = @mod(std.hash.Crc32.hash(bytes), self.items.len);
+
+            if (!self.dirty.isSet(hash)) {
+                self.dirty.set(hash);
+                return Borrow(T){ .index = hash, .item = self.get_ptr(hash) };
+            }
+
+            for (0..self.items.len) |i| {
+                const index = @mod(hash + i, self.items.len);
+
+                if (!self.dirty.isSet(index)) {
+                    self.dirty.set(index);
+                    return Borrow(T){ .index = index, .item = self.get_ptr(index) };
+                }
+            }
+
+            self.full = true;
+            return error.Full;
+        }
+
+        // Releases the item with the given index back to the Pool.
+        // Asserts that the given index was borrowed.
+        pub fn release(self: *Self, index: usize) void {
+            assert(self.dirty.isSet(index));
+            self.dirty.unset(index);
+            self.full = false;
         }
     };
 }
