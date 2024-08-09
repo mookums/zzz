@@ -13,5 +13,5 @@ pub const KVPair = struct {
 
 pub const HTTPError = error{
     TooManyHeaders,
-    PayloadTooLarge,
+    ContentTooLarge,
 };

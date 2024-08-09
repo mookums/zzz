@@ -8,6 +8,7 @@ const Job = @import("core").Job;
 const Pool = @import("pool.zig").Pool;
 const HTTPError = @import("lib.zig").HTTPError;
 
+const Capture = @import("routing_trie.zig").Capture;
 const Provision = @import("provision.zig").Provision;
 const Router = @import("router.zig").Router;
 const Request = @import("request.zig").Request;
@@ -57,14 +58,22 @@ pub const ServerConfig = struct {
     /// Default: 1KB.
     size_context_arena_retain: u32 = 1024,
     /// Maximum size (in bytes) of the Request.
+    ///
     /// Default: 2MB.
     size_request_max: u32 = 1024 * 1024 * 2,
-    /// Size of the Buffer used for reading and writing
-    /// into the Socket.
+    /// Size of the buffer (in bytes) used for
+    /// interacting with the Socket.
+    ///
     /// Default: 4 KB.
     size_socket_buffer: u32 = 1024 * 4,
     /// Maximum number of headers per Response.
+    ///
+    /// Default: 8
     response_headers_max: u8 = 8,
+    /// Maximum number of Captures in a Route URL.
+    ///
+    /// Default: 8
+    size_captures_max: u32 = 8,
 };
 
 pub const Server = struct {
@@ -152,6 +161,10 @@ pub const Server = struct {
                     provision.buffer = ctx.allocator.alloc(u8, ctx.size_socket_buffer) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
+                    // Create Captures
+                    provision.captures = ctx.allocator.alloc(Capture, ctx.size_captures_max) catch {
+                        panic("attemping to statically allocate more memory than available.", .{});
+                    };
                     // Create Request ArrayList
                     provision.request = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
@@ -177,6 +190,7 @@ pub const Server = struct {
             .job = .Accept,
             .index = undefined,
             .socket = undefined,
+            .captures = undefined,
             .request = undefined,
             .arena = undefined,
             .buffer = undefined,
@@ -185,14 +199,12 @@ pub const Server = struct {
         _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
 
         while (true) {
-            const rd_count = try uring.copy_cqes(cqes.items[0..], 0);
+            const cqe_count = try uring.copy_cqes(cqes.items[0..], 0);
 
-            for (0..rd_count) |i| {
-                const cqe = cqes.items[i];
+            for (cqes.items[0..cqe_count]) |cqe| {
                 const p: *Provision = @ptrFromInt(cqe.user_data);
-                const j: Job = p.job;
 
-                switch (j) {
+                switch (p.job) {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
@@ -232,8 +244,8 @@ pub const Server = struct {
                                             "Too Many Headers",
                                         ),
                                         // Body of the request is too long.
-                                        HTTPError.PayloadTooLarge => Response.init(
-                                            .@"Payload Too Large",
+                                        HTTPError.ContentTooLarge => Response.init(
+                                            .@"Content Too Large",
                                             Mime.HTML,
                                             "Request is too long",
                                         ),
@@ -251,10 +263,13 @@ pub const Server = struct {
                                 p.request.items.len = 0;
 
                                 const response = blk: {
-                                    const captured = router.get_route_from_host(request.host);
+                                    const captured = router.get_route_from_host(request.host, p.captures);
                                     if (captured) |c| {
-                                        defer c.captures.deinit();
-                                        const context: Context = Context.init(p.arena.allocator(), request.host, c.captures.items);
+                                        const context: Context = Context.init(
+                                            p.arena.allocator(),
+                                            request.host,
+                                            c.captures,
+                                        );
                                         const handler = c.route.get_handler(request.method);
 
                                         if (handler) |func| {
