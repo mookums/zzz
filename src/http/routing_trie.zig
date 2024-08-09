@@ -181,6 +181,16 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
+    // TODO: Redo the get_routes so that we can do matching a little
+    // different.
+    //
+    // We should do <format>:<name> so then we can return a StringHashMap
+    // that we can automatically extract from on the handler. This should
+    // make things easier since we will no longer need to reparse the
+    // path.
+    //
+    // /hi/%s:name where we can get back a ExtractedMap
+    // ExtractedMap.get("name") is equal to the path matched value.
     pub fn get_route(self: RoutingTrie, path: []const u8) ?Route {
         // We need some way of also returning the capture groups here.
         var iter = std.mem.tokenizeScalar(u8, path, '/');
