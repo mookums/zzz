@@ -2,9 +2,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
-const Pool = @import("core").Pool;
 const Job = @import("core").Job;
 
+const Pool = @import("pool.zig").Pool;
+
+const Provision = @import("provision.zig").Provision;
 const Router = @import("router.zig").Router;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
@@ -135,7 +137,6 @@ pub const Server = struct {
     /// This function assumes that the socket is set up and
     /// is already listening.
     fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, uring: *std.os.linux.IoUring) !void {
-        var connections: u64 = 0;
         const allocator = config.allocator;
         defer uring.deinit();
 
@@ -143,185 +144,119 @@ pub const Server = struct {
         var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, config.size_connections_max, null, null);
         defer cqes.deinit(null, null);
 
-        var read_buffer_pool = try Pool([]u8).init(allocator, config.size_connections_max, struct {
-            fn init_hook(buffer: [][]u8, info: anytype) void {
-                for (buffer) |*item| {
-                    // There is no handling this failure. If this happens, we need to crash.
-                    item.* = info.allocator.alloc(u8, info.size) catch unreachable;
+        var provision_pool = try Pool(Provision).init(allocator, config.size_connections_max, struct {
+            fn init_hook(provisions: []Provision, ctx: anytype) void {
+                for (provisions) |*provision| {
+                    provision.socket = undefined;
+                    // Create Buffer
+                    provision.buffer = ctx.allocator.alloc(u8, ctx.size_read_buffer) catch unreachable;
+                    // Create Request ArrayList
+                    provision.request = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_read_buffer) catch unreachable;
+                    // Create the Context Arena
+                    provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
                 }
             }
-        }.init_hook, .{ .allocator = allocator, .size = config.size_read_buffer });
+        }.init_hook, config);
 
-        defer read_buffer_pool.deinit(struct {
-            fn deinit_hook(buffer: [][]u8, a: anytype) void {
-                for (buffer) |item| {
-                    a.free(item);
-                }
-            }
-        }.deinit_hook, allocator);
-
-        var job_pool = try Pool(Job).init(allocator, config.size_connections_max, null, null);
-        defer job_pool.deinit(null, null);
-
-        var request_pool = try Pool(std.ArrayList(u8)).init(allocator, config.size_connections_max, struct {
-            fn init_hook(buffer: []std.ArrayList(u8), a: anytype) void {
-                for (buffer) |*item| {
-                    item.* = std.ArrayList(u8).initCapacity(a, 512) catch unreachable;
-                }
-            }
-        }.init_hook, allocator);
-
-        // Only needed since we do some allocations within the init hook.
-        defer request_pool.deinit(struct {
-            fn deinit_hook(buffer: []std.ArrayList(u8), _: anytype) void {
-                for (buffer) |item| {
-                    item.deinit();
-                }
-            }
-        }.deinit_hook, null);
-
-        // These arenas are passed down to the handlers so they can do whatever allocations and logic needed.
-        var arena_pool = try Pool(std.heap.ArenaAllocator).init(allocator, config.size_connections_max, struct {
-            fn init_hook(buffer: []std.heap.ArenaAllocator, a: anytype) void {
-                for (buffer) |*item| {
-                    item.* = std.heap.ArenaAllocator.init(a);
-                }
-            }
-        }.init_hook, allocator);
-
-        defer arena_pool.deinit(struct {
-            fn deinit_hook(buffer: []std.heap.ArenaAllocator, _: anytype) void {
-                for (buffer) |item| {
-                    item.deinit();
-                }
-            }
-        }.deinit_hook, null);
+        // we need to deinit the provision pool here.
 
         // Create and send the first Job.
-        const job: Job = .Accept;
-        _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
+        const first_provision = Provision{
+            .job = .Accept,
+            .index = undefined,
+            .socket = undefined,
+            .request = undefined,
+            .arena = undefined,
+            .buffer = undefined,
+        };
+
+        _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
 
         while (true) {
             const rd_count = try uring.copy_cqes(cqes.items[0..], 0);
 
             for (0..rd_count) |i| {
                 const cqe = cqes.items[i];
-                const j: *Job = @ptrFromInt(cqe.user_data);
+                const p: *Provision = @ptrFromInt(cqe.user_data);
+                const j: Job = p.job;
 
-                switch (j.*) {
+                switch (j) {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
-                        if (connections >= config.size_connections_max) {
+                        const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
                             std.posix.close(socket);
                             continue;
-                        }
+                        };
 
-                        connections += 1;
+                        // Store the index of this item.
+                        provision.item.index = provision.index;
+                        provision.item.socket = socket;
 
-                        // Context Arena, not used by zzz but
-                        // it is passed to the request handlers
-                        // and used later on.
-                        const arena = arena_pool.get_ptr(@mod(
-                            @as(usize, @intCast(cqe.res)),
-                            arena_pool.items.len,
-                        ));
+                        const read_buffer = .{ .buffer = provision.item.buffer };
 
-                        const buffer = read_buffer_pool.get(@mod(
-                            @as(usize, @intCast(cqe.res)),
-                            read_buffer_pool.items.len,
-                        ));
-                        const read_buffer = .{ .buffer = buffer };
-
-                        // Create the ArrayList for the Request to get read into.
-                        const request = request_pool.get_ptr(
-                            @mod(@as(usize, @intCast(cqe.res)), request_pool.items.len),
-                        );
-
-                        const new_job: *Job = job_pool.get_ptr(
-                            @mod(@as(usize, @intCast(cqe.res)), job_pool.items.len),
-                        );
-
-                        new_job.* = .{ .Read = .{
-                            .socket = socket,
-                            .arena = arena,
-                            .buffer = buffer,
-                            .request = request,
-                        } };
-
-                        _ = try uring.recv(@as(u64, @intFromPtr(new_job)), socket, read_buffer, 0);
+                        provision.item.job = .Read;
+                        _ = try uring.recv(@as(u64, @intFromPtr(provision.item)), socket, read_buffer, 0);
                     },
 
-                    .Read => |inner| {
+                    .Read => {
                         const read_count = cqe.res;
 
                         if (read_count > 0) {
-                            try inner.request.appendSlice(inner.buffer[0..@as(usize, @intCast(read_count))]);
-                            if (std.mem.endsWith(u8, inner.request.items, "\r\n\r\n")) {
+                            try p.request.appendSlice(p.buffer[0..@as(usize, @intCast(read_count))]);
+                            if (std.mem.endsWith(u8, p.request.items, "\r\n\r\n")) {
                                 //// This is the end of the headers.
                                 const request = try Request.parse(.{
                                     .request_max_size = config.size_request_max,
-                                }, inner.request.items);
+                                }, p.request.items);
 
                                 // Clear and free it out, allowing us to handle future requests.
-                                inner.request.items.len = 0;
+                                p.request.items.len = 0;
 
                                 const response = blk: {
                                     const route = router.get_route_from_host(request.host);
                                     if (route) |r| {
-                                        const context: Context = Context.init(inner.arena.allocator(), request.host);
+                                        const context: Context = Context.init(p.arena.allocator(), request.host);
                                         const handler = r.get_handler(request.method);
 
                                         if (handler) |func| {
                                             const resp = func(request, context);
-                                            break :blk try resp.respond_into_buffer(inner.buffer);
+                                            break :blk try resp.respond_into_buffer(p.buffer);
                                         } else {
                                             const resp = Response.init(.@"Method Not Allowed", Mime.HTML, "");
-                                            break :blk try resp.respond_into_buffer(inner.buffer);
+                                            break :blk try resp.respond_into_buffer(p.buffer);
                                         }
                                     }
 
                                     // Default Response.
                                     var resp = Response.init(.@"Not Found", Mime.HTML, "");
-                                    break :blk try resp.respond_into_buffer(inner.buffer);
+                                    break :blk try resp.respond_into_buffer(p.buffer);
                                 };
 
-                                j.* = .{ .Write = .{
-                                    .socket = inner.socket,
-                                    .arena = inner.arena,
-                                    .response = response,
-                                    .write_count = 0,
-                                } };
-                                _ = try uring.send(cqe.user_data, inner.socket, response, 0);
+                                p.job = .Write;
+                                _ = try uring.send(cqe.user_data, p.socket, response, 0);
                             } else {
-                                _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = inner.buffer }, 0);
+                                _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                             }
                         } else {
-                            _ = inner.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                            connections -= 1;
+                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            provision_pool.release(p.index);
                         }
                     },
 
-                    .Write => |inner| {
+                    .Write => {
                         const write_count = cqe.res;
                         _ = write_count;
-                        const buffer = read_buffer_pool.get(
-                            @mod(@as(usize, @intCast(inner.socket)), read_buffer_pool.items.len),
-                        );
-                        const request = request_pool.get_ptr(
-                            @mod(@as(usize, @intCast(inner.socket)), request_pool.items.len),
-                        );
-
-                        j.* = .{ .Read = .{ .socket = inner.socket, .arena = inner.arena, .buffer = buffer, .request = request } };
-                        _ = try uring.recv(cqe.user_data, inner.socket, .{ .buffer = buffer }, 0);
+                        p.job = .Read;
+                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                     },
 
                     .Close => {},
                 }
             }
 
-            if (connections < config.size_connections_max) {
-                _ = try uring.accept(@as(u64, @intFromPtr(&job)), server_socket, null, null, 0);
+            if (!provision_pool.full) {
+                _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
             }
 
             _ = try uring.submit_and_wait(1);
