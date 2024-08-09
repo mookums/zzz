@@ -33,7 +33,7 @@ pub fn main() !void {
         .size_connections_max = 16,
         .size_context_arena_retain = 64,
         .size_request_max = 2048,
-        .size_read_buffer = 512,
+        .size_socket_buffer = 512,
     }, router);
 
     try server.bind(host, port);
