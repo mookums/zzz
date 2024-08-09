@@ -251,10 +251,11 @@ pub const Server = struct {
                                 p.request.items.len = 0;
 
                                 const response = blk: {
-                                    const route = router.get_route_from_host(request.host);
-                                    if (route) |r| {
-                                        const context: Context = Context.init(p.arena.allocator(), request.host);
-                                        const handler = r.get_handler(request.method);
+                                    const captured = router.get_route_from_host(request.host);
+                                    if (captured) |c| {
+                                        defer c.captures.deinit();
+                                        const context: Context = Context.init(p.arena.allocator(), request.host, c.captures.items);
+                                        const handler = c.route.get_handler(request.method);
 
                                         if (handler) |func| {
                                             break :blk func(request, context);
