@@ -100,7 +100,7 @@ pub const Capture = union(TokenMatch) {
 
 pub const CapturedRoute = struct {
     route: Route,
-    captures: std.ArrayList(Capture),
+    captures: []Capture,
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
@@ -193,9 +193,9 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
-    pub fn get_route(self: RoutingTrie, path: []const u8) ?CapturedRoute {
+    pub fn get_route(self: RoutingTrie, path: []const u8, captures: []Capture) ?CapturedRoute {
         // We need some way of also returning the capture groups here.
-        var captures = std.ArrayList(Capture).init(self.allocator);
+        var capture_idx: usize = 0;
         var iter = std.mem.tokenizeScalar(u8, path, '/');
 
         var current = self.root;
@@ -216,26 +216,34 @@ pub const RoutingTrie = struct {
                     matched = true;
                     switch (token_type) {
                         .Signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
-                            captures.append(Capture{ .Signed = value }) catch unreachable;
+                            captures[capture_idx] = Capture{ .Signed = value };
                         } else |_| continue,
                         .Unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
-                            captures.append(Capture{ .Unsigned = value }) catch unreachable;
+                            captures[capture_idx] = Capture{ .Unsigned = value };
                         } else |_| continue,
                         .Float => if (std.fmt.parseFloat(f64, chunk)) |value| {
-                            captures.append(Capture{ .Float = value }) catch unreachable;
+                            captures[capture_idx] = Capture{ .Float = value };
                         } else |_| continue,
-                        .String => captures.append(Capture{ .String = chunk }) catch unreachable,
+                        .String => captures[capture_idx] = Capture{ .String = chunk },
                     }
+
                     current = child;
+                    capture_idx += 1;
+
+                    if (capture_idx == captures.len) {
+                        // Should return an error here but for now,
+                        // itll just be a null.
+                        return null;
+                    }
+
                     break;
                 }
             }
         }
 
         if (current.route) |r| {
-            return CapturedRoute{ .route = r, .captures = captures };
+            return CapturedRoute{ .route = r, .captures = captures[0..capture_idx] };
         } else {
-            captures.deinit();
             return null;
         }
     }

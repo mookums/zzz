@@ -40,7 +40,7 @@ pub const Request = struct {
             total_size += @intCast(line.len);
 
             if (total_size > options.request_max_size) {
-                return HTTPError.PayloadTooLarge;
+                return HTTPError.ContentTooLarge;
             }
 
             if (parsing_first_line) {
