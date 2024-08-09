@@ -265,14 +265,15 @@ pub const Server = struct {
                                 const response = blk: {
                                     const captured = router.get_route_from_host(request.host, p.captures);
                                     if (captured) |c| {
-                                        const context: Context = Context.init(
-                                            p.arena.allocator(),
-                                            request.host,
-                                            c.captures,
-                                        );
                                         const handler = c.route.get_handler(request.method);
 
                                         if (handler) |func| {
+                                            const context: Context = Context.init(
+                                                p.arena.allocator(),
+                                                request.host,
+                                                c.captures,
+                                            );
+
                                             break :blk func(request, context);
                                         } else {
                                             // If we match the route but not the method.
