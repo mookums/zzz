@@ -3,7 +3,7 @@ const zzz = @import("zzz");
 const log = std.log.scoped(.@"examples/multithread");
 
 fn hi_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
-    const name = zzz.Extractor(.String).extract_or(context, 2, "Unamed") catch "Unnamed";
+    const name = context.captures[0].String;
 
     const body = std.fmt.allocPrint(context.allocator,
         \\ <!DOCTYPE html>

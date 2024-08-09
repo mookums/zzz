@@ -3,7 +3,7 @@ const zzz = @import("zzz");
 const log = std.log.scoped(.@"examples/count");
 
 fn count_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
-    const count = zzz.Extractor(.Unsigned).extract_or(context, 1, 0) catch 0;
+    const count = context.captures[0].Signed;
 
     const body = std.fmt.allocPrint(context.allocator,
         \\ <!DOCTYPE html>

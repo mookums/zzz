@@ -91,6 +91,18 @@ pub const Token = union(TokenEnum) {
     }
 };
 
+pub const Capture = union(TokenMatch) {
+    Unsigned: TokenMatch.Unsigned.as_type(),
+    Signed: TokenMatch.Signed.as_type(),
+    Float: TokenMatch.Float.as_type(),
+    String: TokenMatch.String.as_type(),
+};
+
+pub const CapturedRoute = struct {
+    route: Route,
+    captures: std.ArrayList(Capture),
+};
+
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
 pub const RoutingTrie = struct {
     pub const Node = struct {
@@ -181,18 +193,9 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
-    // TODO: Redo the get_routes so that we can do matching a little
-    // different.
-    //
-    // We should do <format>:<name> so then we can return a StringHashMap
-    // that we can automatically extract from on the handler. This should
-    // make things easier since we will no longer need to reparse the
-    // path.
-    //
-    // /hi/%s:name where we can get back a ExtractedMap
-    // ExtractedMap.get("name") is equal to the path matched value.
-    pub fn get_route(self: RoutingTrie, path: []const u8) ?Route {
+    pub fn get_route(self: RoutingTrie, path: []const u8) ?CapturedRoute {
         // We need some way of also returning the capture groups here.
+        var captures = std.ArrayList(Capture).init(self.allocator);
         var iter = std.mem.tokenizeScalar(u8, path, '/');
 
         var current = self.root;
@@ -206,43 +209,35 @@ pub const RoutingTrie = struct {
                 continue;
             }
 
-            // Match on Integers.
-            if (std.fmt.parseInt(TokenMatch.Signed.as_type(), chunk, 10)) |_| {
-                const int_fragment = Token{ .Match = .Signed };
-                if (current.children.get(int_fragment)) |child| {
+            var matched = false;
+            for ([_]TokenMatch{ .Signed, .Unsigned, .Float, .String }) |token_type| {
+                const token = Token{ .Match = token_type };
+                if (current.children.get(token)) |child| {
+                    matched = true;
+                    switch (token_type) {
+                        .Signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
+                            captures.append(Capture{ .Signed = value }) catch unreachable;
+                        } else |_| continue,
+                        .Unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
+                            captures.append(Capture{ .Unsigned = value }) catch unreachable;
+                        } else |_| continue,
+                        .Float => if (std.fmt.parseFloat(f64, chunk)) |value| {
+                            captures.append(Capture{ .Float = value }) catch unreachable;
+                        } else |_| continue,
+                        .String => captures.append(Capture{ .String = chunk }) catch unreachable,
+                    }
                     current = child;
-                    continue;
+                    break;
                 }
-            } else |_| {}
-
-            if (std.fmt.parseInt(TokenMatch.Unsigned.as_type(), chunk, 10)) |_| {
-                const uint_fragment = Token{ .Match = .Unsigned };
-                if (current.children.get(uint_fragment)) |child| {
-                    current = child;
-                    continue;
-                }
-            } else |_| {}
-
-            // Match on Float.
-            if (std.fmt.parseFloat(TokenMatch.Float.as_type(), chunk)) |_| {
-                const float_fragment = Token{ .Match = .Float };
-                if (current.children.get(float_fragment)) |child| {
-                    current = child;
-                    continue;
-                }
-            } else |_| {}
-
-            // Match on String as last option.
-            const string_fragment = Token{ .Match = .String };
-            if (current.children.get(string_fragment)) |child| {
-                current = child;
-                continue;
             }
-
-            return null;
         }
 
-        return current.route;
+        if (current.route) |r| {
+            return CapturedRoute{ .route = r, .captures = captures };
+        } else {
+            captures.deinit();
+            return null;
+        }
     }
 };
 
@@ -360,16 +355,32 @@ test "Routing with Paths" {
     try s.add_route("/item/%f/price_float", Route.init());
     try s.add_route("/item/name/%s", Route.init());
     try s.add_route("/item/list", Route.init());
+    try s.add_route("/item/%i/price/%f", Route.init());
 
     try testing.expectEqual(null, s.get_route("/item/name"));
-    try testing.expectEqual(Route.init(), s.get_route("/item/name/HELLO"));
 
-    try testing.expectEqual(null, s.get_route("/settings"));
-    try testing.expectEqual(Route.init(), s.get_route("/item"));
+    {
+        const captured = s.get_route("/item/name/HELLO").?;
+        defer captured.captures.deinit();
 
-    try testing.expectEqual(Route.init(), s.get_route("/item/200/hello"));
-    try testing.expectEqual(null, s.get_route("/item/10.12/hello"));
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures.items[0].String);
+    }
 
-    try testing.expectEqual(Route.init(), s.get_route("/item/99999.1000/price_float"));
-    try testing.expectEqual(null, s.get_route("/item/10/price_float"));
+    {
+        const captured = s.get_route("/item/2112.22121/price_float").?;
+        defer captured.captures.deinit();
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures.items[0].Float);
+    }
+
+    {
+        const captured = s.get_route("/item/100/price/283.21").?;
+        defer captured.captures.deinit();
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(100, captured.captures.items[0].Signed);
+        try testing.expectEqual(283.21, captured.captures.items[1].Float);
+    }
 }
