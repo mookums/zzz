@@ -179,6 +179,7 @@ pub const Server = struct {
             fn deinit_hook(provisions: []Provision, ctx: anytype) void {
                 for (provisions) |*provision| {
                     ctx.allocator.free(provision.buffer);
+                    ctx.allocator.free(provision.captures);
                     provision.request.deinit();
                     provision.arena.deinit();
                 }
@@ -370,12 +371,12 @@ pub const Server = struct {
 
                 const thread_count = blk: {
                     switch (count) {
-                        .auto => break :blk @max(try std.Thread.getCpuCount() / 2, 2),
+                        .auto => break :blk @max(try std.Thread.getCpuCount() / 2 - 1, 1),
                         .count => |inner| break :blk inner,
                     }
                 };
 
-                log.info("spawning {d} threads", .{thread_count});
+                log.info("spawning {d} thread[s] + 1 root thread", .{thread_count});
 
                 for (0..thread_count) |i| {
                     try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
