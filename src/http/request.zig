@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const KVPair = @import("lib.zig").KVPair;
+const HTTPError = @import("lib.zig").HTTPError;
 const Method = std.http.Method;
 
 const RequestOptions = struct {
@@ -28,7 +29,7 @@ pub const Request = struct {
         };
     }
 
-    pub fn parse(options: RequestOptions, bytes: []const u8) !Request {
+    pub fn parse(options: RequestOptions, bytes: []const u8) HTTPError!Request {
         var request = Request.init(options);
 
         var total_size: u32 = 0;
@@ -39,7 +40,7 @@ pub const Request = struct {
             total_size += @intCast(line.len);
 
             if (total_size > options.request_max_size) {
-                return error.RequestTooLarge;
+                return HTTPError.PayloadTooLarge;
             }
 
             if (parsing_first_line) {
@@ -71,16 +72,12 @@ pub const Request = struct {
         self.version = version;
     }
 
-    pub fn add_header(self: *Request, kv: KVPair) !void {
-        // Ensure that these are proper headers.
-        //assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
-        //assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
-
+    pub fn add_header(self: *Request, kv: KVPair) HTTPError!void {
         if (self.headers_idx < self.headers.len) {
             self.headers[self.headers_idx] = kv;
             self.headers_idx += 1;
         } else {
-            return error.TooManyHeaders;
+            return HTTPError.TooManyHeaders;
         }
     }
 

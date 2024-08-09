@@ -1,10 +1,12 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const panic = std.debug.panic;
 const log = std.log.scoped(.@"zzz/server");
 
 const Job = @import("core").Job;
 
 const Pool = @import("pool.zig").Pool;
+const HTTPError = @import("lib.zig").HTTPError;
 
 const Provision = @import("provision.zig").Provision;
 const Router = @import("router.zig").Router;
@@ -57,12 +59,10 @@ pub const ServerConfig = struct {
     /// Maximum size (in bytes) of the Request.
     /// Default: 2MB.
     size_request_max: u32 = 1024 * 1024 * 2,
-    /// Size of the Read Buffer for reading out of the Socket.
-    /// Default: 512 B.
-    size_read_buffer: u32 = 512,
-    /// Size of the Read Buffer for writing into the Socket.
-    /// Default: 512 B.
-    size_write_buffer: u32 = 512,
+    /// Size of the Buffer used for reading and writing
+    /// into the Socket.
+    /// Default: 4 KB.
+    size_socket_buffer: u32 = 1024 * 4,
     /// Maximum number of headers per Response.
     response_headers_max: u8 = 8,
 };
@@ -149,16 +149,28 @@ pub const Server = struct {
                 for (provisions) |*provision| {
                     provision.socket = undefined;
                     // Create Buffer
-                    provision.buffer = ctx.allocator.alloc(u8, ctx.size_read_buffer) catch unreachable;
+                    provision.buffer = ctx.allocator.alloc(u8, ctx.size_socket_buffer) catch {
+                        panic("attemping to statically allocate more memory than available.", .{});
+                    };
                     // Create Request ArrayList
-                    provision.request = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_read_buffer) catch unreachable;
+                    provision.request = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
+                        panic("attemping to statically allocate more memory than available.", .{});
+                    };
                     // Create the Context Arena
                     provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
                 }
             }
         }.init_hook, config);
 
-        // we need to deinit the provision pool here.
+        defer provision_pool.deinit(struct {
+            fn deinit_hook(provisions: []Provision, ctx: anytype) void {
+                for (provisions) |*provision| {
+                    ctx.allocator.free(provision.buffer);
+                    provision.request.deinit();
+                    provision.arena.deinit();
+                }
+            }
+        }.deinit_hook, config);
 
         // Create and send the first Job.
         const first_provision = Provision{
@@ -184,6 +196,7 @@ pub const Server = struct {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
+                        // Borrow a provision from the pool otherwise close the socket.
                         const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
                             std.posix.close(socket);
                             continue;
@@ -204,11 +217,35 @@ pub const Server = struct {
 
                         if (read_count > 0) {
                             try p.request.appendSlice(p.buffer[0..@as(usize, @intCast(read_count))]);
-                            if (std.mem.endsWith(u8, p.request.items, "\r\n\r\n")) {
+                            const header_end = std.mem.endsWith(u8, p.request.items, "\r\n\r\n");
+                            const too_long = p.request.items.len >= config.size_request_max;
+                            if (header_end or too_long) {
                                 //// This is the end of the headers.
-                                const request = try Request.parse(.{
+                                const request = Request.parse(.{
                                     .request_max_size = config.size_request_max,
-                                }, p.request.items);
+                                }, p.request.items) catch |e| {
+                                    const failed_response: Response = switch (e) {
+                                        // Too Many Headers in the Request.
+                                        HTTPError.TooManyHeaders => Response.init(
+                                            .@"Request Headers Fields Too Large",
+                                            Mime.HTML,
+                                            "Too Many Headers",
+                                        ),
+                                        // Body of the request is too long.
+                                        HTTPError.PayloadTooLarge => Response.init(
+                                            .@"Payload Too Large",
+                                            Mime.HTML,
+                                            "Request is too long",
+                                        ),
+                                    };
+
+                                    p.request.items.len = 0;
+                                    const response_buffer = try failed_response.respond_into_buffer(p.buffer);
+
+                                    p.job = .Write;
+                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    continue;
+                                };
 
                                 // Clear and free it out, allowing us to handle future requests.
                                 p.request.items.len = 0;
@@ -220,21 +257,37 @@ pub const Server = struct {
                                         const handler = r.get_handler(request.method);
 
                                         if (handler) |func| {
-                                            const resp = func(request, context);
-                                            break :blk try resp.respond_into_buffer(p.buffer);
+                                            break :blk func(request, context);
                                         } else {
-                                            const resp = Response.init(.@"Method Not Allowed", Mime.HTML, "");
-                                            break :blk try resp.respond_into_buffer(p.buffer);
+                                            // If we match the route but not the method.
+                                            break :blk Response.init(
+                                                .@"Method Not Allowed",
+                                                Mime.HTML,
+                                                "405 Method Not Allowed",
+                                            );
                                         }
                                     }
 
-                                    // Default Response.
-                                    var resp = Response.init(.@"Not Found", Mime.HTML, "");
-                                    break :blk try resp.respond_into_buffer(p.buffer);
+                                    // Didn't match any route.
+                                    break :blk Response.init(
+                                        .@"Not Found",
+                                        Mime.HTML,
+                                        "404 Not Found",
+                                    );
+                                };
+
+                                const response_buffer = response.respond_into_buffer(p.buffer) catch blk: {
+                                    const failed_response = Response.init(
+                                        .@"Internal Server Error",
+                                        Mime.HTML,
+                                        "The response being returned is too large.",
+                                    );
+
+                                    break :blk failed_response.respond_into_buffer(p.buffer) catch unreachable;
                                 };
 
                                 p.job = .Write;
-                                _ = try uring.send(cqe.user_data, p.socket, response, 0);
+                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
                             } else {
                                 _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                             }
@@ -245,6 +298,7 @@ pub const Server = struct {
                     },
 
                     .Write => {
+                        // TODO: ensure this can properly send partial writes.
                         const write_count = cqe.res;
                         _ = write_count;
                         p.job = .Read;
@@ -284,10 +338,15 @@ pub const Server = struct {
             self.config.size_connections_max,
             base_flags,
         );
+
         const fd = uring.fd;
+        assert(fd >= 0);
 
         switch (self.config.threading) {
-            .single_threaded => try run(self.config, self.router, server_socket, &uring),
+            .single_threaded => run(self.config, self.router, server_socket, &uring) catch {
+                log.err("failed due to unrecoverable error!", .{});
+                return;
+            },
             .multi_threaded => |count| {
                 const allocator = self.config.allocator;
                 var threads = std.ArrayList(std.Thread).init(allocator);
@@ -318,7 +377,13 @@ pub const Server = struct {
                                 .flags = flags,
                             });
 
-                            var thread_uring = std.os.linux.IoUring.init_params(config.size_connections_max, &params) catch unreachable;
+                            var thread_uring = std.os.linux.IoUring.init_params(
+                                config.size_connections_max,
+                                &params,
+                            ) catch {
+                                log.err("thread #{d} unable to start! (uring initalization)", .{thread_id});
+                                return;
+                            };
 
                             run(config, router, s_socket, &thread_uring) catch {
                                 log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
@@ -327,7 +392,13 @@ pub const Server = struct {
                     }.handler_fn, .{ self.config, self.router, server_socket, fd, i }));
                 }
 
-                try run(self.config, self.router, server_socket, &uring);
+                run(self.config, self.router, server_socket, &uring) catch {
+                    log.err("root thread failed due to unrecoverable error!", .{});
+                };
+
+                for (threads.items) |thread| {
+                    thread.join();
+                }
             },
         }
     }
