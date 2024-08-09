@@ -353,7 +353,7 @@ pub const Server = struct {
 
                 const thread_count = blk: {
                     switch (count) {
-                        .auto => break :blk try std.Thread.getCpuCount(),
+                        .auto => break :blk @max(try std.Thread.getCpuCount() / 2, 2),
                         .count => |inner| break :blk inner,
                     }
                 };
