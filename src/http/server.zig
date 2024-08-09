@@ -299,6 +299,8 @@ pub const Server = struct {
                     }
                 };
 
+                log.info("spawning {d} threads", .{thread_count});
+
                 for (0..thread_count) |i| {
                     try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
                         fn handler_fn(
