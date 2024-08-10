@@ -57,7 +57,7 @@ pub const Response = struct {
 
         // Standard Headers.
         try writer.writeAll("Server: zzz (z3)\r\n");
-        //try writer.writeAll("Connection: close\r\n");
+        try writer.writeAll("Connection: keep-alive\r\n");
 
         // Headers
         for (0..self.headers_idx) |i| {

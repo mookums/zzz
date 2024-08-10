@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 
 const KVPair = @import("lib.zig").KVPair;
 const HTTPError = @import("lib.zig").HTTPError;
-const Method = std.http.Method;
+const Method = @import("lib.zig").Method;
 
 const RequestOptions = struct {
     request_max_size: u32 = 4096,
@@ -45,13 +45,24 @@ pub const Request = struct {
 
             if (parsing_first_line) {
                 var space_iter = std.mem.tokenizeScalar(u8, line, ' ');
-                request.add_method(@enumFromInt(std.http.Method.parse(space_iter.next().?)));
-                request.add_host(space_iter.next().?);
+
+                const method_string = space_iter.next() orelse return HTTPError.MalformedRequest;
+                const method = Method.parse(method_string) catch {
+                    return HTTPError.MalformedRequest;
+                };
+                request.add_method(method);
+
+                const host_string = space_iter.next() orelse return HTTPError.MalformedRequest;
+                request.add_host(host_string);
+
+                const version_string = space_iter.next() orelse return HTTPError.MalformedRequest;
+                _ = version_string;
                 request.add_version(.@"HTTP/1.1");
+
                 parsing_first_line = false;
             } else {
                 var header_iter = std.mem.tokenizeScalar(u8, line, ':');
-                const key = header_iter.next().?;
+                const key = header_iter.next() orelse return HTTPError.MalformedRequest;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
                 try request.add_header(.{ .key = key, .value = value });
             }

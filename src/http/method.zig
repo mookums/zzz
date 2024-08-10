@@ -1,0 +1,57 @@
+const std = @import("std");
+const log = std.log.scoped(.@"zzz/method");
+
+pub const Method = enum {
+    GET,
+    HEAD,
+    POST,
+    PUT,
+    DELETE,
+    CONNECT,
+    OPTIONS,
+    TRACE,
+    PATCH,
+
+    fn encode(method: []const u8) u64 {
+        var buffer = [1]u8{0} ** @sizeOf(u64);
+        for (0..method.len) |i| {
+            buffer[i] = std.ascii.toUpper(method[i]);
+        }
+
+        return std.mem.readPackedIntNative(u64, buffer[0..], 0);
+    }
+
+    pub fn parse(method: []const u8) !Method {
+        if (method.len > (comptime @sizeOf(u64)) or method.len == 0) {
+            log.debug("unable to encode method: {s}", .{method});
+            return error.CannotEncode;
+        }
+
+        const encoded = encode(method);
+
+        return switch (encoded) {
+            encode("GET") => Method.GET,
+            encode("HEAD") => Method.HEAD,
+            encode("POST") => Method.POST,
+            encode("PUT") => Method.PUT,
+            encode("DELETE") => Method.DELETE,
+            encode("CONNECT") => Method.CONNECT,
+            encode("OPTIONS") => Method.OPTIONS,
+            encode("TRACE") => Method.TRACE,
+            encode("PATCH") => Method.PATCH,
+            else => {
+                log.debug("unable to match method: {s} | {d}", .{ method, encoded });
+                return error.CannotParse;
+            },
+        };
+    }
+};
+
+const testing = std.testing;
+
+test "Parsing Strings" {
+    for (std.meta.tags(Method)) |method| {
+        const method_string = @tagName(method);
+        try testing.expectEqual(method, Method.parse(method_string));
+    }
+}
