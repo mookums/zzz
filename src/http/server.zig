@@ -238,17 +238,20 @@ pub const Server = struct {
                                     .request_max_size = config.size_request_max,
                                 }, p.request.items) catch |e| {
                                     const failed_response: Response = switch (e) {
-                                        // Too Many Headers in the Request.
                                         HTTPError.TooManyHeaders => Response.init(
                                             .@"Request Headers Fields Too Large",
                                             Mime.HTML,
                                             "Too Many Headers",
                                         ),
-                                        // Body of the request is too long.
                                         HTTPError.ContentTooLarge => Response.init(
                                             .@"Content Too Large",
                                             Mime.HTML,
                                             "Request is too long",
+                                        ),
+                                        HTTPError.MalformedRequest => Response.init(
+                                            .@"Bad Request",
+                                            Mime.HTML,
+                                            "Malformed Request",
                                         ),
                                     };
 
