@@ -1,14 +1,17 @@
 const std = @import("std");
+const log = std.log.scoped(.route);
 const Method = std.http.Method;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 
 const Context = @import("context.zig").Context;
 
-pub const Route = struct {
-    handlers: [9]?*const fn (request: Request, context: Context) Response = [_]?*const fn (request: Request, context: Context) Response{null} ** 9,
+const RouteHandlerFn = *const fn (request: Request, context: Context) Response;
 
-    fn method_to_index(method: Method) u32 {
+pub const Route = struct {
+    handlers: [9]?RouteHandlerFn = [_]?RouteHandlerFn{null} ** 9,
+
+    fn method_to_index(method: Method) !u32 {
         return switch (method) {
             .GET => 0,
             .HEAD => 1,
@@ -19,45 +22,49 @@ pub const Route = struct {
             .OPTIONS => 6,
             .TRACE => 7,
             .PATCH => 8,
-            else => unreachable,
+            else => {
+                log.debug("unsupported HTTP method: {any}", .{method});
+                return error.InvalidMethod;
+            },
         };
     }
 
     pub fn init() Route {
-        return Route{ .handlers = [_]?*const fn (request: Request, context: Context) Response{null} ** 9 };
+        return Route{ .handlers = [_]?RouteHandlerFn{null} ** 9 };
     }
 
-    pub fn get_handler(self: Route, method: Method) ?*const fn (request: Request, context: Context) Response {
-        return self.handlers[method_to_index(method)];
+    pub fn get_handler(self: Route, method: Method) ?RouteHandlerFn {
+        const index = method_to_index(method) catch return null;
+        return self.handlers[index];
     }
 
-    pub fn get(self: Route, handler_fn: *const fn (request: Request, context: Context) Response) Route {
+    pub fn get(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(.GET)] = handler_fn;
+        new_handlers[comptime try method_to_index(.GET)] = handler_fn;
         return Route{ .handlers = new_handlers };
     }
 
-    pub fn post(self: Route, handler_fn: *const fn (request: Request, context: Context) Response) Route {
+    pub fn post(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(.POST)] = handler_fn;
+        new_handlers[comptime try method_to_index(.POST)] = handler_fn;
         return Route{ .handlers = self.handlers };
     }
 
-    pub fn put(self: Route, handler_fn: *const fn (request: Request, context: Context) Response) Route {
+    pub fn put(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(.PUT)] = handler_fn;
+        new_handlers[comptime try method_to_index(.PUT)] = handler_fn;
         return Route{ .handlers = self.handlers };
     }
 
-    pub fn delete(self: Route, handler_fn: *const fn (request: Request, context: Context) Response) Route {
+    pub fn delete(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(.DELETE)] = handler_fn;
+        new_handlers[comptime try method_to_index(.DELETE)] = handler_fn;
         return Route{ .handlers = self.handlers };
     }
 
-    pub fn patch(self: Route, handler_fn: *const fn (request: Request, context: Context) Response) Route {
+    pub fn patch(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(.PATCH)] = handler_fn;
+        new_handlers[comptime try method_to_index(.PATCH)] = handler_fn;
         return Route{ .handlers = self.handlers };
     }
 };
