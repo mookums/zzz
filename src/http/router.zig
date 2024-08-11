@@ -42,8 +42,37 @@ pub const Router = struct {
     ) !void {
         assert(!self.locked);
         const route = Route.init().get(struct {
-            pub fn handler_fn(_: Request, _: Context) Response {
-                return Response.init(.OK, mime, bytes);
+            pub fn handler_fn(request: Request, _: Context) Response {
+                // Currently commented out as it causes a general slowdown.
+
+                _ = request;
+                //const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Crc32.hash(bytes)});
+
+                const response = Response.init(.OK, mime, bytes);
+
+                // If our static item is greater than 1KB,
+                // it might be more beneficial to using caching.
+                //if (bytes.len > 1024) {
+                //    // Search for If-None-Match
+                //    for (request.headers[0..request.headers_idx]) |header| {
+                //        if (std.mem.eql(u8, header.key, "If-None-Match")) {
+                //            if (std.mem.eql(u8, etag, header.value)) {
+                //                response.status = .@"Not Modified";
+                //                response.body = "";
+                //            }
+                //        }
+                //    }
+
+                //    response.add_header(.{
+                //        .key = "ETag",
+                //        .value = etag[0..],
+                //    }) catch {
+                //        response.status = .@"Internal Server Error";
+                //        response.body = "Failed at serving embedded file";
+                //    };
+                //}
+
+                return response;
             }
         }.handler_fn);
 
