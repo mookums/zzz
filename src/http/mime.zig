@@ -69,6 +69,12 @@ pub const Mime = struct {
         .description = "JSON Format",
     };
 
+    pub const PDF = Mime{
+        .content_type = "application/pdf",
+        .extension = ".pdf",
+        .description = "Adobe Portable Document Format",
+    };
+
     /// This turn an extension into a unsigned 64 bit number
     /// to be used as a key for quickly matching extensions
     /// with their MIME type.
@@ -127,6 +133,7 @@ pub const Mime = struct {
             extension_to_key(Mime.ICO.extension) => Mime.ICO,
             extension_to_key(Mime.JS.extension) => Mime.JS,
             extension_to_key(Mime.JSON.extension) => Mime.JSON,
+            extension_to_key(Mime.PDF.extension) => Mime.PDF,
 
             // If it is not a supported MIME type, send it as an octet-stream.
             // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
@@ -150,6 +157,7 @@ pub const Mime = struct {
             content_type_to_key(Mime.ICO.content_type) => Mime.ICO,
             content_type_to_key(Mime.JS.content_type) => Mime.JS,
             content_type_to_key(Mime.JSON.content_type) => Mime.JSON,
+            content_type_to_key(Mime.PDF.content_type) => Mime.PDF,
 
             // If it is not a supported MIME type, we use the bin extension.
             else => Mime{
@@ -174,6 +182,7 @@ const all_mimes = [_]Mime{
     Mime.ICO,
     Mime.JS,
     Mime.JSON,
+    Mime.PDF,
 };
 
 test "MIME from extensions" {
