@@ -22,7 +22,13 @@ fn hi_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
         \\ <input type="button" id="btn" value="Submit" onClick="redirectToHi()"/>
         \\ </body>
         \\ </html>
-    , .{name}) catch "";
+    , .{name}) catch {
+        return zzz.Response.init(
+            .@"Internal Server Error",
+            zzz.Mime.HTML,
+            "Out of Memory!",
+        );
+    };
 
     return zzz.Response.init(.OK, zzz.Mime.HTML, body);
 }
@@ -33,7 +39,13 @@ fn redir_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
     response.add_header(.{
         .key = "Location",
         .value = "http://localhost:9862/hi/redirect",
-    }) catch unreachable;
+    }) catch {
+        return zzz.Response.init(
+            .@"Internal Server Error",
+            zzz.Mime.HTML,
+            "Redirect Handler Failed",
+        );
+    };
     return response;
 }
 

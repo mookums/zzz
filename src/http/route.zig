@@ -6,10 +6,10 @@ const Response = @import("response.zig").Response;
 
 const Context = @import("context.zig").Context;
 
-const RouteHandlerFn = *const fn (request: Request, context: Context) Response;
+const RouteHandlerFn = ?*const fn (request: Request, context: Context) Response;
 
 pub const Route = struct {
-    handlers: [9]?RouteHandlerFn = [_]?RouteHandlerFn{null} ** 9,
+    handlers: [9]RouteHandlerFn = [_]RouteHandlerFn{null} ** 9,
 
     fn method_to_index(method: Method) u32 {
         return switch (method) {
@@ -26,10 +26,10 @@ pub const Route = struct {
     }
 
     pub fn init() Route {
-        return Route{ .handlers = [_]?RouteHandlerFn{null} ** 9 };
+        return Route{ .handlers = [_]RouteHandlerFn{null} ** 9 };
     }
 
-    pub fn get_handler(self: Route, method: Method) ?RouteHandlerFn {
+    pub fn get_handler(self: Route, method: Method) RouteHandlerFn {
         return self.handlers[method_to_index(method)];
     }
 
