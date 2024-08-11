@@ -23,7 +23,6 @@ pub const Response = struct {
     pub fn add_header(self: *Response, kv: KVPair) !void {
         // Ensure that we don't have the colon since we add it back later.
         assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
-        assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
 
         if (self.headers_idx < self.headers.len) {
             self.headers[self.headers_idx] = kv;
