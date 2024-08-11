@@ -3,9 +3,9 @@ const assert = std.debug.assert;
 const panic = std.debug.panic;
 const log = std.log.scoped(.@"zzz/server");
 
-const Job = @import("core").Job;
+const Job = @import("../core/lib.zig").Job;
+const Pool = @import("../core/lib.zig").Pool;
 
-const Pool = @import("pool.zig").Pool;
 const HTTPError = @import("lib.zig").HTTPError;
 
 const Capture = @import("routing_trie.zig").Capture;
