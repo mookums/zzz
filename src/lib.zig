@@ -1,9 +1,7 @@
 const std = @import("std");
 const http = @import("http/lib.zig");
 
-pub const Core = @import("core");
 pub const Server = @import("http/server.zig").Server;
-
 pub const Status = http.Router;
 pub const Method = http.Method;
 pub const Mime = http.Mime;

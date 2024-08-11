@@ -1,5 +1,5 @@
 const std = @import("std");
-const Job = @import("core").Job;
+const Job = @import("../core/lib.zig").Job;
 const Capture = @import("routing_trie.zig").Capture;
 
 // Every connection will be assigned a provision,

@@ -4,19 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const core = b.createModule(.{
-        .root_source_file = b.path("src/core/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const zzz = b.addModule("zzz", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    zzz.addImport("core", core);
 
     addExample(b, "basic", false, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
