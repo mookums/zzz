@@ -38,7 +38,7 @@ fn redir_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
     var response = zzz.Response.init(.@"Permanent Redirect", zzz.Mime.HTML, "");
     response.add_header(.{
         .key = "Location",
-        .value = "http://localhost:9862/hi/redirect",
+        .value = "/hi/redirect",
     }) catch {
         return zzz.Response.init(
             .@"Internal Server Error",
