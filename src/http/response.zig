@@ -22,8 +22,8 @@ pub const Response = struct {
 
     pub fn add_header(self: *Response, kv: KVPair) !void {
         // Ensure that we don't have the colon since we add it back later.
-        //assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
-        //assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
+        assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
+        assert(std.mem.indexOfScalar(u8, kv.value, ':') == null);
 
         if (self.headers_idx < self.headers.len) {
             self.headers[self.headers_idx] = kv;
@@ -35,19 +35,19 @@ pub const Response = struct {
 
     pub fn respond_into_buffer(self: Response, buffer: []u8) ![]u8 {
         var stream = std.io.fixedBufferStream(buffer);
-        try self.respond(stream.writer(), self.body, self.mime);
+        try self.respond(stream.writer());
         return stream.getWritten();
     }
 
     pub fn respond_into_alloc(self: Response, allocator: std.mem.Allocator, max_size: u32) ![]u8 {
         var stream = std.io.fixedBufferStream(try allocator.alloc(u8, max_size));
-        try self.respond(stream.writer(), self.body, self.mime);
+        try self.respond(stream.writer());
         return stream.getWritten();
     }
 
     /// Writes this response to the given Writer. This is assumed to be a BufferedWriter
     /// for the TCP stream.
-    pub fn respond(self: Response, writer: anytype, body: ?[]const u8, mime: ?Mime) !void {
+    pub fn respond(self: Response, writer: anytype) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
         try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
@@ -69,7 +69,7 @@ pub const Response = struct {
         }
 
         // If we have an associated MIME type.
-        if (mime) |m| {
+        if (self.mime) |m| {
             try writer.writeAll("Content-Type: ");
             try writer.writeAll(m.content_type);
             try writer.writeAll("\r\n");
@@ -80,13 +80,13 @@ pub const Response = struct {
             try writer.writeAll("\r\n");
         }
 
+        try writer.writeAll("Content-Length: ");
+        try std.fmt.formatInt(self.body.len, 10, .lower, .{}, writer);
+        try writer.writeAll("\r\n");
+
+        try writer.writeAll("\r\n");
+
         // If we are sending a body.
-        if (body) |b| {
-            try writer.writeAll("Content-Length: ");
-            try std.fmt.formatInt(b.len, 10, .lower, .{}, writer);
-            try writer.writeAll("\r\n");
-            try writer.writeAll("\r\n");
-            try writer.writeAll(b);
-        }
+        try writer.writeAll(self.body);
     }
 };
