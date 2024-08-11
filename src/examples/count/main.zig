@@ -15,7 +15,13 @@ fn count_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
         \\ <a href="/count/{d}">click here to increment!</a>
         \\ </body>
         \\ </html>
-    , .{ count, count + 1 }) catch "";
+    , .{ count, count + 1 }) catch {
+        return zzz.Response.init(
+            .@"Internal Server Error",
+            zzz.Mime.HTML,
+            "Out of Memory",
+        );
+    };
 
     return zzz.Response.init(.OK, zzz.Mime.HTML, body);
 }
