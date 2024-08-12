@@ -116,6 +116,14 @@ pub const Server = struct {
             );
         };
 
+        // Disable Nagle's.
+        try std.posix.setsockopt(
+            socket,
+            std.posix.IPPROTO.TCP,
+            std.posix.TCP.NODELAY,
+            &std.mem.toBytes(@as(c_int, 1)),
+        );
+
         if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
             try std.posix.setsockopt(
                 socket,
