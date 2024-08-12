@@ -432,7 +432,13 @@ pub const Server = struct {
                     .Write => {
                         // TODO: ensure this can properly send partial writes.
                         const write_count = cqe.res;
-                        _ = write_count;
+
+                        if (write_count <= 0) {
+                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            provision_pool.release(p.index);
+                            continue;
+                        }
+
                         p.request_buffer.clearRetainingCapacity();
                         p.job = .{ .Read = .Header };
                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
