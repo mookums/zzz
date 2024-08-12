@@ -116,14 +116,6 @@ pub const Server = struct {
             );
         };
 
-        // Disable Nagle's.
-        try std.posix.setsockopt(
-            socket,
-            std.posix.IPPROTO.TCP,
-            std.posix.TCP.NODELAY,
-            &std.mem.toBytes(@as(c_int, 1)),
-        );
-
         if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
             try std.posix.setsockopt(
                 socket,
@@ -184,6 +176,10 @@ pub const Server = struct {
             );
         };
 
+        if (p.response.status == .Kill) {
+            return error.Kill;
+        }
+
         const response_buffer = p.response.response_into_buffer(p.buffer) catch blk: {
             p.response = Response.init(
                 .@"Internal Server Error",
@@ -196,7 +192,7 @@ pub const Server = struct {
 
         p.header_end = response_buffer.len;
         p.job = .Write;
-        _ = try uring.send(@as(u64, @intFromPtr(p)), p.socket, response_buffer, 0);
+        _ = uring.send(@as(u64, @intFromPtr(p)), p.socket, response_buffer, 0) catch unreachable;
     }
 
     /// This function assumes that the socket is set up and
@@ -274,6 +270,14 @@ pub const Server = struct {
                     .Accept => {
                         const socket: std.posix.socket_t = cqe.res;
 
+                        // Disable Nagle's.
+                        try std.posix.setsockopt(
+                            socket,
+                            std.posix.IPPROTO.TCP,
+                            std.posix.TCP.NODELAY,
+                            &std.mem.toBytes(@as(c_int, 1)),
+                        );
+
                         // Borrow a provision from the pool otherwise close the socket.
                         const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
                             std.posix.close(socket);
@@ -295,6 +299,7 @@ pub const Server = struct {
                         // If the socket is closed.
                         if (read_count <= 0) {
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
                             continue;
                         }
@@ -337,7 +342,7 @@ pub const Server = struct {
                                 };
 
                                 if (!p.request.expect_body()) {
-                                    try respond(p, uring, router, config);
+                                    respond(p, uring, router, config) catch return;
                                     continue;
                                 }
 
@@ -366,7 +371,7 @@ pub const Server = struct {
                                         // Whole Body
                                         log.debug("Got whole body with header", .{});
                                         p.request.set_body(p.request_buffer.items[p.header_end .. p.header_end + difference]);
-                                        try respond(p, uring, router, config);
+                                        respond(p, uring, router, config) catch return;
                                         continue;
                                     } else {
                                         // Partial Body
@@ -380,7 +385,7 @@ pub const Server = struct {
                                     if (content_length == 0) {
                                         // Body of Length 0.
                                         p.request.set_body("");
-                                        try respond(p, uring, router, config);
+                                        respond(p, uring, router, config) catch return;
                                         continue;
                                     } else {
                                         // Got only header.
@@ -429,7 +434,7 @@ pub const Server = struct {
 
                                 if (p.count >= content_length) {
                                     p.request.set_body(p.request_buffer.items[p.header_end..(p.header_end + content_length)]);
-                                    try respond(p, uring, router, config);
+                                    respond(p, uring, router, config) catch return;
                                 } else {
                                     _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                                 }
@@ -438,16 +443,21 @@ pub const Server = struct {
                     },
 
                     .Write => {
-                        // TODO: ensure this can properly send partial writes.
+                        // When we are sending the write, we need to think of a couple of conditions.
+                        // We basically want to coalese the header and body into a pseudo-buffer.
+                        // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
                         const write_count = cqe.res;
 
                         if (write_count <= 0) {
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
                             continue;
                         }
 
+                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 256));
                         p.request_buffer.clearRetainingCapacity();
+
                         p.job = .{ .Read = .Header };
                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                     },

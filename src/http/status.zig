@@ -59,4 +59,7 @@ pub const Status = enum(u16) {
     @"Loop Detected" = 508,
     @"Not Extended" = 510,
     @"Network Authentication Required" = 511,
+    // Interally used, will cause the thread that accepts it
+    // to gracefully shutdown.
+    Kill = 999,
 };

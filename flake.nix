@@ -29,6 +29,7 @@
                 zls
                 # Debugging
                 gdb
+                valgrind
                 # Benchmarking
                 linuxPackages_latest.perf
                 wrk
