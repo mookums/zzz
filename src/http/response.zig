@@ -9,7 +9,7 @@ pub const Response = struct {
     status: Status,
     mime: ?Mime = null,
     body: []const u8 = undefined,
-    headers: [32]KVPair = [_]KVPair{undefined} ** 32,
+    header_pairs: [32]KVPair = [_]KVPair{undefined} ** 32,
     headers_idx: u32 = 0,
 
     pub fn init(status: Status, mime: ?Mime, body: []const u8) Response {
@@ -24,29 +24,29 @@ pub const Response = struct {
         // Ensure that we don't have the colon since we add it back later.
         assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
 
-        if (self.headers_idx < self.headers.len) {
-            self.headers[self.headers_idx] = kv;
+        if (self.headers_idx < self.header_pairs.len) {
+            self.header_pairs[self.headers_idx] = kv;
             self.headers_idx += 1;
         } else {
             return error.TooManyHeaders;
         }
     }
 
-    pub fn respond_into_buffer(self: Response, buffer: []u8) ![]u8 {
+    pub fn response_into_buffer(self: Response, buffer: []u8) ![]u8 {
         var stream = std.io.fixedBufferStream(buffer);
-        try self.respond(stream.writer());
+        const writer = stream.writer();
+        try self.write_headers(writer);
+        try writer.writeAll(self.body);
         return stream.getWritten();
     }
 
-    pub fn respond_into_alloc(self: Response, allocator: std.mem.Allocator, max_size: u32) ![]u8 {
-        var stream = std.io.fixedBufferStream(try allocator.alloc(u8, max_size));
-        try self.respond(stream.writer());
+    pub fn headers_into_buffer(self: Response, buffer: []u8) ![]u8 {
+        var stream = std.io.fixedBufferStream(buffer);
+        try self.write_headers(stream.writer());
         return stream.getWritten();
     }
 
-    /// Writes this response to the given Writer. This is assumed to be a BufferedWriter
-    /// for the TCP stream.
-    pub fn respond(self: Response, writer: anytype) !void {
+    fn write_headers(self: Response, writer: anytype) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
         try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
@@ -60,7 +60,7 @@ pub const Response = struct {
 
         // Headers
         for (0..self.headers_idx) |i| {
-            const h = self.headers[i];
+            const h = self.header_pairs[i];
             try writer.writeAll(h.key);
             try writer.writeAll(": ");
             try writer.writeAll(h.value);
@@ -82,10 +82,6 @@ pub const Response = struct {
         try writer.writeAll("Content-Length: ");
         try std.fmt.formatInt(self.body.len, 10, .lower, .{}, writer);
         try writer.writeAll("\r\n");
-
         try writer.writeAll("\r\n");
-
-        // If we are sending a body.
-        try writer.writeAll(self.body);
     }
 };

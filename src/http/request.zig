@@ -29,9 +29,8 @@ pub const Request = struct {
         };
     }
 
-    pub fn parse(options: RequestOptions, bytes: []const u8) HTTPError!Request {
-        var request = Request.init(options);
-
+    pub fn parse_headers(self: *Request, bytes: []const u8) HTTPError!void {
+        self.clear_headers();
         var total_size: u32 = 0;
         var line_iter = std.mem.tokenizeAny(u8, bytes, "\r\n");
 
@@ -39,7 +38,7 @@ pub const Request = struct {
         while (line_iter.next()) |line| {
             total_size += @intCast(line.len);
 
-            if (total_size > options.request_max_size) {
+            if (total_size > self.options.request_max_size) {
                 return HTTPError.ContentTooLarge;
             }
 
@@ -50,40 +49,38 @@ pub const Request = struct {
                 const method = Method.parse(method_string) catch {
                     return HTTPError.MalformedRequest;
                 };
-                request.add_method(method);
+                self.set_method(method);
 
                 const host_string = space_iter.next() orelse return HTTPError.MalformedRequest;
-                request.add_host(host_string);
+                self.set_host(host_string);
 
                 const version_string = space_iter.next() orelse return HTTPError.MalformedRequest;
                 _ = version_string;
-                request.add_version(.@"HTTP/1.1");
+                self.set_version(.@"HTTP/1.1");
 
                 parsing_first_line = false;
             } else {
                 var header_iter = std.mem.tokenizeScalar(u8, line, ':');
                 const key = header_iter.next() orelse return HTTPError.MalformedRequest;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
-                try request.add_header(.{ .key = key, .value = value });
+                try self.set_header(.{ .key = key, .value = value });
             }
         }
-
-        return request;
     }
 
-    pub fn add_method(self: *Request, method: Method) void {
+    pub fn set_method(self: *Request, method: Method) void {
         self.method = method;
     }
 
-    pub fn add_host(self: *Request, host: []const u8) void {
+    pub fn set_host(self: *Request, host: []const u8) void {
         self.host = host;
     }
 
-    pub fn add_version(self: *Request, version: std.http.Version) void {
+    pub fn set_version(self: *Request, version: std.http.Version) void {
         self.version = version;
     }
 
-    pub fn add_header(self: *Request, kv: KVPair) HTTPError!void {
+    pub fn set_header(self: *Request, kv: KVPair) HTTPError!void {
         if (self.headers_idx < self.headers.len) {
             self.headers[self.headers_idx] = kv;
             self.headers_idx += 1;
@@ -92,8 +89,20 @@ pub const Request = struct {
         }
     }
 
-    pub fn add_body(self: *Request, body: []const u8) void {
+    pub fn clear_headers(self: *Request) void {
+        self.headers_idx = 0;
+    }
+
+    pub fn set_body(self: *Request, body: []const u8) void {
         self.body = body;
+    }
+
+    /// Should this specific Request expect to capture a body.
+    pub fn expect_body(self: Request) bool {
+        return switch (self.method) {
+            .POST, .PUT, .PATCH => true,
+            .GET, .HEAD, .DELETE, .CONNECT, .OPTIONS, .TRACE => false,
+        };
     }
 };
 
