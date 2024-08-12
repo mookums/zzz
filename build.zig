@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     addExample(b, "embed", false, target, optimize, zzz);
     addExample(b, "count", false, target, optimize, zzz);
     addExample(b, "multithread", false, target, optimize, zzz);
+    addExample(b, "valgrind", true, target, optimize, zzz);
 }
 
 fn addExample(
