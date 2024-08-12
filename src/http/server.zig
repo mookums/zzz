@@ -389,7 +389,7 @@ pub const Server = struct {
                                 assert(p.request.expect_body());
                                 log.debug("Body Matching Fired!", .{});
 
-                                const length = blk: {
+                                const content_length = blk: {
                                     for (p.request.headers[0..p.request.headers_idx]) |header| {
                                         if (std.mem.eql(u8, header.key, "Content-Length")) {
                                             break :blk std.fmt.parseInt(u32, header.value, 10) catch {
@@ -411,7 +411,7 @@ pub const Server = struct {
                                 };
 
                                 // If this body will be too long, abort early.
-                                if (p.header_end + length > config.size_request_max) {
+                                if (p.header_end + content_length > config.size_request_max) {
                                     p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
                                     const response_buffer = try p.response.response_into_buffer(p.buffer);
                                     p.job = .Write;
@@ -419,8 +419,8 @@ pub const Server = struct {
                                     continue;
                                 }
 
-                                if (p.count >= length) {
-                                    p.request.set_body(p.request_buffer.items[p.header_end..(p.header_end + length)]);
+                                if (p.count >= content_length) {
+                                    p.request.set_body(p.request_buffer.items[p.header_end..(p.header_end + content_length)]);
                                     try respond(p, uring, router, config);
                                 } else {
                                     _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
