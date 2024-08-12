@@ -42,24 +42,24 @@ pub const Route = struct {
     pub fn post(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.POST)] = handler_fn;
-        return Route{ .handlers = self.handlers };
+        return Route{ .handlers = new_handlers };
     }
 
     pub fn put(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.PUT)] = handler_fn;
-        return Route{ .handlers = self.handlers };
+        return Route{ .handlers = new_handlers };
     }
 
     pub fn delete(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.DELETE)] = handler_fn;
-        return Route{ .handlers = self.handlers };
+        return Route{ .handlers = new_handlers };
     }
 
     pub fn patch(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.PATCH)] = handler_fn;
-        return Route{ .handlers = self.handlers };
+        return Route{ .handlers = new_handlers };
     }
 };

@@ -298,55 +298,96 @@ pub const Server = struct {
                                 const header_ends = std.mem.lastIndexOf(u8, p.request_buffer.items, "\r\n\r\n");
                                 const too_long = p.request_buffer.items.len >= config.size_request_max;
 
-                                if ((header_ends != null) or too_long) {
-                                    p.header_end = header_ends.?;
-                                    p.request.parse_headers(p.request_buffer.items[0..p.header_end]) catch |e| {
-                                        p.response = switch (e) {
-                                            HTTPError.TooManyHeaders,
-                                            HTTPError.ContentTooLarge,
-                                            => Response.init(
-                                                .@"Request Headers Fields Too Large",
-                                                Mime.HTML,
-                                                "Too Many Headers",
-                                            ),
-                                            HTTPError.MalformedRequest => Response.init(
-                                                .@"Bad Request",
-                                                Mime.HTML,
-                                                "Malformed Request",
-                                            ),
-                                        };
+                                // Basically, this means we haven't finished processing the header.
+                                if (header_ends == null and !too_long) {
+                                    _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                    continue;
+                                }
 
-                                        const response_buffer = try p.response.response_into_buffer(p.buffer);
-
-                                        p.job = .Write;
-                                        _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                        continue;
+                                // The +4 is to account for the slice we match.
+                                p.header_end = header_ends.? + 4;
+                                p.request.parse_headers(p.request_buffer.items[0..p.header_end]) catch |e| {
+                                    p.response = switch (e) {
+                                        HTTPError.TooManyHeaders,
+                                        HTTPError.ContentTooLarge,
+                                        => Response.init(
+                                            .@"Request Headers Fields Too Large",
+                                            Mime.HTML,
+                                            "Too Many Headers",
+                                        ),
+                                        HTTPError.MalformedRequest => Response.init(
+                                            .@"Bad Request",
+                                            Mime.HTML,
+                                            "Malformed Request",
+                                        ),
                                     };
 
-                                    if (p.request.expect_body()) {
-                                        p.job = .{ .Read = .Body };
-                                        _ = try uring.recv(
-                                            cqe.user_data,
-                                            p.socket,
-                                            .{ .buffer = p.buffer },
-                                            0,
-                                        );
-                                    } else {
-                                        try respond(p, uring, router, config);
-                                    }
-                                } else {
-                                    _ = try uring.recv(
-                                        cqe.user_data,
-                                        p.socket,
-                                        .{ .buffer = p.buffer },
-                                        0,
-                                    );
+                                    p.job = .Write;
+                                    const response_buffer = try p.response.response_into_buffer(p.buffer);
+                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    continue;
+                                };
+
+                                if (!p.request.expect_body()) {
+                                    try respond(p, uring, router, config);
+                                    continue;
                                 }
+
+                                // Everything after here is a Request that is expecting a body.
+                                const content_length = blk: {
+                                    // Basically, we are searching for Content-Length.
+                                    // If we don't have it, we assume the length is 0.
+                                    for (p.request.headers[0..p.request.headers_idx]) |header| {
+                                        if (std.mem.eql(u8, "Content-Length", header.key)) {
+                                            break :blk std.fmt.parseInt(u32, header.value, 10) catch {
+                                                p.job = .Write;
+                                                p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                                const response_buffer = try p.response.response_into_buffer(p.buffer);
+                                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                                continue;
+                                            };
+                                        }
+                                    }
+
+                                    break :blk 0;
+                                };
+
+                                if (p.header_end < p.request_buffer.items.len) {
+                                    const difference = p.request_buffer.items.len - p.header_end;
+                                    if (difference == content_length) {
+                                        // Whole Body
+                                        log.debug("Got whole body with header", .{});
+                                        p.request.set_body(p.request_buffer.items[p.header_end .. p.header_end + difference]);
+                                        try respond(p, uring, router, config);
+                                        continue;
+                                    } else {
+                                        // Partial Body
+                                        log.debug("Got partial body with header", .{});
+                                        p.job = .{ .Read = .Body };
+                                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                        continue;
+                                    }
+                                } else if (p.header_end == p.request_buffer.items.len) {
+                                    // Body of length 0 probably or only got header.
+                                    if (content_length == 0) {
+                                        // Body of Length 0.
+                                        p.request.set_body("");
+                                        try respond(p, uring, router, config);
+                                        continue;
+                                    } else {
+                                        // Got only header.
+                                        log.debug("Got no body, all header", .{});
+                                        p.job = .{ .Read = .Body };
+                                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                        continue;
+                                    }
+                                } else unreachable;
                             },
 
                             .Body => {
                                 // We should ONLY be here if we expect there to be a body.
                                 assert(p.request.expect_body());
+                                log.debug("Body Matching Fired!", .{});
 
                                 const length = blk: {
                                     for (p.request.headers[0..p.request.headers_idx]) |header| {
