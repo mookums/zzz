@@ -143,6 +143,54 @@ pub const Server = struct {
         try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
+    fn respond(p: *Provision, uring: *std.os.linux.IoUring, router: Router, config: ServerConfig) !void {
+        _ = config;
+        p.response = blk: {
+            const captured = router.get_route_from_host(p.request.host, p.captures);
+            if (captured) |c| {
+                const handler = c.route.get_handler(p.request.method);
+
+                if (handler) |func| {
+                    const context: Context = Context.init(
+                        p.arena.allocator(),
+                        p.request.host,
+                        c.captures,
+                    );
+
+                    break :blk func(p.request, context);
+                } else {
+                    // If we match the route but not the method.
+                    break :blk Response.init(
+                        .@"Method Not Allowed",
+                        Mime.HTML,
+                        "405 Method Not Allowed",
+                    );
+                }
+            }
+
+            // Didn't match any route.
+            break :blk Response.init(
+                .@"Not Found",
+                Mime.HTML,
+                "404 Not Found",
+            );
+        };
+
+        const response_buffer = p.response.response_into_buffer(p.buffer) catch blk: {
+            p.response = Response.init(
+                .@"Internal Server Error",
+                Mime.HTML,
+                "The response being returned is too large.",
+            );
+
+            break :blk try p.response.response_into_buffer(p.buffer);
+        };
+
+        p.header_end = response_buffer.len;
+        p.job = .Write;
+        _ = try uring.send(@as(u64, @intFromPtr(p)), p.socket, response_buffer, 0);
+    }
+
     /// This function assumes that the socket is set up and
     /// is already listening.
     fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, uring: *std.os.linux.IoUring) !void {
@@ -165,10 +213,15 @@ pub const Server = struct {
                     provision.captures = ctx.allocator.alloc(Capture, ctx.size_captures_max) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
+                    // Create the Request.
+                    provision.request = Request.init(.{ .request_max_size = ctx.size_request_max });
                     // Create Request ArrayList
-                    provision.request = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
+                    provision.request_buffer = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
+                    provision.response = Response.init(.@"Internal Server Error", Mime.HTML, "This should never be shown.");
+                    provision.header_end = 0;
+                    provision.count = 0;
                     // Create the Context Arena
                     provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
                 }
@@ -180,7 +233,7 @@ pub const Server = struct {
                 for (provisions) |*provision| {
                     ctx.allocator.free(provision.buffer);
                     ctx.allocator.free(provision.captures);
-                    provision.request.deinit();
+                    provision.request_buffer.deinit();
                     provision.arena.deinit();
                 }
             }
@@ -193,8 +246,12 @@ pub const Server = struct {
             .socket = undefined,
             .captures = undefined,
             .request = undefined,
+            .request_buffer = undefined,
+            .response = undefined,
             .arena = undefined,
             .buffer = undefined,
+            .header_end = 0,
+            .count = 0,
         };
 
         _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
@@ -218,103 +275,116 @@ pub const Server = struct {
                         // Store the index of this item.
                         provision.item.index = provision.index;
                         provision.item.socket = socket;
+                        provision.item.job = .{ .Read = .Header };
 
                         const read_buffer = .{ .buffer = provision.item.buffer };
-
-                        provision.item.job = .Read;
                         _ = try uring.recv(@as(u64, @intFromPtr(provision.item)), socket, read_buffer, 0);
                     },
 
-                    .Read => {
+                    .Read => |kind| {
                         const read_count = cqe.res;
 
-                        if (read_count > 0) {
-                            try p.request.appendSlice(p.buffer[0..@as(usize, @intCast(read_count))]);
-                            const header_end = std.mem.endsWith(u8, p.request.items, "\r\n\r\n");
-                            const too_long = p.request.items.len >= config.size_request_max;
-                            if (header_end or too_long) {
-                                //// This is the end of the headers.
-                                const request = Request.parse(.{
-                                    .request_max_size = config.size_request_max,
-                                }, p.request.items) catch |e| {
-                                    const failed_response: Response = switch (e) {
-                                        HTTPError.TooManyHeaders => Response.init(
-                                            .@"Request Headers Fields Too Large",
-                                            Mime.HTML,
-                                            "Too Many Headers",
-                                        ),
-                                        HTTPError.ContentTooLarge => Response.init(
-                                            .@"Content Too Large",
-                                            Mime.HTML,
-                                            "Request is too long",
-                                        ),
-                                        HTTPError.MalformedRequest => Response.init(
-                                            .@"Bad Request",
-                                            Mime.HTML,
-                                            "Malformed Request",
-                                        ),
+                        // If the socket is closed.
+                        if (read_count <= 0) {
+                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            provision_pool.release(p.index);
+                            continue;
+                        }
+
+                        switch (kind) {
+                            .Header => {
+                                try p.request_buffer.appendSlice(p.buffer[0..@as(usize, @intCast(read_count))]);
+
+                                const header_ends = std.mem.lastIndexOf(u8, p.request_buffer.items, "\r\n\r\n");
+                                const too_long = p.request_buffer.items.len >= config.size_request_max;
+
+                                if ((header_ends != null) or too_long) {
+                                    p.header_end = header_ends.?;
+                                    p.request.parse_headers(p.request_buffer.items[0..p.header_end]) catch |e| {
+                                        p.response = switch (e) {
+                                            HTTPError.TooManyHeaders,
+                                            HTTPError.ContentTooLarge,
+                                            => Response.init(
+                                                .@"Request Headers Fields Too Large",
+                                                Mime.HTML,
+                                                "Too Many Headers",
+                                            ),
+                                            HTTPError.MalformedRequest => Response.init(
+                                                .@"Bad Request",
+                                                Mime.HTML,
+                                                "Malformed Request",
+                                            ),
+                                        };
+
+                                        const response_buffer = try p.response.response_into_buffer(p.buffer);
+
+                                        p.job = .Write;
+                                        _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                        continue;
                                     };
 
-                                    p.request.items.len = 0;
-                                    const response_buffer = try failed_response.respond_into_buffer(p.buffer);
+                                    if (p.request.expect_body()) {
+                                        p.job = .{ .Read = .Body };
+                                        _ = try uring.recv(
+                                            cqe.user_data,
+                                            p.socket,
+                                            .{ .buffer = p.buffer },
+                                            0,
+                                        );
+                                    } else {
+                                        try respond(p, uring, router, config);
+                                    }
+                                } else {
+                                    _ = try uring.recv(
+                                        cqe.user_data,
+                                        p.socket,
+                                        .{ .buffer = p.buffer },
+                                        0,
+                                    );
+                                }
+                            },
 
+                            .Body => {
+                                // We should ONLY be here if we expect there to be a body.
+                                assert(p.request.expect_body());
+
+                                const length = blk: {
+                                    for (p.request.headers[0..p.request.headers_idx]) |header| {
+                                        if (std.mem.eql(u8, header.key, "Content-Length")) {
+                                            break :blk std.fmt.parseInt(u32, header.value, 10) catch {
+                                                p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                                const response_buffer = try p.response.response_into_buffer(p.buffer);
+                                                p.job = .Write;
+                                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                                continue;
+                                            };
+                                        }
+                                    }
+
+                                    // Return a missing header response.
+                                    const response = Response.init(.@"Length Required", Mime.HTML, "");
+                                    const response_buffer = try response.response_into_buffer(p.buffer);
                                     p.job = .Write;
                                     _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
                                     continue;
                                 };
 
-                                // Clear and free it out, allowing us to handle future requests.
-                                p.request.items.len = 0;
+                                // If this body will be too long, abort early.
+                                if (p.header_end + length > config.size_request_max) {
+                                    p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
+                                    const response_buffer = try p.response.response_into_buffer(p.buffer);
+                                    p.job = .Write;
+                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    continue;
+                                }
 
-                                const response = blk: {
-                                    const captured = router.get_route_from_host(request.host, p.captures);
-                                    if (captured) |c| {
-                                        const handler = c.route.get_handler(request.method);
-
-                                        if (handler) |func| {
-                                            const context: Context = Context.init(
-                                                p.arena.allocator(),
-                                                request.host,
-                                                c.captures,
-                                            );
-
-                                            break :blk func(request, context);
-                                        } else {
-                                            // If we match the route but not the method.
-                                            break :blk Response.init(
-                                                .@"Method Not Allowed",
-                                                Mime.HTML,
-                                                "405 Method Not Allowed",
-                                            );
-                                        }
-                                    }
-
-                                    // Didn't match any route.
-                                    break :blk Response.init(
-                                        .@"Not Found",
-                                        Mime.HTML,
-                                        "404 Not Found",
-                                    );
-                                };
-
-                                const response_buffer = response.respond_into_buffer(p.buffer) catch blk: {
-                                    const failed_response = Response.init(
-                                        .@"Internal Server Error",
-                                        Mime.HTML,
-                                        "The response being returned is too large.",
-                                    );
-
-                                    break :blk failed_response.respond_into_buffer(p.buffer) catch unreachable;
-                                };
-
-                                p.job = .Write;
-                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                            } else {
-                                _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                            }
-                        } else {
-                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                            provision_pool.release(p.index);
+                                if (p.count >= length) {
+                                    p.request.set_body(p.request_buffer.items[p.header_end..(p.header_end + length)]);
+                                    try respond(p, uring, router, config);
+                                } else {
+                                    _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                }
+                            },
                         }
                     },
 
@@ -322,7 +392,8 @@ pub const Server = struct {
                         // TODO: ensure this can properly send partial writes.
                         const write_count = cqe.res;
                         _ = write_count;
-                        p.job = .Read;
+                        p.request_buffer.clearRetainingCapacity();
+                        p.job = .{ .Read = .Header };
                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                     },
 

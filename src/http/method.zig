@@ -14,9 +14,10 @@ pub const Method = enum {
 
     fn encode(method: []const u8) u64 {
         var buffer = [1]u8{0} ** @sizeOf(u64);
-        for (0..method.len) |i| {
-            buffer[i] = std.ascii.toUpper(method[i]);
-        }
+        //for (0..method.len) |i| {
+        //    buffer[i] = method[i];
+        //}
+        std.mem.copyForwards(u8, buffer[0..], method);
 
         return std.mem.readPackedIntNative(u64, buffer[0..], 0);
     }

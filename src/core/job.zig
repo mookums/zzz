@@ -1,8 +1,20 @@
 const std = @import("std");
 
-pub const Job = enum {
+const JobType = enum {
     Accept,
     Read,
+    Write,
+    Close,
+};
+
+const ReadJob = enum {
+    Header,
+    Body,
+};
+
+pub const Job = union(JobType) {
+    Accept,
+    Read: ReadJob,
     Write,
     Close,
 };
