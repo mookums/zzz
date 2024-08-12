@@ -49,6 +49,12 @@ fn redir_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
     return response;
 }
 
+fn post_handler(request: zzz.Request, _: zzz.Context) zzz.Response {
+    log.debug("Body: {s}", .{request.body});
+
+    return zzz.Response.init(.OK, zzz.Mime.HTML, "");
+}
+
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
@@ -60,6 +66,7 @@ pub fn main() !void {
     try router.serve_embedded_file("/", zzz.Mime.HTML, @embedFile("index.html"));
     try router.serve_route("/hi/%s", zzz.Route.init().get(hi_handler));
     try router.serve_route("/redirect", zzz.Route.init().get(redir_handler));
+    try router.serve_route("/post", zzz.Route.init().post(post_handler));
 
     var server = zzz.Server.init(.{
         .allocator = allocator,
