@@ -230,7 +230,7 @@ pub const RoutingTrie = struct {
                     current = child;
                     capture_idx += 1;
 
-                    if (capture_idx == captures.len) {
+                    if (capture_idx > captures.len) {
                         // Should return an error here but for now,
                         // itll just be a null.
                         return null;
