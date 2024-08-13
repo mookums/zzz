@@ -34,7 +34,7 @@ pub const ServerConfig = struct {
     /// Default: .single_threaded
     threading: ServerThreading = .single_threaded,
     /// Kernel Backlog Value.
-    size_backlog_kernel: u31 = 512,
+    size_backlog_kernel: u31 = 64,
     /// Number of Maximum Concurrnet Connections.
     ///
     /// This is applied PER thread if using multi-threading.
@@ -202,8 +202,8 @@ pub const Server = struct {
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        var cqes = try Pool(std.os.linux.io_uring_cqe).init(allocator, config.size_connections_max, null, null);
-        defer cqes.deinit(null, null);
+        var cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
+        defer allocator.free(cqes);
 
         var provision_pool = try Pool(Provision).init(allocator, config.size_connections_max, struct {
             fn init_hook(provisions: []Provision, ctx: anytype) void {
@@ -261,9 +261,10 @@ pub const Server = struct {
         _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
 
         while (true) {
-            const cqe_count = try uring.copy_cqes(cqes.items[0..], 0);
+            const cqe_count = try uring.copy_cqes(cqes[0..], 0);
 
-            for (cqes.items[0..cqe_count]) |cqe| {
+            for (0..cqe_count) |i| {
+                const cqe = cqes[i];
                 const p: *Provision = @ptrFromInt(cqe.user_data);
 
                 switch (p.job) {
@@ -449,14 +450,13 @@ pub const Server = struct {
                         const write_count = cqe.res;
 
                         if (write_count <= 0) {
-                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                            p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
                             continue;
                         }
 
-                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 256));
-                        p.request_buffer.clearRetainingCapacity();
+                        // Try resetting the arena after writing each request.
+                        _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                        p.request_buffer.clearAndFree();
 
                         p.job = .{ .Read = .Header };
                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
@@ -507,6 +507,7 @@ pub const Server = struct {
             .multi_threaded => |count| {
                 const allocator = self.config.allocator;
                 var threads = std.ArrayList(std.Thread).init(allocator);
+                defer threads.deinit();
 
                 const thread_count = blk: {
                     switch (count) {
