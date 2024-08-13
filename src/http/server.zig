@@ -258,6 +258,7 @@ pub const Server = struct {
             .count = 0,
         };
 
+        var accepted = false;
         _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
 
         while (true) {
@@ -269,6 +270,7 @@ pub const Server = struct {
 
                 switch (p.job) {
                     .Accept => {
+                        accepted = true;
                         const socket: std.posix.socket_t = cqe.res;
 
                         // Disable Nagle's.
@@ -466,8 +468,9 @@ pub const Server = struct {
                 }
             }
 
-            if (!provision_pool.full) {
+            if (!provision_pool.full and accepted) {
                 _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
+                accepted = false;
             }
 
             _ = try uring.submit_and_wait(1);
