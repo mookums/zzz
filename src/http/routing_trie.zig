@@ -239,6 +239,12 @@ pub const RoutingTrie = struct {
                     break;
                 }
             }
+
+            // If we failed to match,
+            // this is an invalid route.
+            if (!matched) {
+                return null;
+            }
         }
 
         if (current.route) |r| {
