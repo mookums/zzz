@@ -34,7 +34,7 @@ pub const ServerConfig = struct {
     /// Default: .single_threaded
     threading: ServerThreading = .single_threaded,
     /// Kernel Backlog Value.
-    size_backlog_kernel: u31 = 64,
+    size_backlog_kernel: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
     ///
     /// This is applied PER thread if using multi-threading.
@@ -202,7 +202,7 @@ pub const Server = struct {
         defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        var cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
+        const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
         defer allocator.free(cqes);
 
         var provision_pool = try Pool(Provision).init(allocator, config.size_connections_max, struct {
@@ -262,9 +262,9 @@ pub const Server = struct {
         _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
 
         while (true) {
-            const cqe_count = try uring.copy_cqes(cqes[0..], 0);
+            const cqe_count = try uring.copy_cqes(cqes, 0);
 
-            for (0..cqe_count) |i| {
+            cqe_loop: for (0..cqe_count) |i| {
                 const cqe = cqes[i];
                 const p: *Provision = @ptrFromInt(cqe.user_data);
 
@@ -273,6 +273,12 @@ pub const Server = struct {
                         accepted = true;
                         const socket: std.posix.socket_t = cqe.res;
 
+                        // Borrow a provision from the pool otherwise close the socket.
+                        const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
+                            std.posix.close(socket);
+                            continue :cqe_loop;
+                        };
+
                         // Disable Nagle's.
                         try std.posix.setsockopt(
                             socket,
@@ -280,12 +286,6 @@ pub const Server = struct {
                             std.posix.TCP.NODELAY,
                             &std.mem.toBytes(@as(c_int, 1)),
                         );
-
-                        // Borrow a provision from the pool otherwise close the socket.
-                        const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
-                            std.posix.close(socket);
-                            continue;
-                        };
 
                         // Store the index of this item.
                         provision.item.index = provision.index;
@@ -304,7 +304,7 @@ pub const Server = struct {
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
                             p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
-                            continue;
+                            continue :cqe_loop;
                         }
 
                         switch (kind) {
@@ -317,7 +317,7 @@ pub const Server = struct {
                                 // Basically, this means we haven't finished processing the header.
                                 if (header_ends == null and !too_long) {
                                     _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                    continue;
+                                    continue :cqe_loop;
                                 }
 
                                 // The +4 is to account for the slice we match.
@@ -341,12 +341,12 @@ pub const Server = struct {
                                     p.job = .Write;
                                     const response_buffer = try p.response.response_into_buffer(p.buffer);
                                     _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                    continue;
+                                    continue :cqe_loop;
                                 };
 
                                 if (!p.request.expect_body()) {
                                     respond(p, uring, router, config) catch return;
-                                    continue;
+                                    continue :cqe_loop;
                                 }
 
                                 // Everything after here is a Request that is expecting a body.
@@ -360,7 +360,7 @@ pub const Server = struct {
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
                                                 const response_buffer = try p.response.response_into_buffer(p.buffer);
                                                 _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                                continue;
+                                                continue :cqe_loop;
                                             };
                                         }
                                     }
@@ -375,13 +375,13 @@ pub const Server = struct {
                                         log.debug("Got whole body with header", .{});
                                         p.request.set_body(p.request_buffer.items[p.header_end .. p.header_end + difference]);
                                         respond(p, uring, router, config) catch return;
-                                        continue;
+                                        continue :cqe_loop;
                                     } else {
                                         // Partial Body
                                         log.debug("Got partial body with header", .{});
                                         p.job = .{ .Read = .Body };
                                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                        continue;
+                                        continue :cqe_loop;
                                     }
                                 } else if (p.header_end == p.request_buffer.items.len) {
                                     // Body of length 0 probably or only got header.
@@ -389,13 +389,13 @@ pub const Server = struct {
                                         // Body of Length 0.
                                         p.request.set_body("");
                                         respond(p, uring, router, config) catch return;
-                                        continue;
+                                        continue :cqe_loop;
                                     } else {
                                         // Got only header.
                                         log.debug("Got no body, all header", .{});
                                         p.job = .{ .Read = .Body };
                                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                        continue;
+                                        continue :cqe_loop;
                                     }
                                 } else unreachable;
                             },
@@ -413,7 +413,7 @@ pub const Server = struct {
                                                 const response_buffer = try p.response.response_into_buffer(p.buffer);
                                                 p.job = .Write;
                                                 _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                                continue;
+                                                continue :cqe_loop;
                                             };
                                         }
                                     }
@@ -423,7 +423,7 @@ pub const Server = struct {
                                     const response_buffer = try response.response_into_buffer(p.buffer);
                                     p.job = .Write;
                                     _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                    continue;
+                                    continue :cqe_loop;
                                 };
 
                                 // If this body will be too long, abort early.
@@ -432,7 +432,7 @@ pub const Server = struct {
                                     const response_buffer = try p.response.response_into_buffer(p.buffer);
                                     p.job = .Write;
                                     _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
-                                    continue;
+                                    continue :cqe_loop;
                                 }
 
                                 if (p.count >= content_length) {
@@ -452,13 +452,15 @@ pub const Server = struct {
                         const write_count = cqe.res;
 
                         if (write_count <= 0) {
+                            // Try resetting the arena after writing each request.
+                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+                            p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
-                            continue;
+                            continue :cqe_loop;
                         }
 
-                        // Try resetting the arena after writing each request.
-                        _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                        p.request_buffer.clearAndFree();
+                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 256));
+                        p.request_buffer.clearRetainingCapacity();
 
                         p.job = .{ .Read = .Header };
                         _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
