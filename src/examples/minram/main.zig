@@ -6,7 +6,7 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var buffer = [_]u8{undefined} ** (1024 * 30);
+    var buffer = [_]u8{undefined} ** (1024 * 60);
     var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
     const allocator = fba.allocator();
 
