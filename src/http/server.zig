@@ -219,14 +219,14 @@ pub const Server = struct {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
                     // Create Request ArrayList
-                    provision.request_buffer = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
-                        panic("attemping to statically allocate more memory than available.", .{});
-                    };
+                    provision.request_buffer = std.ArrayList(u8).init(ctx.allocator);
+
+                    // Create Request
+                    provision.request = Request.init(ctx.size_request_max);
 
                     // These all need to get created during the lifetime of a connection.
                     // They should not be created here, this way we can catch any weird
                     // undefined behavior at test and run time.
-                    provision.request = undefined;
                     provision.response = undefined;
                     provision.pseudo = undefined;
 
@@ -331,9 +331,12 @@ pub const Server = struct {
                                 p.header_end = header_ends.? + 4;
                                 p.request.parse_headers(p.request_buffer.items[0..p.header_end]) catch |e| {
                                     p.response = switch (e) {
-                                        HTTPError.TooManyHeaders,
-                                        HTTPError.ContentTooLarge,
-                                        => Response.init(
+                                        HTTPError.ContentTooLarge => Response.init(
+                                            .@"Content Too Large",
+                                            Mime.HTML,
+                                            "Request was too large",
+                                        ),
+                                        HTTPError.TooManyHeaders => Response.init(
                                             .@"Request Headers Fields Too Large",
                                             Mime.HTML,
                                             "Too Many Headers",
@@ -466,7 +469,7 @@ pub const Server = struct {
                             continue :cqe_loop;
                         }
 
-                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 256));
+                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 1024));
                         p.request_buffer.clearRetainingCapacity();
 
                         p.job = .{ .Read = .Header };
