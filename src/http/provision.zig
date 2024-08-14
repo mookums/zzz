@@ -1,5 +1,6 @@
 const std = @import("std");
 const Job = @import("../core/lib.zig").Job;
+const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 const Capture = @import("routing_trie.zig").Capture;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
@@ -17,6 +18,7 @@ pub const Provision = struct {
     request: Request,
     response: Response,
     arena: std.heap.ArenaAllocator,
+    pseudo: Pseudoslice,
     /// For tracking the read count or write count.
     count: usize,
     /// For tracking the end of the header on Requests.
