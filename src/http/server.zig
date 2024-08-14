@@ -5,6 +5,7 @@ const log = std.log.scoped(.@"zzz/server");
 
 const Job = @import("../core/lib.zig").Job;
 const Pool = @import("../core/lib.zig").Pool;
+const Pseudoslice = @import("../core/lib.zig").Pseudoslice;
 
 const HTTPError = @import("lib.zig").HTTPError;
 
@@ -217,13 +218,18 @@ pub const Server = struct {
                     provision.captures = ctx.allocator.alloc(Capture, ctx.size_captures_max) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
-                    // Create the Request.
-                    provision.request = Request.init(.{ .request_max_size = ctx.size_request_max });
                     // Create Request ArrayList
                     provision.request_buffer = std.ArrayList(u8).initCapacity(ctx.allocator, ctx.size_socket_buffer) catch {
                         panic("attemping to statically allocate more memory than available.", .{});
                     };
-                    provision.response = Response.init(.@"Internal Server Error", Mime.HTML, "This should never be shown.");
+
+                    // These all need to get created during the lifetime of a connection.
+                    // They should not be created here, this way we can catch any weird
+                    // undefined behavior at test and run time.
+                    provision.request = undefined;
+                    provision.response = undefined;
+                    provision.pseudo = undefined;
+
                     provision.header_end = 0;
                     provision.count = 0;
                     // Create the Context Arena
@@ -252,6 +258,7 @@ pub const Server = struct {
             .request = undefined,
             .request_buffer = undefined,
             .response = undefined,
+            .pseudo = undefined,
             .arena = undefined,
             .buffer = undefined,
             .header_end = 0,
@@ -450,7 +457,7 @@ pub const Server = struct {
                         // We basically want to coalese the header and body into a pseudo-buffer.
                         // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
                         const write_count = cqe.res;
-
+                        // We need to create the Pseudoslice at the START of the write set and keep it that way.
                         if (write_count <= 0) {
                             // Try resetting the arena after writing each request.
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
