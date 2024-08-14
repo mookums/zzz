@@ -5,12 +5,8 @@ const KVPair = @import("lib.zig").KVPair;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
 
-const RequestOptions = struct {
-    request_max_size: u32 = 4096,
-};
-
 pub const Request = struct {
-    options: RequestOptions,
+    size_request_max: u32,
     method: Method,
     host: []const u8,
     version: std.http.Version,
@@ -19,9 +15,9 @@ pub const Request = struct {
     headers_idx: usize = 0,
 
     /// This is for constructing a Request.
-    pub fn init(options: RequestOptions) Request {
+    pub fn init(size_request_max: u32) Request {
         return Request{
-            .options = options,
+            .size_request_max = size_request_max,
             .method = undefined,
             .host = undefined,
             .version = undefined,
@@ -38,7 +34,7 @@ pub const Request = struct {
         while (line_iter.next()) |line| {
             total_size += @intCast(line.len);
 
-            if (total_size > self.options.request_max_size) {
+            if (total_size > self.size_request_max) {
                 return HTTPError.ContentTooLarge;
             }
 
@@ -63,7 +59,7 @@ pub const Request = struct {
                 var header_iter = std.mem.tokenizeScalar(u8, line, ':');
                 const key = header_iter.next() orelse return HTTPError.MalformedRequest;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
-                try self.set_header(.{ .key = key, .value = value });
+                try self.add_header(.{ .key = key, .value = value });
             }
         }
     }
@@ -80,7 +76,7 @@ pub const Request = struct {
         self.version = version;
     }
 
-    pub fn set_header(self: *Request, kv: KVPair) HTTPError!void {
+    pub fn add_header(self: *Request, kv: KVPair) HTTPError!void {
         if (self.headers_idx < self.headers.len) {
             self.headers[self.headers_idx] = kv;
             self.headers_idx += 1;
