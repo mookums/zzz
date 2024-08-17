@@ -3,8 +3,8 @@ const Pseudoslice = @import("lib.zig").Pseudoslice;
 
 const JobType = enum {
     Accept,
-    Read,
-    Write,
+    Recv,
+    Send,
     Close,
 };
 
@@ -15,7 +15,7 @@ const ReadJob = union(enum) {
 
 pub const Job = union(JobType) {
     Accept,
-    Read: struct { kind: ReadJob, count: u32 },
-    Write: struct { slice: Pseudoslice, count: u32 },
+    Recv: struct { kind: ReadJob, count: u32 },
+    Send: struct { slice: Pseudoslice, count: u32 },
     Close,
 };
