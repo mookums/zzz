@@ -18,8 +18,4 @@ pub const Provision = struct {
     request: Request,
     response: Response,
     arena: std.heap.ArenaAllocator,
-    /// For tracking the read count or write count.
-    count: usize,
-    /// For tracking the end of the header on Requests.
-    header_end: usize,
 };
