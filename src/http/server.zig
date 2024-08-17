@@ -183,7 +183,7 @@ pub const Server = struct {
         const header_buffer = p.response.headers_into_buffer(p.buffer) catch unreachable;
 
         var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-        p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+        p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
 
         _ = uring.send(@as(u64, @intFromPtr(p)), p.socket, pseudo.get(0, config.size_socket_buffer), 0) catch unreachable;
     }
@@ -281,13 +281,13 @@ pub const Server = struct {
                         // Store the index of this item.
                         provision.item.index = provision.index;
                         provision.item.socket = socket;
-                        provision.item.job = .{ .Read = .{ .kind = .Header, .count = 0 } };
+                        provision.item.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
 
                         const read_buffer = .{ .buffer = provision.item.buffer };
                         _ = try uring.recv(@as(u64, @intFromPtr(provision.item)), socket, read_buffer, 0);
                     },
 
-                    .Read => |*read_inner| {
+                    .Recv => |*read_inner| {
                         const kind = read_inner.kind;
                         const read_count = cqe.res;
 
@@ -337,7 +337,7 @@ pub const Server = struct {
 
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
                                     _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 };
@@ -360,7 +360,7 @@ pub const Server = struct {
                                                 // a pseudo and passing it around.
                                                 const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                                 var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                                p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                                p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
                                                 _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
 
                                                 continue :cqe_loop;
@@ -415,7 +415,7 @@ pub const Server = struct {
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
                                                 const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                                 var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                                p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                                p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
                                                 _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                                 continue :cqe_loop;
                                             };
@@ -426,7 +426,7 @@ pub const Server = struct {
                                     p.response = Response.init(.@"Length Required", Mime.HTML, "");
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
                                     _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 };
@@ -436,7 +436,7 @@ pub const Server = struct {
                                     p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
                                     _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 }
@@ -451,7 +451,7 @@ pub const Server = struct {
                         }
                     },
 
-                    .Write => |*inner| {
+                    .Send => |*inner| {
                         // When we are sending the write, we need to think of a couple of conditions.
                         // We basically want to coalese the header and body into a pseudo-buffer.
                         // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
@@ -475,7 +475,7 @@ pub const Server = struct {
                             //p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, ));
                             p.request_buffer.clearRetainingCapacity();
 
-                            p.job = .{ .Read = .{ .kind = .Header, .count = 0 } };
+                            p.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
                             _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                         } else {
                             _ = try uring.send(
