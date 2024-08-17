@@ -27,11 +27,40 @@ pub const Router = struct {
         self.routes.deinit();
     }
 
-    pub fn serve_fs_dir(self: *Router, dir_path: []const u8) !void {
-        _ = self;
-        const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-        defer dir.close();
-        @panic("TODO");
+    pub fn serve_fs_dir(self: *Router, comptime url_path: []const u8, comptime dir_path: []const u8) !void {
+        assert(!self.locked);
+
+        const route = Route.init().get(struct {
+            pub fn handler_fn(request: Request, context: Context) Response {
+                _ = request;
+                const search_path = context.captures[0].Remaining;
+                log.debug("Search Path: {s}", .{search_path});
+
+                var curr_dir = std.fs.cwd().openDir(dir_path, .{}) catch unreachable;
+
+                var iter = std.mem.tokenizeScalar(u8, search_path, '/');
+                while (iter.next()) |chunk| {
+                    // This is the final part of the match...
+                    if (iter.peek() == null) {
+                        const file = curr_dir.openFile(chunk, .{ .mode = .RW }) catch unreachable;
+                        _ = file;
+                    }
+
+                    const next_dir = curr_dir.openDir(chunk, .{}) catch unreachable;
+                    defer curr_dir.close();
+                    curr_dir = next_dir;
+                }
+
+                return Response.init(.Gone, Mime.HTML, "Not implemented yet.");
+            }
+        }.handler_fn);
+
+        const url_with_match_all = comptime std.fmt.comptimePrint(
+            "{s}/%r",
+            .{std.mem.trimRight(u8, url_path, &.{'/'})},
+        );
+
+        try self.serve_route(url_with_match_all, route);
     }
 
     pub fn serve_embedded_file(

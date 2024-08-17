@@ -112,7 +112,8 @@ test "Parse Request" {
         \\Accept: text/html
     ;
 
-    const request = try Request.parse(.{}, request_text[0..]);
+    var request = Request.init(1024);
+    try request.parse_headers(request_text[0..]);
 
     try testing.expectEqual(.GET, request.method);
     try testing.expectEqualStrings("/", request.host);
