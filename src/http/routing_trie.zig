@@ -58,6 +58,7 @@ pub const TokenMatch = enum {
     Signed,
     Float,
     String,
+    Remaining,
 
     pub fn as_type(match: TokenMatch) type {
         switch (match) {
@@ -65,6 +66,7 @@ pub const TokenMatch = enum {
             .Signed => return i64,
             .Float => return f64,
             .String => return []const u8,
+            .Remaining => return []const u8,
         }
     }
 };
@@ -83,6 +85,7 @@ pub const Token = union(TokenEnum) {
                 'u' => return .{ .Match = .Unsigned },
                 'f' => return .{ .Match = .Float },
                 's' => return .{ .Match = .String },
+                'r' => return .{ .Match = .Remaining },
                 else => @panic("Unsupported Match!"),
             }
         } else {
@@ -96,6 +99,7 @@ pub const Capture = union(TokenMatch) {
     Signed: TokenMatch.Signed.as_type(),
     Float: TokenMatch.Float.as_type(),
     String: TokenMatch.String.as_type(),
+    Remaining: TokenMatch.Remaining.as_type(),
 };
 
 pub const CapturedRoute = struct {
@@ -210,7 +214,7 @@ pub const RoutingTrie = struct {
             }
 
             var matched = false;
-            for ([_]TokenMatch{ .Signed, .Unsigned, .Float, .String }) |token_type| {
+            for ([_]TokenMatch{ .Signed, .Unsigned, .Float, .String, .Remaining }) |token_type| {
                 const token = Token{ .Match = token_type };
                 if (current.children.get(token)) |child| {
                     matched = true;
@@ -225,6 +229,12 @@ pub const RoutingTrie = struct {
                             captures[capture_idx] = Capture{ .Float = value };
                         } else |_| continue,
                         .String => captures[capture_idx] = Capture{ .String = chunk },
+                        // This ends the matching sequence and claims everything.
+                        .Remaining => {
+                            const rest = iter.buffer[iter.index - chunk.len ..];
+                            captures[capture_idx] = Capture{ .Remaining = rest };
+                            return CapturedRoute{ .route = child.route.?, .captures = captures[0 .. capture_idx + 1] };
+                        },
                     }
 
                     current = child;
@@ -362,6 +372,7 @@ test "Constructing Routing from Path" {
 test "Routing with Paths" {
     var s = try RoutingTrie.init(testing.allocator);
     defer s.deinit();
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
     try s.add_route("/item", Route.init());
     try s.add_route("/item/%i/description", Route.init());
@@ -369,32 +380,57 @@ test "Routing with Paths" {
     try s.add_route("/item/%f/price_float", Route.init());
     try s.add_route("/item/name/%s", Route.init());
     try s.add_route("/item/list", Route.init());
+
+    try testing.expectEqual(null, s.get_route("/item/name", captures[0..]));
+
+    {
+        const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].String);
+    }
+
+    {
+        const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures[0].Float);
+    }
+}
+
+test "Routing with Remaining" {
+    var s = try RoutingTrie.init(testing.allocator);
+    defer s.deinit();
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%r", Route.init());
     try s.add_route("/item/%i/price/%f", Route.init());
 
-    try testing.expectEqual(null, s.get_route("/item/name"));
+    try testing.expectEqual(null, s.get_route("/item/name", captures[0..]));
 
     {
-        const captured = s.get_route("/item/name/HELLO").?;
-        defer captured.captures.deinit();
-
+        const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqualStrings("HELLO", captured.captures.items[0].String);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].Remaining);
+    }
+    {
+        const captured = s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..]).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].Remaining);
     }
 
     {
-        const captured = s.get_route("/item/2112.22121/price_float").?;
-        defer captured.captures.deinit();
-
+        const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqual(2112.22121, captured.captures.items[0].Float);
+        try testing.expectEqual(2112.22121, captured.captures[0].Float);
     }
 
     {
-        const captured = s.get_route("/item/100/price/283.21").?;
-        defer captured.captures.deinit();
-
+        const captured = s.get_route("/item/100/price/283.21", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqual(100, captured.captures.items[0].Signed);
-        try testing.expectEqual(283.21, captured.captures.items[1].Float);
+        try testing.expectEqual(100, captured.captures[0].Signed);
+        try testing.expectEqual(283.21, captured.captures[1].Float);
     }
 }

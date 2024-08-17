@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     addExample(b, "basic", false, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
     addExample(b, "embed", false, target, optimize, zzz);
-    addExample(b, "count", false, target, optimize, zzz);
+    addExample(b, "fs", false, target, optimize, zzz);
     addExample(b, "multithread", false, target, optimize, zzz);
     addExample(b, "valgrind", true, target, optimize, zzz);
 }
