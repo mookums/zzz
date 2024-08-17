@@ -8,14 +8,14 @@ const JobType = enum {
     Close,
 };
 
-const ReadJob = enum {
+const ReadJob = union(enum) {
     Header,
-    Body,
+    Body: u32,
 };
 
 pub const Job = union(JobType) {
     Accept,
-    Read: ReadJob,
+    Read: struct { kind: ReadJob, count: u32 },
     Write: struct { slice: Pseudoslice, count: u32 },
     Close,
 };
