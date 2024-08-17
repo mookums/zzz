@@ -145,7 +145,6 @@ pub const Server = struct {
     }
 
     fn respond(p: *Provision, uring: *std.os.linux.IoUring, router: Router, config: ServerConfig) !void {
-        _ = config;
         p.response = blk: {
             const captured = router.get_route_from_host(p.request.host, p.captures);
             if (captured) |c| {
@@ -181,19 +180,12 @@ pub const Server = struct {
             return error.Kill;
         }
 
-        const response_buffer = p.response.response_into_buffer(p.buffer) catch blk: {
-            p.response = Response.init(
-                .@"Internal Server Error",
-                Mime.HTML,
-                "The response being returned is too large.",
-            );
+        const header_buffer = p.response.headers_into_buffer(p.buffer) catch unreachable;
 
-            break :blk try p.response.response_into_buffer(p.buffer);
-        };
+        var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+        p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
 
-        p.header_end = response_buffer.len;
-        p.job = .Write;
-        _ = uring.send(@as(u64, @intFromPtr(p)), p.socket, response_buffer, 0) catch unreachable;
+        _ = uring.send(@as(u64, @intFromPtr(p)), p.socket, pseudo.get(0, config.size_socket_buffer), 0) catch unreachable;
     }
 
     /// This function assumes that the socket is set up and
@@ -228,7 +220,6 @@ pub const Server = struct {
                     // They should not be created here, this way we can catch any weird
                     // undefined behavior at test and run time.
                     provision.response = undefined;
-                    provision.pseudo = undefined;
 
                     provision.header_end = 0;
                     provision.count = 0;
@@ -258,7 +249,6 @@ pub const Server = struct {
             .request = undefined,
             .request_buffer = undefined,
             .response = undefined,
-            .pseudo = undefined,
             .arena = undefined,
             .buffer = undefined,
             .header_end = 0,
@@ -348,9 +338,10 @@ pub const Server = struct {
                                         ),
                                     };
 
-                                    p.job = .Write;
-                                    const response_buffer = try p.response.response_into_buffer(p.buffer);
-                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
+                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 };
 
@@ -366,10 +357,11 @@ pub const Server = struct {
                                     for (p.request.headers[0..p.request.headers_idx]) |header| {
                                         if (std.mem.eql(u8, "Content-Length", header.key)) {
                                             break :blk std.fmt.parseInt(u32, header.value, 10) catch {
-                                                p.job = .Write;
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                const response_buffer = try p.response.response_into_buffer(p.buffer);
-                                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                                const header_buffer = try p.response.headers_into_buffer(p.buffer);
+                                                var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+                                                p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                                _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                                 continue :cqe_loop;
                                             };
                                         }
@@ -420,28 +412,31 @@ pub const Server = struct {
                                         if (std.mem.eql(u8, header.key, "Content-Length")) {
                                             break :blk std.fmt.parseInt(u32, header.value, 10) catch {
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                const response_buffer = try p.response.response_into_buffer(p.buffer);
-                                                p.job = .Write;
-                                                _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                                const header_buffer = try p.response.headers_into_buffer(p.buffer);
+                                                var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+                                                p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                                _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                                 continue :cqe_loop;
                                             };
                                         }
                                     }
 
                                     // Return a missing header response.
-                                    const response = Response.init(.@"Length Required", Mime.HTML, "");
-                                    const response_buffer = try response.response_into_buffer(p.buffer);
-                                    p.job = .Write;
-                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    p.response = Response.init(.@"Length Required", Mime.HTML, "");
+                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
+                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 };
 
                                 // If this body will be too long, abort early.
                                 if (p.header_end + content_length > config.size_request_max) {
                                     p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
-                                    const response_buffer = try p.response.response_into_buffer(p.buffer);
-                                    p.job = .Write;
-                                    _ = try uring.send(cqe.user_data, p.socket, response_buffer, 0);
+                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
+                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+                                    p.job = .{ .Write = .{ .slice = pseudo, .count = 0 } };
+                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
                                     continue :cqe_loop;
                                 }
 
@@ -455,12 +450,13 @@ pub const Server = struct {
                         }
                     },
 
-                    .Write => {
+                    .Write => |*inner| {
                         // When we are sending the write, we need to think of a couple of conditions.
                         // We basically want to coalese the header and body into a pseudo-buffer.
                         // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
                         const write_count = cqe.res;
                         // We need to create the Pseudoslice at the START of the write set and keep it that way.
+
                         if (write_count <= 0) {
                             // Try resetting the arena after writing each request.
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
@@ -469,11 +465,18 @@ pub const Server = struct {
                             continue :cqe_loop;
                         }
 
-                        p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 1024));
-                        p.request_buffer.clearRetainingCapacity();
+                        const total_write_count = @as(u32, @intCast(write_count)) + inner.count;
+                        if (total_write_count >= inner.slice.len) {
+                            // Done writing...
+                            p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, 1024));
+                            p.request_buffer.clearRetainingCapacity();
 
-                        p.job = .{ .Read = .Header };
-                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                            p.job = .{ .Read = .Header };
+                            _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                        } else {
+                            inner.count = total_write_count;
+                            _ = try uring.send(cqe.user_data, p.socket, inner.slice.get(total_write_count, total_write_count + config.size_socket_buffer), 0);
+                        }
                     },
 
                     .Close => {},

@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const log = std.log.scoped(.pseudoslice);
 
 // The Pseudoslice will basically stitch together two different buffers, using
 // a third provided buffer as the output.
@@ -23,7 +24,6 @@ pub const Pseudoslice = struct {
     pub fn get(self: *Pseudoslice, start: u32, end: u32) []const u8 {
         assert(end >= start);
         assert(self.shared.len >= end - start);
-
         const clamped_end = @min(end, self.len);
 
         if (start < self.first.len) {
@@ -41,7 +41,7 @@ pub const Pseudoslice = struct {
 
         if (start >= self.first.len) {
             const second_start = start - self.first.len;
-            const second_end = end - self.first.len;
+            const second_end = clamped_end - self.first.len;
             return self.second[second_start..second_end];
         }
 
