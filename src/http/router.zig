@@ -36,7 +36,7 @@ pub const Router = struct {
 
     pub fn serve_embedded_file(
         self: *Router,
-        path: []const u8,
+        comptime path: []const u8,
         comptime mime: ?Mime,
         comptime bytes: []const u8,
     ) !void {
@@ -44,12 +44,20 @@ pub const Router = struct {
         const route = Route.init().get(struct {
             pub fn handler_fn(request: Request, _: Context) Response {
                 // Currently commented out as it causes a general slowdown.
-                const response = Response.init(.OK, mime, bytes);
+                var response = Response.init(.OK, mime, bytes);
+
+                // We can assume that this path will be unique SINCE this is an embedded file.
+                // This allows us to quickly generate a unique ETag.
+                const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Crc32.hash(path)});
 
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
-                comptime if (bytes.len > 1024) {
-                    const etag = std.fmt.comptimePrint("\"{d}\"", .{std.hash.Crc32.hash(bytes)});
+                if (comptime bytes.len > 1024) {
+                    response.add_header(.{
+                        .key = "ETag",
+                        .value = etag[0..],
+                    }) catch unreachable;
+
                     // Search for If-None-Match
                     for (request.headers[0..request.headers_idx]) |header| {
                         if (std.mem.eql(u8, header.key, "If-None-Match")) {
@@ -59,14 +67,7 @@ pub const Router = struct {
                             }
                         }
                     }
-
-                    response.add_header(.{
-                        .key = "ETag",
-                        .value = etag[0..],
-                    }) catch {
-                        @compileError("Unable to automatically ETag embedded route!");
-                    };
-                };
+                }
 
                 return response;
             }
