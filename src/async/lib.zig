@@ -1,4 +1,5 @@
 const std = @import("std");
+const Completion = @import("completion.zig").Completion;
 
 pub const AsyncType = enum {
     /// Only available on Linux >= 5.1
@@ -16,8 +17,11 @@ pub const AsyncError = error{};
 
 pub const Async = struct {
     runner: *anyopaque,
+    completions: []Completion,
 
+    queue_accept: *const fn (self: *Async, context: *anyopaque, socket: std.posix.socket_t) AsyncError!void,
     queue_send: *const fn (self: *Async, context: *anyopaque, socket: std.posix.socket_t, buffer: []u8) AsyncError!void,
     queue_recv: *const fn (self: *Async, context: *anyopaque, socket: std.posix.socket_t, buffer: []u8) AsyncError!void,
+    reap: *const fn (self: *Async) AsyncError![]Completion,
     submit: *const fn (self: *Async) AsyncError!void,
 };
