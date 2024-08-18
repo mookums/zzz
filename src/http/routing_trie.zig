@@ -214,7 +214,7 @@ pub const RoutingTrie = struct {
             }
 
             var matched = false;
-            for ([_]TokenMatch{ .Signed, .Unsigned, .Float, .String, .Remaining }) |token_type| {
+            for (std.meta.tags(TokenMatch)) |token_type| {
                 const token = Token{ .Match = token_type };
                 if (current.children.get(token)) |child| {
                     matched = true;

@@ -262,6 +262,22 @@ pub const Server = struct {
                 const p: *Provision = @ptrCast(@alignCast(completion.context));
 
                 switch (p.job) {
+                    .Open => {
+                        const fd: std.posix.fd_t = completion.result;
+
+                        if (fd <= 0) {
+                            log.debug("Failed to open file...", .{});
+                        }
+
+                        try backend.queue_close(p, fd);
+                    },
+                    .Read => {
+                        // So whenever we're done reading, this is the body
+                        // of our request. This file is the body of our request.
+                        //
+                        // If this file is big enough, we can't stuff it into a buffer all at once?
+                        // We will need to basically send it in parts, unlike the pseudo send
+                    },
                     .Accept => {
                         accepted = true;
                         const socket: std.posix.socket_t = completion.result;
@@ -466,7 +482,11 @@ pub const Server = struct {
                         }
                     },
 
-                    .Close => {},
+                    .Close => {
+                        log.debug("closed a fd", .{});
+                    },
+
+                    else => @panic("Not implemented yet!"),
                 }
             }
 
