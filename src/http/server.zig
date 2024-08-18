@@ -147,7 +147,18 @@ pub const Server = struct {
         try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
-    fn respond(p: *Provision, backend: *Async, router: Router, config: ServerConfig) !void {
+    /// Uses the current p.response to generate and queue up the sending
+    /// of a response. This is used when we already know what we want to send.
+    ///
+    /// See: `route_and_respond`
+    fn raw_respond(p: *Provision, backend: *Async, config: ServerConfig) !void {
+        const header_buffer = try p.response.headers_into_buffer(p.buffer);
+        var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+        p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
+        try backend.queue_send(p, p.socket, pseudo.get(0, config.size_socket_buffer));
+    }
+
+    fn route_and_respond(p: *Provision, backend: *Async, router: Router, config: ServerConfig) !void {
         p.response = blk: {
             const captured = router.get_route_from_host(p.request.host, p.captures);
             if (captured) |c| {
@@ -183,23 +194,13 @@ pub const Server = struct {
             return error.Kill;
         }
 
-        const header_buffer = p.response.headers_into_buffer(p.buffer) catch unreachable;
-
-        var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-        p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-
-        backend.queue_send(p, p.socket, pseudo.get(0, config.size_socket_buffer)) catch unreachable;
+        try raw_respond(p, backend, config);
     }
 
     /// This function assumes that the socket is set up and
     /// is already listening.
     fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, backend: *Async) !void {
         const allocator = config.allocator;
-        //defer uring.deinit();
-
-        // Create a buffer of Completion Queue Events to copy into.
-        //const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
-        //defer allocator.free(cqes);
 
         var provision_pool = try Pool(Provision).init(allocator, config.size_connections_max, struct {
             fn init_hook(provisions: []Provision, ctx: anytype) void {
@@ -215,13 +216,10 @@ pub const Server = struct {
                     };
                     // Create Request ArrayList
                     provision.request_buffer = std.ArrayList(u8).init(ctx.allocator);
-
                     // Create Request
                     provision.request = Request.init(ctx.size_request_max);
-
                     // Responses MUST be generated.
                     provision.response = undefined;
-
                     // Create the Context Arena
                     provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
                 }
@@ -314,7 +312,6 @@ pub const Server = struct {
                                 // Basically, this means we haven't finished processing the header.
                                 if (header_ends == null and !too_long) {
                                     _ = try backend.queue_recv(completion.context, p.socket, p.buffer);
-                                    //_ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
                                     continue :reap_loop;
                                 }
 
@@ -339,16 +336,12 @@ pub const Server = struct {
                                         ),
                                     };
 
-                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
-                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    //_ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    raw_respond(p, backend, config) catch return;
                                     continue :reap_loop;
                                 };
 
                                 if (!p.request.expect_body()) {
-                                    respond(p, backend, router, config) catch return;
+                                    route_and_respond(p, backend, router, config) catch return;
                                     continue :reap_loop;
                                 }
 
@@ -360,15 +353,7 @@ pub const Server = struct {
                                         if (std.mem.eql(u8, "Content-Length", header.key)) {
                                             break :blk std.fmt.parseInt(u32, header.value, 10) catch {
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                // TODO: We should probably encapsulate this functionality here.
-                                                // We repeat this process a lot of writing the headers THEN creating
-                                                // a pseudo and passing it around.
-                                                const header_buffer = try p.response.headers_into_buffer(p.buffer);
-                                                var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                                p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                                //_ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                                _ = try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
-
+                                                raw_respond(p, backend, config) catch return;
                                                 continue :reap_loop;
                                             };
                                         }
@@ -383,7 +368,7 @@ pub const Server = struct {
                                         // Whole Body
                                         log.debug("Got whole body with header", .{});
                                         p.request.set_body(p.request_buffer.items[header_end .. header_end + difference]);
-                                        respond(p, backend, router, config) catch return;
+                                        route_and_respond(p, backend, router, config) catch return;
                                         continue :reap_loop;
                                     } else {
                                         // Partial Body
@@ -397,7 +382,7 @@ pub const Server = struct {
                                     if (content_length == 0) {
                                         // Body of Length 0.
                                         p.request.set_body("");
-                                        respond(p, backend, router, config) catch return;
+                                        route_and_respond(p, backend, router, config) catch return;
                                         continue :reap_loop;
                                     } else {
                                         // Got only header.
@@ -419,10 +404,7 @@ pub const Server = struct {
                                         if (std.mem.eql(u8, header.key, "Content-Length")) {
                                             break :blk std.fmt.parseInt(u32, header.value, 10) catch {
                                                 p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                const header_buffer = try p.response.headers_into_buffer(p.buffer);
-                                                var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                                p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                                try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                                raw_respond(p, backend, config) catch return;
                                                 continue :reap_loop;
                                             };
                                         }
@@ -430,26 +412,20 @@ pub const Server = struct {
 
                                     // Return a missing header response.
                                     p.response = Response.init(.@"Length Required", Mime.HTML, "");
-                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
-                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    raw_respond(p, backend, config) catch return;
                                     continue :reap_loop;
                                 };
 
                                 // If this body will be too long, abort early.
                                 if (header_end + content_length > config.size_request_max) {
                                     p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
-                                    const header_buffer = try p.response.headers_into_buffer(p.buffer);
-                                    var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
-                                    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    raw_respond(p, backend, config) catch return;
                                     continue :reap_loop;
                                 }
 
                                 if (read_inner.count >= content_length) {
                                     p.request.set_body(p.request_buffer.items[header_end..(header_end + content_length)]);
-                                    respond(p, backend, router, config) catch return;
+                                    route_and_respond(p, backend, router, config) catch return;
                                 } else {
                                     try backend.queue_recv(completion.context, p.socket, p.buffer);
                                 }
@@ -476,9 +452,7 @@ pub const Server = struct {
 
                         if (inner.count >= inner.slice.len) {
                             // Done writing...
-
                             // TODO: Reimplement this in a better way.
-                            //p.request_buffer.shrinkAndFree(@min(p.request_buffer.items.len, ));
                             p.request_buffer.clearRetainingCapacity();
 
                             p.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
