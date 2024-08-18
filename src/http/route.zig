@@ -6,10 +6,10 @@ const Response = @import("response.zig").Response;
 
 const Context = @import("context.zig").Context;
 
-const RouteHandlerFn = ?*const fn (request: Request, context: Context) Response;
+const RouteHandlerFn = *const fn (request: Request, context: Context) Response;
 
 pub const Route = struct {
-    handlers: [9]RouteHandlerFn = [_]RouteHandlerFn{null} ** 9,
+    handlers: [9]?RouteHandlerFn = [_]?RouteHandlerFn{null} ** 9,
 
     fn method_to_index(method: Method) u32 {
         return switch (method) {
@@ -26,16 +26,22 @@ pub const Route = struct {
     }
 
     pub fn init() Route {
-        return Route{ .handlers = [_]RouteHandlerFn{null} ** 9 };
+        return Route{ .handlers = [_]?RouteHandlerFn{null} ** 9 };
     }
 
-    pub fn get_handler(self: Route, method: Method) RouteHandlerFn {
+    pub fn get_handler(self: Route, method: Method) ?RouteHandlerFn {
         return self.handlers[method_to_index(method)];
     }
 
     pub fn get(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.GET)] = handler_fn;
+        return Route{ .handlers = new_handlers };
+    }
+
+    pub fn head(self: Route, handler_fn: RouteHandlerFn) Route {
+        var new_handlers = self.handlers;
+        new_handlers[comptime method_to_index(.HEAD)] = handler_fn;
         return Route{ .handlers = new_handlers };
     }
 
@@ -54,6 +60,24 @@ pub const Route = struct {
     pub fn delete(self: Route, handler_fn: RouteHandlerFn) Route {
         var new_handlers = self.handlers;
         new_handlers[comptime method_to_index(.DELETE)] = handler_fn;
+        return Route{ .handlers = new_handlers };
+    }
+
+    pub fn connect(self: Route, handler_fn: RouteHandlerFn) Route {
+        var new_handlers = self.handlers;
+        new_handlers[comptime method_to_index(.CONNECT)] = handler_fn;
+        return Route{ .handlers = new_handlers };
+    }
+
+    pub fn options(self: Route, handler_fn: RouteHandlerFn) Route {
+        var new_handlers = self.handlers;
+        new_handlers[comptime method_to_index(.OPTIONS)] = handler_fn;
+        return Route{ .handlers = new_handlers };
+    }
+
+    pub fn trace(self: Route, handler_fn: RouteHandlerFn) Route {
+        var new_handlers = self.handlers;
+        new_handlers[comptime method_to_index(.TRACE)] = handler_fn;
         return Route{ .handlers = new_handlers };
     }
 
