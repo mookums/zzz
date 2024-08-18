@@ -1,7 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const panic = std.debug.panic;
 const log = std.log.scoped(.@"zzz/server");
+
+const Async = @import("../async/lib.zig").Async;
 
 const Job = @import("../core/lib.zig").Job;
 const Pool = @import("../core/lib.zig").Pool;
@@ -144,7 +147,7 @@ pub const Server = struct {
         try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
     }
 
-    fn respond(p: *Provision, uring: *std.os.linux.IoUring, router: Router, config: ServerConfig) !void {
+    fn respond(p: *Provision, backend: *Async, router: Router, config: ServerConfig) !void {
         p.response = blk: {
             const captured = router.get_route_from_host(p.request.host, p.captures);
             if (captured) |c| {
@@ -185,18 +188,18 @@ pub const Server = struct {
         var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
         p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
 
-        _ = uring.send(@as(u64, @intFromPtr(p)), p.socket, pseudo.get(0, config.size_socket_buffer), 0) catch unreachable;
+        backend.queue_send(p, p.socket, pseudo.get(0, config.size_socket_buffer)) catch unreachable;
     }
 
     /// This function assumes that the socket is set up and
     /// is already listening.
-    fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, uring: *std.os.linux.IoUring) !void {
+    fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, backend: *Async) !void {
         const allocator = config.allocator;
-        defer uring.deinit();
+        //defer uring.deinit();
 
         // Create a buffer of Completion Queue Events to copy into.
-        const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
-        defer allocator.free(cqes);
+        //const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, config.size_connections_max);
+        //defer allocator.free(cqes);
 
         var provision_pool = try Pool(Provision).init(allocator, config.size_connections_max, struct {
             fn init_hook(provisions: []Provision, ctx: anytype) void {
@@ -237,7 +240,7 @@ pub const Server = struct {
         }.deinit_hook, config);
 
         // Create and send the first Job.
-        const first_provision = Provision{
+        var first_provision = Provision{
             .job = .Accept,
             .index = undefined,
             .socket = undefined,
@@ -250,24 +253,25 @@ pub const Server = struct {
         };
 
         var accepted = false;
-        _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
+        _ = try backend.queue_accept(&first_provision, server_socket);
+        try backend.submit();
 
         while (true) {
-            const cqe_count = try uring.copy_cqes(cqes, 0);
+            const completions = try backend.reap();
+            const completions_count = completions.len;
 
-            cqe_loop: for (0..cqe_count) |i| {
-                const cqe = cqes[i];
-                const p: *Provision = @ptrFromInt(cqe.user_data);
+            reap_loop: for (completions[0..completions_count]) |completion| {
+                const p: *Provision = @ptrCast(@alignCast(completion.context));
 
                 switch (p.job) {
                     .Accept => {
                         accepted = true;
-                        const socket: std.posix.socket_t = cqe.res;
+                        const socket: std.posix.socket_t = completion.result;
 
                         // Borrow a provision from the pool otherwise close the socket.
-                        const provision = provision_pool.borrow(@intCast(cqe.res)) catch {
+                        const provision = provision_pool.borrow(@intCast(completion.result)) catch {
                             std.posix.close(socket);
-                            continue :cqe_loop;
+                            continue :reap_loop;
                         };
 
                         // Disable Nagle's.
@@ -283,20 +287,19 @@ pub const Server = struct {
                         provision.item.socket = socket;
                         provision.item.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
 
-                        const read_buffer = .{ .buffer = provision.item.buffer };
-                        _ = try uring.recv(@as(u64, @intFromPtr(provision.item)), socket, read_buffer, 0);
+                        _ = try backend.queue_recv(provision.item, socket, provision.item.buffer);
                     },
 
                     .Recv => |*read_inner| {
                         const kind = read_inner.kind;
-                        const read_count = cqe.res;
+                        const read_count = completion.result;
 
                         // If the socket is closed.
                         if (read_count <= 0) {
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
                             p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
-                            continue :cqe_loop;
+                            continue :reap_loop;
                         }
 
                         read_inner.count += @intCast(read_count);
@@ -310,8 +313,9 @@ pub const Server = struct {
 
                                 // Basically, this means we haven't finished processing the header.
                                 if (header_ends == null and !too_long) {
-                                    _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                    continue :cqe_loop;
+                                    _ = try backend.queue_recv(completion.context, p.socket, p.buffer);
+                                    //_ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                    continue :reap_loop;
                                 }
 
                                 // The +4 is to account for the slice we match.
@@ -338,13 +342,14 @@ pub const Server = struct {
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
                                     p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                    continue :cqe_loop;
+                                    //_ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
+                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    continue :reap_loop;
                                 };
 
                                 if (!p.request.expect_body()) {
-                                    respond(p, uring, router, config) catch return;
-                                    continue :cqe_loop;
+                                    respond(p, backend, router, config) catch return;
+                                    continue :reap_loop;
                                 }
 
                                 // Everything after here is a Request that is expecting a body.
@@ -361,9 +366,10 @@ pub const Server = struct {
                                                 const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                                 var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
                                                 p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                                _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
+                                                //_ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
+                                                _ = try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
 
-                                                continue :cqe_loop;
+                                                continue :reap_loop;
                                             };
                                         }
                                     }
@@ -377,28 +383,28 @@ pub const Server = struct {
                                         // Whole Body
                                         log.debug("Got whole body with header", .{});
                                         p.request.set_body(p.request_buffer.items[header_end .. header_end + difference]);
-                                        respond(p, uring, router, config) catch return;
-                                        continue :cqe_loop;
+                                        respond(p, backend, router, config) catch return;
+                                        continue :reap_loop;
                                     } else {
                                         // Partial Body
                                         log.debug("Got partial body with header", .{});
                                         read_inner.kind = .{ .Body = header_end };
-                                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                        continue :cqe_loop;
+                                        try backend.queue_recv(completion.context, p.socket, p.buffer);
+                                        continue :reap_loop;
                                     }
                                 } else if (header_end == p.request_buffer.items.len) {
                                     // Body of length 0 probably or only got header.
                                     if (content_length == 0) {
                                         // Body of Length 0.
                                         p.request.set_body("");
-                                        respond(p, uring, router, config) catch return;
-                                        continue :cqe_loop;
+                                        respond(p, backend, router, config) catch return;
+                                        continue :reap_loop;
                                     } else {
                                         // Got only header.
                                         log.debug("Got no body, all header", .{});
                                         read_inner.kind = .{ .Body = header_end };
-                                        _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
-                                        continue :cqe_loop;
+                                        try backend.queue_recv(completion.context, p.socket, p.buffer);
+                                        continue :reap_loop;
                                     }
                                 } else unreachable;
                             },
@@ -416,8 +422,8 @@ pub const Server = struct {
                                                 const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                                 var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
                                                 p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                                _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                                continue :cqe_loop;
+                                                try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                                continue :reap_loop;
                                             };
                                         }
                                     }
@@ -427,8 +433,8 @@ pub const Server = struct {
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
                                     p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                    continue :cqe_loop;
+                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    continue :reap_loop;
                                 };
 
                                 // If this body will be too long, abort early.
@@ -437,15 +443,15 @@ pub const Server = struct {
                                     const header_buffer = try p.response.headers_into_buffer(p.buffer);
                                     var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
                                     p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-                                    _ = try uring.send(cqe.user_data, p.socket, pseudo.get(0, config.size_socket_buffer), 0);
-                                    continue :cqe_loop;
+                                    try backend.queue_send(completion.context, p.socket, pseudo.get(0, config.size_socket_buffer));
+                                    continue :reap_loop;
                                 }
 
                                 if (read_inner.count >= content_length) {
                                     p.request.set_body(p.request_buffer.items[header_end..(header_end + content_length)]);
-                                    respond(p, uring, router, config) catch return;
+                                    respond(p, backend, router, config) catch return;
                                 } else {
-                                    _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                                    try backend.queue_recv(completion.context, p.socket, p.buffer);
                                 }
                             },
                         }
@@ -455,7 +461,7 @@ pub const Server = struct {
                         // When we are sending the write, we need to think of a couple of conditions.
                         // We basically want to coalese the header and body into a pseudo-buffer.
                         // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
-                        const write_count = cqe.res;
+                        const write_count = completion.result;
                         // We need to create the Pseudoslice at the START of the write set and keep it that way.
 
                         if (write_count <= 0) {
@@ -463,7 +469,7 @@ pub const Server = struct {
                             _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
                             p.request_buffer.clearAndFree();
                             provision_pool.release(p.index);
-                            continue :cqe_loop;
+                            continue :reap_loop;
                         }
 
                         inner.count += @intCast(write_count);
@@ -476,13 +482,12 @@ pub const Server = struct {
                             p.request_buffer.clearRetainingCapacity();
 
                             p.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
-                            _ = try uring.recv(cqe.user_data, p.socket, .{ .buffer = p.buffer }, 0);
+                            try backend.queue_recv(completion.context, p.socket, p.buffer);
                         } else {
-                            _ = try uring.send(
-                                cqe.user_data,
+                            try backend.queue_send(
+                                completion.context,
                                 p.socket,
                                 inner.slice.get(inner.count, inner.count + config.size_socket_buffer),
-                                0,
                             );
                         }
                     },
@@ -492,12 +497,11 @@ pub const Server = struct {
             }
 
             if (!provision_pool.full and accepted) {
-                _ = try uring.accept(@as(u64, @intFromPtr(&first_provision)), server_socket, null, null, 0);
+                try backend.queue_accept(&first_provision, server_socket);
                 accepted = false;
             }
 
-            _ = try uring.submit_and_wait(1);
-            assert(uring.cq_ready() >= 1);
+            try backend.submit();
         }
 
         unreachable;
@@ -514,6 +518,8 @@ pub const Server = struct {
         log.info("threading mode: {s}", .{@tagName(self.config.threading)});
         try std.posix.listen(server_socket, self.config.size_backlog_kernel);
 
+        // Choose a backend here to use with the socket.
+        const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
         const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
 
         // Create our Ring.
@@ -522,11 +528,14 @@ pub const Server = struct {
             base_flags,
         );
 
+        var uring_backend = try AsyncIoUring.init(&uring);
+        var backend = uring_backend.to_async();
+
         const fd = uring.fd;
         assert(fd >= 0);
 
         switch (self.config.threading) {
-            .single_threaded => run(self.config, self.router, server_socket, &uring) catch {
+            .single_threaded => run(self.config, self.router, server_socket, &backend) catch {
                 log.err("failed due to unrecoverable error!", .{});
                 return;
             },
@@ -569,14 +578,17 @@ pub const Server = struct {
                                 return;
                             };
 
-                            run(config, router, s_socket, &thread_uring) catch {
+                            var thread_uring_backend = try AsyncIoUring.init(&thread_uring);
+                            var thread_backend = thread_uring_backend.to_async();
+
+                            run(config, router, s_socket, &thread_backend) catch {
                                 log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
                             };
                         }
                     }.handler_fn, .{ self.config, self.router, server_socket, fd, i }));
                 }
 
-                run(self.config, self.router, server_socket, &uring) catch {
+                run(self.config, self.router, server_socket, &backend) catch {
                     log.err("root thread failed due to unrecoverable error!", .{});
                 };
 
