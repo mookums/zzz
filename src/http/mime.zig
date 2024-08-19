@@ -75,6 +75,12 @@ pub const Mime = struct {
         .description = "MP3 audio",
     };
 
+    pub const PNG = Mime{
+        .content_type = "image/png",
+        .extension = ".png",
+        .description = "Portable Network Graphics",
+    };
+
     pub const PDF = Mime{
         .content_type = "application/pdf",
         .extension = ".pdf",
@@ -140,6 +146,7 @@ pub const Mime = struct {
             extension_to_key(Mime.JS.extension) => Mime.JS,
             extension_to_key(Mime.JSON.extension) => Mime.JSON,
             extension_to_key(Mime.MP3.extension) => Mime.MP3,
+            extension_to_key(Mime.PNG.extension) => Mime.PNG,
             extension_to_key(Mime.PDF.extension) => Mime.PDF,
 
             // If it is not a supported MIME type, send it as an octet-stream.
@@ -165,6 +172,7 @@ pub const Mime = struct {
             content_type_to_key(Mime.JS.content_type) => Mime.JS,
             content_type_to_key(Mime.JSON.content_type) => Mime.JSON,
             content_type_to_key(Mime.MP3.content_type) => Mime.MP3,
+            content_type_to_key(Mime.PNG.content_type) => Mime.PNG,
             content_type_to_key(Mime.PDF.content_type) => Mime.PDF,
 
             // If it is not a supported MIME type, we use the bin extension.
@@ -191,6 +199,7 @@ const all_mimes = [_]Mime{
     Mime.JS,
     Mime.JSON,
     Mime.MP3,
+    Mime.PNG,
     Mime.PDF,
 };
 
