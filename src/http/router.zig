@@ -34,24 +34,29 @@ pub const Router = struct {
             pub fn handler_fn(request: Request, context: Context) Response {
                 _ = request;
                 const search_path = context.captures[0].Remaining;
-                log.debug("Search Path: {s}", .{search_path});
+                const file_path = std.fmt.allocPrint(context.allocator, "{s}/{s}", .{ dir_path, search_path }) catch {
+                    return Response.init(.@"Internal Server Error", Mime.HTML, "");
+                };
 
-                var curr_dir = std.fs.cwd().openDir(dir_path, .{}) catch unreachable;
-
-                var iter = std.mem.tokenizeScalar(u8, search_path, '/');
-                while (iter.next()) |chunk| {
-                    // This is the final part of the match...
-                    if (iter.peek() == null) {
-                        const file = curr_dir.openFile(chunk, .{ .mode = .RW }) catch unreachable;
-                        _ = file;
+                const extension_start = std.mem.lastIndexOfScalar(u8, search_path, '.');
+                const mime: Mime = blk: {
+                    if (extension_start) |start| {
+                        break :blk Mime.from_extension(search_path[start..]);
+                    } else {
+                        break :blk Mime.HTML;
                     }
+                };
 
-                    const next_dir = curr_dir.openDir(chunk, .{}) catch unreachable;
-                    defer curr_dir.close();
-                    curr_dir = next_dir;
-                }
+                const file: std.fs.File = std.fs.cwd().openFile(file_path, .{}) catch {
+                    return Response.init(.@"Not Found", Mime.HTML, "File not found");
+                };
+                defer file.close();
 
-                return Response.init(.Gone, Mime.HTML, "Not implemented yet.");
+                const file_bytes = file.readToEndAlloc(context.allocator, 1024 * 1024 * 4) catch {
+                    return Response.init(.@"Content Too Large", Mime.HTML, "");
+                };
+
+                return Response.init(.OK, mime, file_bytes);
             }
         }.handler_fn);
 
