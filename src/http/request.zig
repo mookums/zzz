@@ -1,23 +1,30 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const KVPair = @import("lib.zig").KVPair;
+const Headers = @import("lib.zig").Headers;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
 
+const RequestOptions = struct {
+    size_request_max: u32,
+    num_header_max: u32,
+};
+
 pub const Request = struct {
+    allocator: std.mem.Allocator,
     size_request_max: u32,
     method: Method,
     host: []const u8,
     version: std.http.Version,
-    headers: [32]KVPair = [_]KVPair{undefined} ** 32,
+    headers: Headers,
     body: []const u8,
-    headers_idx: usize = 0,
 
     /// This is for constructing a Request.
-    pub fn init(size_request_max: u32) Request {
+    pub fn init(allocator: std.mem.Allocator, options: RequestOptions) !Request {
         return Request{
-            .size_request_max = size_request_max,
+            .allocator = allocator,
+            .headers = try Headers.init(allocator, options.num_header_max),
+            .size_request_max = options.size_request_max,
             .method = undefined,
             .host = undefined,
             .version = undefined,
@@ -25,8 +32,12 @@ pub const Request = struct {
         };
     }
 
+    pub fn deinit(self: *Request) void {
+        self.headers.deinit();
+    }
+
     pub fn parse_headers(self: *Request, bytes: []const u8) HTTPError!void {
-        self.clear_headers();
+        self.headers.clear();
         var total_size: u32 = 0;
         var line_iter = std.mem.tokenizeAny(u8, bytes, "\r\n");
 
@@ -59,7 +70,7 @@ pub const Request = struct {
                 var header_iter = std.mem.tokenizeScalar(u8, line, ':');
                 const key = header_iter.next() orelse return HTTPError.MalformedRequest;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
-                try self.add_header(.{ .key = key, .value = value });
+                try self.headers.add(key, value);
             }
         }
     }
@@ -74,19 +85,6 @@ pub const Request = struct {
 
     pub fn set_version(self: *Request, version: std.http.Version) void {
         self.version = version;
-    }
-
-    pub fn add_header(self: *Request, kv: KVPair) HTTPError!void {
-        if (self.headers_idx < self.headers.len) {
-            self.headers[self.headers_idx] = kv;
-            self.headers_idx += 1;
-        } else {
-            return HTTPError.TooManyHeaders;
-        }
-    }
-
-    pub fn clear_headers(self: *Request) void {
-        self.headers_idx = 0;
     }
 
     pub fn set_body(self: *Request, body: []const u8) void {
@@ -112,16 +110,16 @@ test "Parse Request" {
         \\Accept: text/html
     ;
 
-    var request = Request.init(1024);
+    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 });
+    defer request.deinit();
+
     try request.parse_headers(request_text[0..]);
 
     try testing.expectEqual(.GET, request.method);
     try testing.expectEqualStrings("/", request.host);
     try testing.expectEqual(.@"HTTP/1.1", request.version);
-    try testing.expectEqualStrings("Host", request.headers[0].key);
-    try testing.expectEqualStrings("localhost:9862", request.headers[0].value);
-    try testing.expectEqualStrings("Connection", request.headers[1].key);
-    try testing.expectEqualStrings("keep-alive", request.headers[1].value);
-    try testing.expectEqualStrings("Accept", request.headers[2].key);
-    try testing.expectEqualStrings("text/html", request.headers[2].value);
+
+    try testing.expectEqualStrings("localhost:9862", request.headers.get("Host").?);
+    try testing.expectEqualStrings("keep-alive", request.headers.get("Connection").?);
+    try testing.expectEqualStrings("text/html", request.headers.get("Accept").?);
 }

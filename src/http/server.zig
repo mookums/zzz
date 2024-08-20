@@ -11,14 +11,14 @@ const Pool = @import("../core/lib.zig").Pool;
 const Pseudoslice = @import("../core/lib.zig").Pseudoslice;
 
 const HTTPError = @import("lib.zig").HTTPError;
+const Request = @import("lib.zig").Request;
+const Response = @import("lib.zig").Response;
+const Mime = @import("lib.zig").Mime;
+const Context = @import("lib.zig").Context;
+const Router = @import("lib.zig").Router;
 
 const Capture = @import("routing_trie.zig").Capture;
 const Provision = @import("provision.zig").Provision;
-const Router = @import("router.zig").Router;
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
-const Mime = @import("mime.zig").Mime;
-const Context = @import("context.zig").Context;
 
 const ServerThreadCount = union(enum) {
     auto,
@@ -70,14 +70,14 @@ pub const ServerConfig = struct {
     ///
     /// Default: 4 KB.
     size_socket_buffer: u32 = 1024 * 4,
-    /// Maximum number of headers per Response.
+    /// Maximum number of headers
     ///
-    /// Default: 8
-    response_headers_max: u8 = 8,
+    /// Default: 32
+    num_header_max: u8 = 32,
     /// Maximum number of Captures in a Route URL.
     ///
     /// Default: 8
-    size_captures_max: u32 = 8,
+    num_captures_max: u32 = 8,
 };
 
 pub const Server = struct {
@@ -103,13 +103,13 @@ pub const Server = struct {
         self.router.deinit();
     }
 
-    pub fn bind(self: *Server, name: []const u8, port: u16) !void {
-        assert(name.len > 0);
+    pub fn bind(self: *Server, host: []const u8, port: u16) !void {
+        assert(host.len > 0);
         assert(port > 0);
         defer assert(self.socket != null);
 
-        const addr = try std.net.Address.resolveIp(name, port);
-        log.info("binding zzz server on {s}:{d}", .{ name, port });
+        const addr = try std.net.Address.resolveIp(host, port);
+        log.info("binding zzz server on {s}:{d}", .{ host, port });
 
         const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
@@ -198,6 +198,7 @@ pub const Server = struct {
     }
 
     fn clean_connection(provision: *Provision, provision_pool: *Pool(Provision), config: ServerConfig) void {
+        std.posix.close(provision.socket);
         _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
         provision.request_buffer.clearAndFree();
         provision_pool.release(provision.index);
@@ -214,16 +215,21 @@ pub const Server = struct {
                     provision.socket = undefined;
                     // Create Buffer
                     provision.buffer = ctx.allocator.alloc(u8, ctx.size_socket_buffer) catch {
-                        panic("attemping to statically allocate more memory than available.", .{});
+                        panic("attempting to statically allocate more memory than available. (Socket Buffer)", .{});
                     };
                     // Create Captures
-                    provision.captures = ctx.allocator.alloc(Capture, ctx.size_captures_max) catch {
-                        panic("attemping to statically allocate more memory than available.", .{});
+                    provision.captures = ctx.allocator.alloc(Capture, ctx.num_captures_max) catch {
+                        panic("attempting to statically allocate more memory than available. (Captures)", .{});
                     };
                     // Create Request ArrayList
                     provision.request_buffer = std.ArrayList(u8).init(ctx.allocator);
                     // Create Request
-                    provision.request = Request.init(ctx.size_request_max);
+                    provision.request = Request.init(ctx.allocator, .{
+                        .size_request_max = ctx.size_request_max,
+                        .num_header_max = ctx.num_header_max,
+                    }) catch {
+                        panic("attempting to statically allocatoe more memory than available. (Request)", .{});
+                    };
                     // Responses MUST be generated.
                     provision.response = undefined;
                     // Create the Context Arena
@@ -238,6 +244,7 @@ pub const Server = struct {
                     ctx.allocator.free(provision.buffer);
                     ctx.allocator.free(provision.captures);
                     provision.request_buffer.deinit();
+                    provision.request.deinit();
                     provision.arena.deinit();
                 }
             }
@@ -263,6 +270,7 @@ pub const Server = struct {
         while (true) {
             const completions = try backend.reap();
             const completions_count = completions.len;
+            assert(completions_count > 0);
 
             reap_loop: for (completions[0..completions_count]) |completion| {
                 const p: *Provision = @ptrCast(@alignCast(completion.context));
@@ -350,19 +358,15 @@ pub const Server = struct {
 
                                 // Everything after here is a Request that is expecting a body.
                                 const content_length = blk: {
-                                    // Basically, we are searching for Content-Length.
-                                    // If we don't have it, we assume the length is 0.
-                                    for (p.request.headers[0..p.request.headers_idx]) |header| {
-                                        if (std.mem.eql(u8, "Content-Length", header.key)) {
-                                            break :blk std.fmt.parseInt(u32, header.value, 10) catch {
-                                                p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                raw_respond(p, backend, config) catch return;
-                                                continue :reap_loop;
-                                            };
-                                        }
-                                    }
+                                    const length_string = p.request.headers.get("Content-Length") orelse {
+                                        break :blk 0;
+                                    };
 
-                                    break :blk 0;
+                                    break :blk std.fmt.parseInt(u32, length_string, 10) catch {
+                                        p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                        raw_respond(p, backend, config) catch return;
+                                        continue :reap_loop;
+                                    };
                                 };
 
                                 if (header_end < p.request_buffer.items.len) {
@@ -403,20 +407,17 @@ pub const Server = struct {
                                 log.debug("Body Matching Fired!", .{});
 
                                 const content_length = blk: {
-                                    for (p.request.headers[0..p.request.headers_idx]) |header| {
-                                        if (std.mem.eql(u8, header.key, "Content-Length")) {
-                                            break :blk std.fmt.parseInt(u32, header.value, 10) catch {
-                                                p.response = Response.init(.@"Bad Request", Mime.HTML, "");
-                                                raw_respond(p, backend, config) catch return;
-                                                continue :reap_loop;
-                                            };
-                                        }
-                                    }
+                                    const length_string = p.request.headers.get("Content-Length") orelse {
+                                        p.response = Response.init(.@"Length Required", Mime.HTML, "");
+                                        raw_respond(p, backend, config) catch return;
+                                        continue :reap_loop;
+                                    };
 
-                                    // Return a missing header response.
-                                    p.response = Response.init(.@"Length Required", Mime.HTML, "");
-                                    raw_respond(p, backend, config) catch return;
-                                    continue :reap_loop;
+                                    break :blk std.fmt.parseInt(u32, length_string, 10) catch {
+                                        p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                        raw_respond(p, backend, config) catch return;
+                                        continue :reap_loop;
+                                    };
                                 };
 
                                 // If this body will be too long, abort early.
@@ -437,11 +438,7 @@ pub const Server = struct {
                     },
 
                     .Send => |*inner| {
-                        // When we are sending the write, we need to think of a couple of conditions.
-                        // We basically want to coalese the header and body into a pseudo-buffer.
-                        // We then want to send out this pseudo-buffer, tracking when it doesn't fully send.
                         const write_count = completion.result;
-                        // We need to create the Pseudoslice at the START of the write set and keep it that way.
 
                         if (write_count <= 0) {
                             clean_connection(p, &provision_pool, config);
