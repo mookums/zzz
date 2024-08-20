@@ -197,6 +197,12 @@ pub const Server = struct {
         try raw_respond(p, backend, config);
     }
 
+    fn clean_connection(provision: *Provision, provision_pool: *Pool(Provision), config: ServerConfig) void {
+        _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+        provision.request_buffer.clearAndFree();
+        provision_pool.release(provision.index);
+    }
+
     /// This function assumes that the socket is set up and
     /// is already listening.
     fn run(config: ServerConfig, router: Router, server_socket: std.posix.socket_t, backend: *Async) !void {
@@ -293,9 +299,7 @@ pub const Server = struct {
 
                         // If the socket is closed.
                         if (read_count <= 0) {
-                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                            p.request_buffer.clearAndFree();
-                            provision_pool.release(p.index);
+                            clean_connection(p, &provision_pool, config);
                             continue :reap_loop;
                         }
 
@@ -440,10 +444,7 @@ pub const Server = struct {
                         // We need to create the Pseudoslice at the START of the write set and keep it that way.
 
                         if (write_count <= 0) {
-                            // Try resetting the arena after writing each request.
-                            _ = p.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-                            p.request_buffer.clearAndFree();
-                            provision_pool.release(p.index);
+                            clean_connection(p, &provision_pool, config);
                             continue :reap_loop;
                         }
 
