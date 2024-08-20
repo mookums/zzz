@@ -31,11 +31,17 @@ pub const Router = struct {
         assert(!self.locked);
 
         const route = Route.init().get(struct {
-            pub fn handler_fn(request: Request, context: Context) Response {
+            pub fn handler_fn(request: Request, response: *Response, context: Context) void {
                 _ = request;
+
                 const search_path = context.captures[0].Remaining;
                 const file_path = std.fmt.allocPrint(context.allocator, "{s}/{s}", .{ dir_path, search_path }) catch {
-                    return Response.init(.@"Internal Server Error", Mime.HTML, "");
+                    response.set(.{
+                        .status = .@"Internal Server Error",
+                        .mime = Mime.HTML,
+                        .body = "",
+                    });
+                    return;
                 };
 
                 const extension_start = std.mem.lastIndexOfScalar(u8, search_path, '.');
@@ -48,15 +54,29 @@ pub const Router = struct {
                 };
 
                 const file: std.fs.File = std.fs.cwd().openFile(file_path, .{}) catch {
-                    return Response.init(.@"Not Found", Mime.HTML, "File not found");
+                    response.set(.{
+                        .status = .@"Not Found",
+                        .mime = Mime.HTML,
+                        .body = "File Not Found",
+                    });
+                    return;
                 };
                 defer file.close();
 
                 const file_bytes = file.readToEndAlloc(context.allocator, 1024 * 1024 * 4) catch {
-                    return Response.init(.@"Content Too Large", Mime.HTML, "");
+                    response.set(.{
+                        .status = .@"Content Too Large",
+                        .mime = Mime.HTML,
+                        .body = "File Too Large",
+                    });
+                    return;
                 };
 
-                return Response.init(.OK, mime, file_bytes);
+                response.set(.{
+                    .status = .OK,
+                    .mime = mime,
+                    .body = file_bytes,
+                });
             }
         }.handler_fn);
 
@@ -76,8 +96,12 @@ pub const Router = struct {
     ) !void {
         assert(!self.locked);
         const route = Route.init().get(struct {
-            pub fn handler_fn(request: Request, _: Context) Response {
-                var response = Response.init(.OK, mime, bytes);
+            pub fn handler_fn(request: Request, response: *Response, _: Context) void {
+                response.set(.{
+                    .status = .OK,
+                    .mime = mime,
+                    .body = bytes,
+                });
 
                 // We can assume that this path will be unique SINCE this is an embedded file.
                 // This allows us to quickly generate a unique ETag.
@@ -86,20 +110,15 @@ pub const Router = struct {
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
                 if (comptime bytes.len > 1024) {
-                    response.add_header(.{
-                        .key = "ETag",
-                        .value = etag[0..],
-                    }) catch unreachable;
+                    response.headers.add("ETag", etag[0..]) catch unreachable;
 
                     if (request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
-                            response.status = .@"Not Modified";
-                            response.body = "";
+                            response.set_status(.@"Not Modified");
+                            response.set_body("");
                         }
                     }
                 }
-
-                return response;
             }
         }.handler_fn);
 

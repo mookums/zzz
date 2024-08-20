@@ -1,34 +1,68 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const Headers = @import("lib.zig").Headers;
 const KVPair = @import("lib.zig").KVPair;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 
-pub const Response = struct {
-    status: Status,
-    mime: ?Mime = null,
-    body: []const u8 = undefined,
-    header_pairs: [32]KVPair = [_]KVPair{undefined} ** 32,
-    headers_idx: u32 = 0,
+const ResponseOptions = struct {
+    num_headers_max: u32,
+};
 
-    pub fn init(status: Status, mime: ?Mime, body: []const u8) Response {
+pub const Response = struct {
+    allocator: std.mem.Allocator,
+    status: ?Status = null,
+    mime: ?Mime = null,
+    body: ?[]const u8 = null,
+    headers: Headers,
+
+    pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
         return Response{
-            .status = status,
-            .mime = mime,
-            .body = body,
+            .allocator = allocator,
+            .headers = try Headers.init(allocator, options.num_headers_max),
         };
     }
 
-    pub fn add_header(self: *Response, kv: KVPair) !void {
-        // Ensure that we don't have the colon since we add it back later.
-        assert(std.mem.indexOfScalar(u8, kv.key, ':') == null);
+    pub fn deinit(self: *Response) void {
+        self.headers.deinit();
+    }
 
-        if (self.headers_idx < self.header_pairs.len) {
-            self.header_pairs[self.headers_idx] = kv;
-            self.headers_idx += 1;
-        } else {
-            return error.TooManyHeaders;
+    pub fn set_status(self: *Response, status: Status) void {
+        self.status = status;
+    }
+
+    pub fn set_mime(self: *Response, mime: Mime) void {
+        self.mime = mime;
+    }
+
+    pub fn set_body(self: *Response, body: []const u8) void {
+        self.body = body;
+    }
+
+    pub fn clear(self: *Response) void {
+        self.status = null;
+        self.mime = null;
+        self.body = null;
+    }
+
+    const ResponseSetOptions = struct {
+        status: ?Status = null,
+        mime: ?Mime = null,
+        body: ?[]const u8 = null,
+    };
+
+    pub fn set(self: *Response, options: ResponseSetOptions) void {
+        if (options.status) |status| {
+            self.status = status;
+        }
+
+        if (options.mime) |mime| {
+            self.mime = mime;
+        }
+
+        if (options.body) |body| {
+            self.body = body;
         }
     }
 
@@ -41,9 +75,15 @@ pub const Response = struct {
     fn write_headers(self: Response, writer: anytype, content_length: u32) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
-        try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
-        try writer.writeAll(" ");
-        try writer.writeAll(@tagName(self.status));
+
+        if (self.status) |status| {
+            try std.fmt.formatInt(@intFromEnum(status), 10, .lower, .{}, writer);
+            try writer.writeAll(" ");
+            try writer.writeAll(@tagName(status));
+        } else {
+            return error.MissingStatus;
+        }
+
         try writer.writeAll("\r\n");
 
         // Standard Headers.
@@ -51,11 +91,11 @@ pub const Response = struct {
         try writer.writeAll("Connection: keep-alive\r\n");
 
         // Headers
-        for (0..self.headers_idx) |i| {
-            const h = self.header_pairs[i];
-            try writer.writeAll(h.key);
+        var iter = self.headers.map.iterator();
+        while (iter.next()) |entry| {
+            try writer.writeAll(entry.key_ptr.*);
             try writer.writeAll(": ");
-            try writer.writeAll(h.value);
+            try writer.writeAll(entry.value_ptr.*);
             try writer.writeAll("\r\n");
         }
 

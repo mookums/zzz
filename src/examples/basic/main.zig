@@ -12,8 +12,7 @@ pub fn main() !void {
 
     var router = zzz.Router.init(allocator);
     try router.serve_route("/", zzz.Route.init().get(struct {
-        pub fn handler_fn(request: zzz.Request, context: zzz.Context) zzz.Response {
-            _ = context;
+        pub fn handler_fn(_: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -23,8 +22,11 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            _ = request;
-            return zzz.Response.init(.OK, zzz.Mime.HTML, body[0..]);
+            response.set(.{
+                .status = .OK,
+                .mime = zzz.Mime.HTML,
+                .body = body[0..],
+            });
         }
     }.handler_fn));
 
