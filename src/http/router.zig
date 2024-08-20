@@ -77,7 +77,6 @@ pub const Router = struct {
         assert(!self.locked);
         const route = Route.init().get(struct {
             pub fn handler_fn(request: Request, _: Context) Response {
-                // Currently commented out as it causes a general slowdown.
                 var response = Response.init(.OK, mime, bytes);
 
                 // We can assume that this path will be unique SINCE this is an embedded file.
@@ -92,13 +91,10 @@ pub const Router = struct {
                         .value = etag[0..],
                     }) catch unreachable;
 
-                    // Search for If-None-Match
-                    for (request.headers[0..request.headers_idx]) |header| {
-                        if (std.mem.eql(u8, header.key, "If-None-Match")) {
-                            if (std.mem.eql(u8, etag, header.value)) {
-                                response.status = .@"Not Modified";
-                                response.body = "";
-                            }
+                    if (request.headers.get("If-None-Match")) |match| {
+                        if (std.mem.eql(u8, etag, match)) {
+                            response.status = .@"Not Modified";
+                            response.body = "";
                         }
                     }
                 }
