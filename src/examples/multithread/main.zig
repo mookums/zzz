@@ -2,7 +2,7 @@ const std = @import("std");
 const zzz = @import("zzz");
 const log = std.log.scoped(.@"examples/multithread");
 
-fn hi_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
+fn hi_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) void {
     const name = context.captures[0].String;
 
     const body = std.fmt.allocPrint(context.allocator,
@@ -23,36 +23,47 @@ fn hi_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
         \\ </body>
         \\ </html>
     , .{name}) catch {
-        return zzz.Response.init(
-            .@"Internal Server Error",
-            zzz.Mime.HTML,
-            "Out of Memory!",
-        );
+        response.set(.{
+            .status = .@"Internal Server Error",
+            .mime = zzz.Mime.HTML,
+            .body = "Out of Memory!",
+        });
+        return;
     };
 
-    return zzz.Response.init(.OK, zzz.Mime.HTML, body);
+    response.set(.{
+        .status = .OK,
+        .mime = zzz.Mime.HTML,
+        .body = body,
+    });
 }
 
-fn redir_handler(_: zzz.Request, context: zzz.Context) zzz.Response {
+fn redir_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) void {
     _ = context;
-    var response = zzz.Response.init(.@"Permanent Redirect", zzz.Mime.HTML, "");
-    response.add_header(.{
-        .key = "Location",
-        .value = "/hi/redirect",
-    }) catch {
-        return zzz.Response.init(
-            .@"Internal Server Error",
-            zzz.Mime.HTML,
-            "Redirect Handler Failed",
-        );
+    response.set(.{
+        .status = .@"Permanent Redirect",
+        .mime = zzz.Mime.HTML,
+        .body = "",
+    });
+
+    response.headers.add("Location", "/hi/redirect") catch {
+        response.set(.{
+            .status = .@"Internal Server Error",
+            .mime = zzz.Mime.HTML,
+            .body = "Redirect Handler Failed",
+        });
+        return;
     };
-    return response;
 }
 
-fn post_handler(request: zzz.Request, _: zzz.Context) zzz.Response {
+fn post_handler(request: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
     log.debug("Body: {s}", .{request.body});
 
-    return zzz.Response.init(.OK, zzz.Mime.HTML, "");
+    response.set(.{
+        .status = .OK,
+        .mime = zzz.Mime.HTML,
+        .body = "",
+    });
 }
 
 pub fn main() !void {

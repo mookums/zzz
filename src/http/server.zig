@@ -152,14 +152,15 @@ pub const Server = struct {
     ///
     /// See: `route_and_respond`
     fn raw_respond(p: *Provision, backend: *Async, config: ServerConfig) !void {
-        const header_buffer = try p.response.headers_into_buffer(p.buffer, @intCast(p.response.body.len));
-        var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
+        const body = p.response.body orelse "";
+        const header_buffer = try p.response.headers_into_buffer(p.buffer, @intCast(body.len));
+        var pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
         p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
         try backend.queue_send(p, p.socket, pseudo.get(0, config.size_socket_buffer));
     }
 
     fn route_and_respond(p: *Provision, backend: *Async, router: Router, config: ServerConfig) !void {
-        p.response = blk: {
+        route: {
             const captured = router.get_route_from_host(p.request.host, p.captures);
             if (captured) |c| {
                 const handler = c.route.get_handler(p.request.method);
@@ -171,24 +172,27 @@ pub const Server = struct {
                         c.captures,
                     );
 
-                    break :blk func(p.request, context);
+                    func(p.request, &p.response, context);
+                    break :route;
                 } else {
                     // If we match the route but not the method.
-                    break :blk Response.init(
-                        .@"Method Not Allowed",
-                        Mime.HTML,
-                        "405 Method Not Allowed",
-                    );
+                    p.response.set(.{
+                        .status = .@"Method Not Allowed",
+                        .mime = Mime.HTML,
+                        .body = "405 Method Not Allowed",
+                    });
+                    break :route;
                 }
             }
 
             // Didn't match any route.
-            break :blk Response.init(
-                .@"Not Found",
-                Mime.HTML,
-                "404 Not Found",
-            );
-        };
+            p.response.set(.{
+                .status = .@"Not Found",
+                .mime = Mime.HTML,
+                .body = "404 Not Found",
+            });
+            break :route;
+        }
 
         if (p.response.status == .Kill) {
             return error.Kill;
@@ -200,6 +204,7 @@ pub const Server = struct {
     fn clean_connection(provision: *Provision, provision_pool: *Pool(Provision), config: ServerConfig) void {
         std.posix.close(provision.socket);
         _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+        provision.response.clear();
         provision.request_buffer.clearAndFree();
         provision_pool.release(provision.index);
     }
@@ -228,10 +233,14 @@ pub const Server = struct {
                         .size_request_max = ctx.size_request_max,
                         .num_header_max = ctx.num_header_max,
                     }) catch {
-                        panic("attempting to statically allocatoe more memory than available. (Request)", .{});
+                        panic("attempting to statically allocate more memory than available. (Request)", .{});
                     };
-                    // Responses MUST be generated.
-                    provision.response = undefined;
+                    // Create Response
+                    provision.response = Response.init(ctx.allocator, .{
+                        .num_headers_max = ctx.num_header_max,
+                    }) catch {
+                        panic("attempting to statically allocate more memory than available. (Response)", .{});
+                    };
                     // Create the Context Arena
                     provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
                 }
@@ -245,6 +254,7 @@ pub const Server = struct {
                     ctx.allocator.free(provision.captures);
                     provision.request_buffer.deinit();
                     provision.request.deinit();
+                    provision.response.deinit();
                     provision.arena.deinit();
                 }
             }
@@ -329,23 +339,29 @@ pub const Server = struct {
                                 // The +4 is to account for the slice we match.
                                 const header_end: u32 = @intCast(header_ends.? + 4);
                                 p.request.parse_headers(p.request_buffer.items[0..header_end]) catch |e| {
-                                    p.response = switch (e) {
-                                        HTTPError.ContentTooLarge => Response.init(
-                                            .@"Content Too Large",
-                                            Mime.HTML,
-                                            "Request was too large",
-                                        ),
-                                        HTTPError.TooManyHeaders => Response.init(
-                                            .@"Request Headers Fields Too Large",
-                                            Mime.HTML,
-                                            "Too Many Headers",
-                                        ),
-                                        HTTPError.MalformedRequest => Response.init(
-                                            .@"Bad Request",
-                                            Mime.HTML,
-                                            "Malformed Request",
-                                        ),
-                                    };
+                                    switch (e) {
+                                        HTTPError.ContentTooLarge => {
+                                            p.response.set(.{
+                                                .status = .@"Content Too Large",
+                                                .mime = Mime.HTML,
+                                                .body = "Request was too large",
+                                            });
+                                        },
+                                        HTTPError.TooManyHeaders => {
+                                            p.response.set(.{
+                                                .status = .@"Request Headers Fields Too Large",
+                                                .mime = Mime.HTML,
+                                                .body = "Too Many Headers",
+                                            });
+                                        },
+                                        HTTPError.MalformedRequest => {
+                                            p.response.set(.{
+                                                .status = .@"Bad Request",
+                                                .mime = Mime.HTML,
+                                                .body = "Malformed Request",
+                                            });
+                                        },
+                                    }
 
                                     raw_respond(p, backend, config) catch return;
                                     continue :reap_loop;
@@ -363,7 +379,11 @@ pub const Server = struct {
                                     };
 
                                     break :blk std.fmt.parseInt(u32, length_string, 10) catch {
-                                        p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                        p.response.set(.{
+                                            .status = .@"Bad Request",
+                                            .mime = Mime.HTML,
+                                            .body = "",
+                                        });
                                         raw_respond(p, backend, config) catch return;
                                         continue :reap_loop;
                                     };
@@ -374,7 +394,8 @@ pub const Server = struct {
                                     if (difference == content_length) {
                                         // Whole Body
                                         log.debug("Got whole body with header", .{});
-                                        p.request.set_body(p.request_buffer.items[header_end .. header_end + difference]);
+                                        const body_end = header_end + difference;
+                                        p.request.set_body(p.request_buffer.items[header_end..body_end]);
                                         route_and_respond(p, backend, router, config) catch return;
                                         continue :reap_loop;
                                     } else {
@@ -408,13 +429,21 @@ pub const Server = struct {
 
                                 const content_length = blk: {
                                     const length_string = p.request.headers.get("Content-Length") orelse {
-                                        p.response = Response.init(.@"Length Required", Mime.HTML, "");
+                                        p.response.set(.{
+                                            .status = .@"Length Required",
+                                            .mime = Mime.HTML,
+                                            .body = "",
+                                        });
                                         raw_respond(p, backend, config) catch return;
                                         continue :reap_loop;
                                     };
 
                                     break :blk std.fmt.parseInt(u32, length_string, 10) catch {
-                                        p.response = Response.init(.@"Bad Request", Mime.HTML, "");
+                                        p.response.set(.{
+                                            .status = .@"Bad Request",
+                                            .mime = Mime.HTML,
+                                            .body = "",
+                                        });
                                         raw_respond(p, backend, config) catch return;
                                         continue :reap_loop;
                                     };
@@ -422,13 +451,18 @@ pub const Server = struct {
 
                                 // If this body will be too long, abort early.
                                 if (header_end + content_length > config.size_request_max) {
-                                    p.response = Response.init(.@"Content Too Large", Mime.HTML, "");
+                                    p.response.set(.{
+                                        .status = .@"Content Too Large",
+                                        .mime = Mime.HTML,
+                                        .body = "",
+                                    });
                                     raw_respond(p, backend, config) catch return;
                                     continue :reap_loop;
                                 }
 
                                 if (read_inner.count >= content_length) {
-                                    p.request.set_body(p.request_buffer.items[header_end..(header_end + content_length)]);
+                                    const end = header_end + content_length;
+                                    p.request.set_body(p.request_buffer.items[header_end..end]);
                                     route_and_respond(p, backend, router, config) catch return;
                                 } else {
                                     try backend.queue_recv(completion.context, p.socket, p.buffer);
@@ -448,8 +482,7 @@ pub const Server = struct {
                         inner.count += @intCast(write_count);
 
                         if (inner.count >= inner.slice.len) {
-                            // Done writing...
-                            // TODO: Reimplement this in a better way.
+                            p.response.clear();
                             p.request_buffer.clearRetainingCapacity();
 
                             p.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };

@@ -6,13 +6,13 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var buffer = [_]u8{undefined} ** (1024 * 60);
+    var buffer = [_]u8{undefined} ** (1024 * 100);
     var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
     const allocator = fba.allocator();
 
     var router = zzz.Router.init(allocator);
     try router.serve_route("/", zzz.Route.init().get(struct {
-        pub fn handler_fn(request: zzz.Request, _: zzz.Context) zzz.Response {
+        pub fn handler_fn(_: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -22,8 +22,11 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            _ = request;
-            return zzz.Response.init(.OK, zzz.Mime.HTML, body[0..]);
+            response.set(.{
+                .status = .OK,
+                .mime = zzz.Mime.HTML,
+                .body = body[0..],
+            });
         }
     }.handler_fn));
 
