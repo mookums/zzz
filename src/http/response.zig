@@ -32,21 +32,13 @@ pub const Response = struct {
         }
     }
 
-    pub fn response_into_buffer(self: Response, buffer: []u8) ![]u8 {
+    pub fn headers_into_buffer(self: Response, buffer: []u8, content_length: u32) ![]u8 {
         var stream = std.io.fixedBufferStream(buffer);
-        const writer = stream.writer();
-        try self.write_headers(writer);
-        try writer.writeAll(self.body);
+        try self.write_headers(stream.writer(), content_length);
         return stream.getWritten();
     }
 
-    pub fn headers_into_buffer(self: Response, buffer: []u8) ![]u8 {
-        var stream = std.io.fixedBufferStream(buffer);
-        try self.write_headers(stream.writer());
-        return stream.getWritten();
-    }
-
-    fn write_headers(self: Response, writer: anytype) !void {
+    fn write_headers(self: Response, writer: anytype, content_length: u32) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
         try std.fmt.formatInt(@intFromEnum(self.status), 10, .lower, .{}, writer);
@@ -80,7 +72,7 @@ pub const Response = struct {
         }
 
         try writer.writeAll("Content-Length: ");
-        try std.fmt.formatInt(self.body.len, 10, .lower, .{}, writer);
+        try std.fmt.formatInt(content_length, 10, .lower, .{}, writer);
         try writer.writeAll("\r\n");
         try writer.writeAll("\r\n");
     }

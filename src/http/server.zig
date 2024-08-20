@@ -152,7 +152,7 @@ pub const Server = struct {
     ///
     /// See: `route_and_respond`
     fn raw_respond(p: *Provision, backend: *Async, config: ServerConfig) !void {
-        const header_buffer = try p.response.headers_into_buffer(p.buffer);
+        const header_buffer = try p.response.headers_into_buffer(p.buffer, @intCast(p.response.body.len));
         var pseudo = Pseudoslice.init(header_buffer, p.response.body, p.buffer);
         p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
         try backend.queue_send(p, p.socket, pseudo.get(0, config.size_socket_buffer));
