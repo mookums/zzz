@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const HTTPError = @import("lib.zig").HTTPError;
 
 fn CaseStringMap(comptime T: type) type {
@@ -53,6 +54,7 @@ pub const Headers = struct {
     }
 
     pub fn add(self: *Headers, key: []const u8, value: []const u8) HTTPError!void {
+        assert(std.mem.indexOfScalar(u8, key, ':') == null);
         if (self.map.count() == self.num_header_max) return HTTPError.TooManyHeaders;
         self.map.putAssumeCapacity(key, value);
     }
