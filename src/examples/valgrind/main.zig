@@ -39,6 +39,8 @@ pub fn main() !void {
     }.handler_fn));
 
     var server = zzz.Server.init(.{ .allocator = allocator }, router);
+    defer server.deinit();
+
     try server.bind(host, port);
     try server.listen();
 }
