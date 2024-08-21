@@ -32,6 +32,7 @@ pub fn main() !void {
 
     var server = zzz.Server.init(.{
         .allocator = allocator,
+        .ip_version = .ipv4,
         .size_backlog_kernel = 32,
         .size_connections_max = 16,
         .size_context_arena_retain = 64,
