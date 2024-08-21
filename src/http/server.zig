@@ -30,6 +30,12 @@ const ServerThreading = union(enum) {
     multi_threaded: ServerThreadCount,
 };
 
+const IpVersion = enum {
+    auto,
+    ipv4,
+    ipv6,
+};
+
 pub const ServerConfig = struct {
     /// The allocator that server will use.
     allocator: std.mem.Allocator,
@@ -37,6 +43,10 @@ pub const ServerConfig = struct {
     ///
     /// Default: .single_threaded
     threading: ServerThreading = .single_threaded,
+    /// IP Version to use.
+    ///
+    /// Default: .auto
+    ip_version: IpVersion = .auto,
     /// Kernel Backlog Value.
     size_backlog_kernel: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
@@ -108,8 +118,23 @@ pub const Server = struct {
         assert(port > 0);
         defer assert(self.socket != null);
 
-        const addr = try std.net.Address.resolveIp(host, port);
-        log.info("binding zzz server on {s}:{d}", .{ host, port });
+        const addr = blk: {
+            log.info("resolving with ip version: {s}", .{@tagName(self.config.ip_version)});
+            switch (self.config.ip_version) {
+                .auto => {
+                    log.info("binding zzz server on {s}:{d}", .{ host, port });
+                    break :blk try std.net.Address.resolveIp(host, port);
+                },
+                .ipv4 => {
+                    log.info("binding zzz server on {s}:{d} | forcing ipv4", .{ host, port });
+                    break :blk try std.net.Address.parseIp4(host, port);
+                },
+                .ipv6 => {
+                    log.info("binding zzz server on {s}:{d} | forcing ipv6", .{ host, port });
+                    break :blk try std.net.Address.resolveIp6(host, port);
+                },
+            }
+        };
 
         const socket = blk: {
             const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
