@@ -349,7 +349,7 @@ pub const Server = struct {
                                         },
                                         HTTPError.TooManyHeaders => {
                                             p.response.set(.{
-                                                .status = .@"Request Headers Fields Too Large",
+                                                .status = .@"Request Header Fields Too Large",
                                                 .mime = Mime.HTML,
                                                 .body = "Too Many Headers",
                                             });
