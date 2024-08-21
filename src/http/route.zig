@@ -29,6 +29,30 @@ pub const Route = struct {
         return Route{ .handlers = [_]?RouteHandlerFn{null} ** 9 };
     }
 
+    /// Returns a comma delinated list of allowed Methods for this route. This
+    /// is meant to be used as the value for the 'Allow' header in the Response.
+    pub fn get_allowed(self: Route, allocator: std.mem.Allocator) ![]const u8 {
+        // This gets allocated within the context of the connection's arena.
+        const allowed_size = comptime blk: {
+            var size = 0;
+            for (std.meta.tags(Method)) |method| {
+                size += @tagName(method).len + 1;
+            }
+            break :blk size;
+        };
+
+        const buffer = try allocator.alloc(u8, allowed_size);
+
+        var current: []u8 = "";
+        inline for (std.meta.tags(Method)) |method| {
+            if (self.handlers[@intFromEnum(method)] != null) {
+                current = std.fmt.bufPrint(buffer, "{s},{s}", .{ @tagName(method), current }) catch unreachable;
+            }
+        }
+
+        return current[0 .. current.len - 1];
+    }
+
     pub fn get_handler(self: Route, method: Method) ?RouteHandlerFn {
         return self.handlers[method_to_index(method)];
     }

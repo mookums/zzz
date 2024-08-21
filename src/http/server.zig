@@ -181,6 +181,29 @@ pub const Server = struct {
                         .mime = Mime.HTML,
                         .body = "405 Method Not Allowed",
                     });
+
+                    // We also need to add to Allow header.
+                    // This uses the connection's arena to allocate 64 bytes.
+                    const allowed = c.route.get_allowed(p.arena.allocator()) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+
+                        break :route;
+                    };
+
+                    p.response.headers.add("Allow", allowed) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+
+                        break :route;
+                    };
+
                     break :route;
                 }
             }
