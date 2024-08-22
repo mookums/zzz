@@ -75,6 +75,10 @@ pub const ServerConfig = struct {
     ///
     /// Default: 2MB.
     size_request_max: u32 = 1024 * 1024 * 2,
+    /// Maximum size (in bytes) of the Request URI.
+    ///
+    /// Default: 2KB.
+    size_request_uri_max: u32 = 2048,
     /// Size of the buffer (in bytes) used for
     /// interacting with the Socket.
     ///
@@ -279,6 +283,7 @@ pub const Server = struct {
                     // Create Request
                     provision.request = Request.init(ctx.allocator, .{
                         .size_request_max = ctx.size_request_max,
+                        .size_request_uri_max = ctx.size_request_uri_max,
                         .num_header_max = ctx.num_header_max,
                     }) catch {
                         panic("attempting to statically allocate more memory than available. (Request)", .{});

@@ -8,12 +8,14 @@ const Method = @import("lib.zig").Method;
 
 const RequestOptions = struct {
     size_request_max: u32,
+    size_request_uri_max: u32,
     num_header_max: u32,
 };
 
 pub const Request = struct {
     allocator: std.mem.Allocator,
     size_request_max: u32,
+    size_request_uri_max: u32,
     method: Method,
     uri: []const u8,
     version: std.http.Version,
@@ -22,10 +24,14 @@ pub const Request = struct {
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, options: RequestOptions) !Request {
+        // The request size needs to be larger than the max URI size.
+        assert(options.size_request_max > options.size_request_uri_max);
+
         return Request{
             .allocator = allocator,
             .headers = try Headers.init(allocator, options.num_header_max),
             .size_request_max = options.size_request_max,
+            .size_request_uri_max = options.size_request_uri_max,
             .method = undefined,
             .uri = undefined,
             .version = undefined,
@@ -61,7 +67,7 @@ pub const Request = struct {
                 self.set_method(method);
 
                 const uri_string = chunks.next() orelse return HTTPError.MalformedRequest;
-                if (uri_string.len >= 2048) return HTTPError.URITooLong;
+                if (uri_string.len >= self.size_request_uri_max) return HTTPError.URITooLong;
                 if (uri_string[0] != '/') return HTTPError.MalformedRequest;
                 self.set_uri(uri_string);
 
@@ -118,7 +124,11 @@ test "Parse Request" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 1024,
+        .size_request_uri_max = 256,
+    });
     defer request.deinit();
 
     try request.parse_headers(request_text[0..]);
@@ -141,7 +151,11 @@ test "Expect ContentTooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 128 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 128,
+        .size_request_uri_max = 64,
+    });
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..]);
@@ -157,7 +171,11 @@ test "Expect URITooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 * 1024 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 1024 * 1024,
+        .size_request_uri_max = 2048,
+    });
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..]);
@@ -173,7 +191,11 @@ test "Expect Malformed when URI missing /" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 256});
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 1024,
+        .size_request_uri_max = 512,
+    });
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..]);
@@ -188,7 +210,11 @@ test "Expect Incorrect HTTP Version" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 1024,
+        .size_request_uri_max = 512,
+    });
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..]);
@@ -203,7 +229,11 @@ test "Malformed Headers" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{ .num_header_max = 32, .size_request_max = 1024 });
+    var request = try Request.init(testing.allocator, .{
+        .num_header_max = 32,
+        .size_request_max = 1024,
+        .size_request_uri_max = 512,
+    });
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..]);
