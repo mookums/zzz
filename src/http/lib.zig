@@ -17,4 +17,7 @@ pub const HTTPError = error{
     TooManyHeaders,
     ContentTooLarge,
     MalformedRequest,
+    InvalidMethod,
+    URITooLong,
+    HTTPVersionNotSupported,
 };

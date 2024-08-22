@@ -186,14 +186,14 @@ pub const Server = struct {
 
     fn route_and_respond(p: *Provision, backend: *Async, router: Router, config: ServerConfig) !void {
         route: {
-            const captured = router.get_route_from_host(p.request.host, p.captures);
+            const captured = router.get_route_from_host(p.request.uri, p.captures);
             if (captured) |c| {
                 const handler = c.route.get_handler(p.request.method);
 
                 if (handler) |func| {
                     const context: Context = Context.init(
                         p.arena.allocator(),
-                        p.request.host,
+                        p.request.uri,
                         c.captures,
                     );
 
@@ -407,6 +407,27 @@ pub const Server = struct {
                                                 .status = .@"Bad Request",
                                                 .mime = Mime.HTML,
                                                 .body = "Malformed Request",
+                                            });
+                                        },
+                                        HTTPError.URITooLong => {
+                                            p.response.set(.{
+                                                .status = .@"URI Too Long",
+                                                .mime = Mime.HTML,
+                                                .body = "URI Too Long",
+                                            });
+                                        },
+                                        HTTPError.InvalidMethod => {
+                                            p.response.set(.{
+                                                .status = .@"Not Implemented",
+                                                .mime = Mime.HTML,
+                                                .body = "Not Implemented",
+                                            });
+                                        },
+                                        HTTPError.HTTPVersionNotSupported => {
+                                            p.response.set(.{
+                                                .status = .@"HTTP Version Not Supported",
+                                                .mime = Mime.HTML,
+                                                .body = "HTTP Version Not Supported",
                                             });
                                         },
                                     }
