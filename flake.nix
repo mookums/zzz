@@ -27,6 +27,9 @@
             nativeBuildInputs = with pkgs; [
                 zig
                 zls
+                # SSL
+                openssl
+                bearssl
                 # Debugging
                 gdb
                 valgrind
