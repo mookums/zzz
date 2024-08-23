@@ -254,6 +254,7 @@ pub const Server = struct {
     }
 
     fn clean_connection(provision: *Provision, provision_pool: *Pool(Provision), config: ServerConfig) void {
+        log.info("{d} - Closing Connection", .{provision.index});
         std.posix.close(provision.socket);
         _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
         provision.response.clear();
@@ -376,15 +377,24 @@ pub const Server = struct {
 
                         read_inner.count += @intCast(read_count);
 
+                        if (read_inner.count >= config.size_request_max) {
+                            p.response.set(.{
+                                .status = .@"Content Too Large",
+                                .mime = Mime.HTML,
+                                .body = "Request was too large",
+                            });
+
+                            raw_respond(p, backend, config) catch return;
+                            continue :reap_loop;
+                        }
+
                         switch (kind) {
                             .Header => {
                                 try p.request_buffer.appendSlice(p.buffer[0..@as(usize, @intCast(read_count))]);
-
                                 const header_ends = std.mem.lastIndexOf(u8, p.request_buffer.items, "\r\n\r\n");
-                                const too_long = p.request_buffer.items.len >= config.size_request_max;
 
                                 // Basically, this means we haven't finished processing the header.
-                                if (header_ends == null and !too_long) {
+                                if (header_ends == null) {
                                     _ = try backend.queue_recv(completion.context, p.socket, p.buffer);
                                     continue :reap_loop;
                                 }
@@ -441,6 +451,25 @@ pub const Server = struct {
                                     continue :reap_loop;
                                 };
 
+                                // Logging information about Request.
+                                log.info("{d} - \"{s} {s}\" {s}", .{
+                                    p.index,
+                                    @tagName(p.request.method),
+                                    p.request.uri,
+                                    p.request.headers.get("User-Agent") orelse "N/A",
+                                });
+
+                                // HTTP/1.1 REQUIRES a Host header to be present.
+                                if (p.request.version == .@"HTTP/1.1" and p.request.headers.get("Host") == null) {
+                                    p.response.set(.{
+                                        .status = .@"Bad Request",
+                                        .mime = Mime.HTML,
+                                        .body = "Missing \"Host\" Header",
+                                    });
+                                    raw_respond(p, backend, config) catch return;
+                                    continue :reap_loop;
+                                }
+
                                 if (!p.request.expect_body()) {
                                     route_and_respond(p, backend, router, config) catch return;
                                     continue :reap_loop;
@@ -467,14 +496,14 @@ pub const Server = struct {
                                     const difference = p.request_buffer.items.len - header_end;
                                     if (difference == content_length) {
                                         // Whole Body
-                                        log.debug("Got whole body with header", .{});
+                                        log.debug("{d} - Got whole body with header", .{p.index});
                                         const body_end = header_end + difference;
                                         p.request.set_body(p.request_buffer.items[header_end..body_end]);
                                         route_and_respond(p, backend, router, config) catch return;
                                         continue :reap_loop;
                                     } else {
                                         // Partial Body
-                                        log.debug("Got partial body with header", .{});
+                                        log.debug("{d} - Got partial body with header", .{p.index});
                                         read_inner.kind = .{ .Body = header_end };
                                         try backend.queue_recv(completion.context, p.socket, p.buffer);
                                         continue :reap_loop;
@@ -488,7 +517,7 @@ pub const Server = struct {
                                         continue :reap_loop;
                                     } else {
                                         // Got only header.
-                                        log.debug("Got no body, all header", .{});
+                                        log.debug("{d} - Got no body, all header", .{p.index});
                                         read_inner.kind = .{ .Body = header_end };
                                         try backend.queue_recv(completion.context, p.socket, p.buffer);
                                         continue :reap_loop;
@@ -499,7 +528,7 @@ pub const Server = struct {
                             .Body => |header_end| {
                                 // We should ONLY be here if we expect there to be a body.
                                 assert(p.request.expect_body());
-                                log.debug("Body Matching Fired!", .{});
+                                log.debug("{d} - body matching triggered", .{p.index});
 
                                 const content_length = blk: {
                                     const length_string = p.request.headers.get("Content-Length") orelse {
