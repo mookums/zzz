@@ -14,9 +14,6 @@ pub const Method = enum {
 
     fn encode(method: []const u8) u64 {
         var buffer = [1]u8{0} ** @sizeOf(u64);
-        //for (0..method.len) |i| {
-        //    buffer[i] = method[i];
-        //}
         std.mem.copyForwards(u8, buffer[0..], method);
 
         return std.mem.readPackedIntNative(u64, buffer[0..], 0);
@@ -24,7 +21,7 @@ pub const Method = enum {
 
     pub fn parse(method: []const u8) !Method {
         if (method.len > (comptime @sizeOf(u64)) or method.len == 0) {
-            log.debug("unable to encode method: {s}", .{method});
+            log.warn("unable to encode method: {s}", .{method});
             return error.CannotEncode;
         }
 
@@ -41,7 +38,7 @@ pub const Method = enum {
             encode("TRACE") => Method.TRACE,
             encode("PATCH") => Method.PATCH,
             else => {
-                log.debug("unable to match method: {s} | {d}", .{ method, encoded });
+                log.warn("unable to match method: {s} | {d}", .{ method, encoded });
                 return error.CannotParse;
             },
         };
