@@ -1,8 +1,9 @@
 const std = @import("std");
 const zzz = @import("zzz");
+const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/multithread");
 
-fn hi_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) void {
+fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) void {
     const name = context.captures[0].String;
 
     const body = std.fmt.allocPrint(context.allocator,
@@ -25,7 +26,7 @@ fn hi_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) voi
     , .{name}) catch {
         response.set(.{
             .status = .@"Internal Server Error",
-            .mime = zzz.Mime.HTML,
+            .mime = http.Mime.HTML,
             .body = "Out of Memory!",
         });
         return;
@@ -33,35 +34,35 @@ fn hi_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) voi
 
     response.set(.{
         .status = .OK,
-        .mime = zzz.Mime.HTML,
+        .mime = http.Mime.HTML,
         .body = body,
     });
 }
 
-fn redir_handler(_: zzz.Request, response: *zzz.Response, context: zzz.Context) void {
+fn redir_handler(_: http.Request, response: *http.Response, context: http.Context) void {
     _ = context;
     response.set(.{
         .status = .@"Permanent Redirect",
-        .mime = zzz.Mime.HTML,
+        .mime = http.Mime.HTML,
         .body = "",
     });
 
     response.headers.add("Location", "/hi/redirect") catch {
         response.set(.{
             .status = .@"Internal Server Error",
-            .mime = zzz.Mime.HTML,
+            .mime = http.Mime.HTML,
             .body = "Redirect Handler Failed",
         });
         return;
     };
 }
 
-fn post_handler(request: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
+fn post_handler(request: http.Request, response: *http.Response, _: http.Context) void {
     log.debug("Body: {s}", .{request.body});
 
     response.set(.{
         .status = .OK,
-        .mime = zzz.Mime.HTML,
+        .mime = http.Mime.HTML,
         .body = "",
     });
 }
@@ -73,17 +74,19 @@ pub fn main() !void {
     // if multithreaded, you need a thread-safe allocator.
     const allocator = std.heap.page_allocator;
 
-    var router = zzz.Router.init(allocator);
-    try router.serve_embedded_file("/", zzz.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", zzz.Route.init().get(hi_handler));
-    try router.serve_route("/redirect", zzz.Route.init().get(redir_handler));
-    try router.serve_route("/post", zzz.Route.init().post(post_handler));
+    var router = http.Router.init(allocator);
+    defer router.deinit();
+    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
+    try router.serve_route("/hi/%s", http.Route.init().get(hi_handler));
+    try router.serve_route("/redirect", http.Route.init().get(redir_handler));
+    try router.serve_route("/post", http.Route.init().post(post_handler));
 
-    var server = zzz.Server.init(.{
+    var server = http.Server.init(.{
         .allocator = allocator,
         .threading = .{ .multi_threaded = .auto },
-    }, router);
+    }, null);
     defer server.deinit();
+
     try server.bind(host, port);
-    try server.listen();
+    try server.listen(.{ .router = &router });
 }

@@ -174,23 +174,23 @@ pub fn Server(
             provision.data.clean();
         }
 
-        fn run(self: Self, protocol_config: ProtocolConfig, backend: *Async) !void {
+        fn run(z_config: zzzConfig, p_config: ProtocolConfig, backend: *Async, server_socket: Socket) !void {
             // Creating everything we need to run for the foreseeable future.
             var provision_pool = try Pool(Provision).init(
-                self.allocator,
-                self.config.size_connections_max,
+                z_config.allocator,
+                z_config.size_connections_max,
                 Provision.init_hook,
-                self.config,
+                z_config,
             );
             for (provision_pool.items) |*provision| {
-                provision.data = ProtocolData.init(self.allocator, protocol_config);
+                provision.data = ProtocolData.init(z_config.allocator, p_config);
             }
 
             defer {
                 for (provision_pool.items) |*provision| {
-                    provision.data.deinit(self.allocator);
+                    provision.data.deinit(z_config.allocator);
                 }
-                provision_pool.deinit(Provision.deinit_hook, self.config);
+                provision_pool.deinit(Provision.deinit_hook, z_config);
             }
 
             // Create and send the first Job.
@@ -205,9 +205,6 @@ pub fn Server(
             };
 
             var accepted = false;
-            assert(self.socket != null);
-            const server_socket = self.socket.?;
-
             _ = try backend.queue_accept(&first_provision, server_socket);
             try backend.submit();
 
@@ -250,7 +247,7 @@ pub fn Server(
                             provision.item.job = .{ .Recv = .{ .count = 0 } };
 
                             // Call the Accept Hook.
-                            @call(.auto, accept_fn, .{ provision.item, protocol_config, self.config, backend });
+                            @call(.auto, accept_fn, .{ provision.item, p_config, z_config, backend });
                         },
 
                         .Recv => |*inner| {
@@ -258,7 +255,7 @@ pub fn Server(
 
                             // If the socket is closed.
                             if (completion.result <= 0) {
-                                clean_connection(p, &provision_pool, self.config);
+                                clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
                             const read_count: u32 = @intCast(completion.result);
@@ -268,7 +265,7 @@ pub fn Server(
                             // This is where any security thing would come,
                             //intercept and decrypt the actual data.
 
-                            @call(.auto, recv_fn, .{ p, protocol_config, self.config, backend, recv_buffer });
+                            @call(.auto, recv_fn, .{ p, p_config, z_config, backend, recv_buffer });
                         },
 
                         .Send => |*inner| {
@@ -278,7 +275,7 @@ pub fn Server(
 
                             // If the socket is closed.
                             if (send_count <= 0) {
-                                clean_connection(p, &provision_pool, self.config);
+                                clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
 
@@ -294,7 +291,7 @@ pub fn Server(
                                     p.socket,
                                     inner.slice.get(
                                         inner.count,
-                                        inner.count + self.config.size_socket_buffer,
+                                        inner.count + z_config.size_socket_buffer,
                                     ),
                                 );
                             }
@@ -355,68 +352,76 @@ pub fn Server(
             }
 
             switch (self.config.threading) {
-                .single_threaded => self.run(protocol_config, &backend) catch {
+                .single_threaded => run(self.config, protocol_config, &backend, server_socket) catch {
                     log.err("failed due to unrecoverable error!", .{});
                     return;
                 },
                 .multi_threaded => |count| {
-                    _ = count;
-                    @panic("Need to implement");
-                    //const allocator = self.config.allocator;
-                    //var threads = std.ArrayList(std.Thread).init(allocator);
-                    //defer threads.deinit();
+                    const allocator = self.config.allocator;
+                    var threads = std.ArrayList(std.Thread).init(allocator);
+                    defer threads.deinit();
 
-                    //const thread_count = blk: {
-                    //    switch (count) {
-                    //        .auto => break :blk @max(try std.Thread.getCpuCount() / 2 - 1, 1),
-                    //        .count => |inner| break :blk inner,
-                    //    }
-                    //};
+                    const thread_count = blk: {
+                        switch (count) {
+                            .auto => break :blk @max(try std.Thread.getCpuCount() / 2 - 1, 1),
+                            .count => |inner| break :blk inner,
+                        }
+                    };
 
-                    //log.info("spawning {d} thread[s] + 1 root thread", .{thread_count});
+                    log.info("spawning {d} thread[s] + 1 root thread", .{thread_count});
 
-                    //for (0..thread_count) |i| {
-                    //    try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
-                    //        fn handler_fn(
-                    //            config: ServerConfig,
-                    //            router: Router,
-                    //            s_socket: std.posix.socket_t,
-                    //            uring_fd: std.posix.fd_t,
-                    //            thread_id: usize,
-                    //        ) void {
-                    //            var flags: u32 = base_flags;
-                    //            flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
+                    for (0..thread_count) |i| {
+                        try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
+                            fn handler_fn(
+                                p_config: ProtocolConfig,
+                                z_config: zzzConfig,
+                                backend_type: AsyncType,
+                                s_socket: Socket,
+                                thread_id: usize,
+                            ) void {
+                                var thread_backend = blk: {
+                                    switch (backend_type) {
+                                        .io_uring => {
+                                            // Initalize IO Uring
+                                            const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
 
-                    //            var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
-                    //                .wq_fd = @as(u32, @intCast(uring_fd)),
-                    //                .flags = flags,
-                    //            });
+                                            const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
+                                            uring.* = std.os.linux.IoUring.init(
+                                                z_config.size_connections_max,
+                                                base_flags,
+                                            ) catch unreachable;
 
-                    //            var thread_uring = std.os.linux.IoUring.init_params(
-                    //                config.size_connections_max,
-                    //                &params,
-                    //            ) catch {
-                    //                log.err("thread #{d} unable to start! (uring initalization)", .{thread_id});
-                    //                return;
-                    //            };
+                                            var io_uring = AsyncIoUring.init(uring) catch unreachable;
+                                            break :blk io_uring.to_async();
+                                        },
+                                        .custom => |inner| break :blk inner,
+                                    }
+                                };
 
-                    //            var thread_uring_backend = try AsyncIoUring.init(&thread_uring);
-                    //            var thread_backend = thread_uring_backend.to_async();
+                                defer {
+                                    switch (backend_type) {
+                                        .io_uring => {
+                                            const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(thread_backend.runner));
+                                            z_config.allocator.destroy(uring);
+                                        },
+                                        else => {},
+                                    }
+                                }
 
-                    //            run(config, router, s_socket, &thread_backend) catch {
-                    //                log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
-                    //            };
-                    //        }
-                    //    }.handler_fn, .{ self.config, self.router, server_socket, fd, i }));
-                    //}
+                                run(z_config, p_config, &thread_backend, s_socket) catch {
+                                    log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
+                                };
+                            }
+                        }.handler_fn, .{ protocol_config, self.config, self.backend_type, server_socket, i }));
+                    }
 
-                    //run(self.config, self.router, server_socket, &backend) catch {
-                    //    log.err("root thread failed due to unrecoverable error!", .{});
-                    //};
+                    run(self.config, protocol_config, &backend, server_socket) catch {
+                        log.err("root thread failed due to unrecoverable error!", .{});
+                    };
 
-                    //for (threads.items) |thread| {
-                    //    thread.join();
-                    //}
+                    for (threads.items) |thread| {
+                        thread.join();
+                    }
                 },
             }
         }
