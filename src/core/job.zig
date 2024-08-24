@@ -21,7 +21,7 @@ pub const Job = union(JobType) {
     Read: struct { fd: std.posix.fd_t, count: u32 },
     Write: struct { fd: std.posix.fd_t, count: u32 },
     Accept,
-    Recv: struct { kind: RecvKind, count: u32 },
+    Recv: struct { count: u32 },
     Send: struct { slice: Pseudoslice, count: u32 },
     Close,
 };

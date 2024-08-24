@@ -2,7 +2,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const Headers = @import("lib.zig").Headers;
-const KVPair = @import("lib.zig").KVPair;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 

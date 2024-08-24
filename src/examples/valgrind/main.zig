@@ -1,5 +1,6 @@
 const std = @import("std");
 const zzz = @import("zzz");
+const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/valgrind");
 
 pub fn main() !void {
@@ -8,9 +9,11 @@ pub fn main() !void {
 
     const allocator = std.heap.c_allocator;
 
-    var router = zzz.Router.init(allocator);
-    try router.serve_route("/", zzz.Route.init().get(struct {
-        pub fn handler_fn(_: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
+    var router = http.Router.init(allocator);
+    defer router.deinit();
+
+    try router.serve_route("/", http.Route.init().get(struct {
+        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -22,25 +25,25 @@ pub fn main() !void {
 
             response.set(.{
                 .status = .OK,
-                .mime = zzz.Mime.HTML,
+                .mime = http.Mime.HTML,
                 .body = body[0..],
             });
         }
     }.handler_fn));
 
-    try router.serve_route("/kill", zzz.Route.init().get(struct {
-        pub fn handler_fn(_: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
+    try router.serve_route("/kill", http.Route.init().get(struct {
+        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
             response.set(.{
                 .status = .Kill,
-                .mime = zzz.Mime.HTML,
+                .mime = http.Mime.HTML,
                 .body = "",
             });
         }
     }.handler_fn));
 
-    var server = zzz.Server.init(.{ .allocator = allocator }, router);
+    var server = http.Server.init(.{ .allocator = allocator }, null);
     defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen();
+    try server.listen(.{ .router = &router });
 }

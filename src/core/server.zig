@@ -24,7 +24,7 @@ const ServerThreading = union(enum) {
 ///
 /// This includes various different options and limits
 /// for interacting with the underlying network.
-const zzzConfig = struct {
+pub const zzzConfig = struct {
     /// The allocator that server will use.
     allocator: std.mem.Allocator,
     /// Threading Model to use.
@@ -76,6 +76,8 @@ const zzzConfig = struct {
 pub fn Server(
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
+    comptime accept_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void,
+    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, read_count: u32) void,
 ) type {
     return struct {
         const Provision = ZProvision(ProtocolData);
@@ -98,11 +100,22 @@ pub fn Server(
 
         pub fn deinit(self: *Self) void {
             if (self.socket) |socket| {
-                // POSIX only.
-                std.posix.close(socket);
+                if (Socket == std.posix.socket_t) {
+                    // For closing POSIX
+                    std.posix.close(socket);
+                } else if (Socket == std.os.windows.ws2_32.SOCKET) {
+                    // For closing Windows
+                    std.os.windows.closesocket(socket);
+                }
             }
         }
 
+        /// If you are using a custom implementation that does NOT rely
+        /// on TCP/IP, you can SKIP calling this method and just set the
+        /// socket value yourself.
+        ///
+        /// This is only allowed on certain targets that do not have TCP/IP
+        /// support.
         pub fn bind(self: *Self, host: []const u8, port: u16) !void {
             // This currently only works on POSIX systems.
             // We should fix this.
@@ -112,7 +125,7 @@ pub fn Server(
 
             const addr = try std.net.Address.resolveIp(host, port);
 
-            const socket = blk: {
+            const socket: std.posix.socket_t = blk: {
                 const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
                 break :blk try std.posix.socket(
                     addr.any.family,
@@ -120,6 +133,8 @@ pub fn Server(
                     std.posix.IPPROTO.TCP,
                 );
             };
+
+            log.debug("socket | t: {s} v: {any}", .{ @typeName(Socket), socket });
 
             if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
                 try std.posix.setsockopt(
@@ -149,17 +164,17 @@ pub fn Server(
         }
 
         fn clean_connection(
-            provision: Provision,
+            provision: *Provision,
             provision_pool: *Pool(Provision),
             config: zzzConfig,
         ) void {
             defer provision_pool.release(provision.index);
-            log.info("{d} - Closing Connection", .{provision.index});
+            log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
-            provision.pdata.clean();
+            provision.data.clean();
         }
 
-        fn run(self: Self, backend: *Async, protocol_config: ProtocolConfig) !void {
+        fn run(self: Self, protocol_config: ProtocolConfig, backend: *Async) !void {
             // Creating everything we need to run for the foreseeable future.
             var provision_pool = try Pool(Provision).init(
                 self.allocator,
@@ -168,12 +183,12 @@ pub fn Server(
                 self.config,
             );
             for (provision_pool.items) |*provision| {
-                provision.pdata = ProtocolData.init(self.allocator, protocol_config);
+                provision.data = ProtocolData.init(self.allocator, protocol_config);
             }
 
             defer {
                 for (provision_pool.items) |*provision| {
-                    provision.pdata.deinit(self.allocator);
+                    provision.data.deinit(self.allocator);
                 }
                 provision_pool.deinit(Provision.deinit_hook, self.config);
             }
@@ -183,10 +198,10 @@ pub fn Server(
                 .job = .Accept,
                 .index = undefined,
                 .socket = undefined,
-                .sock_buffer = undefined,
+                .buffer = undefined,
                 .recv_buffer = undefined,
                 .arena = undefined,
-                .pdata = undefined,
+                .data = undefined,
             };
 
             var accepted = false;
@@ -209,6 +224,11 @@ pub fn Server(
                             accepted = true;
                             const socket: Socket = completion.result;
 
+                            if (socket < 0) {
+                                log.err("socket accept failed", .{});
+                                continue :reap_loop;
+                            }
+
                             // Borrow a provision from the pool otherwise close the socket.
                             const provision = provision_pool.borrow(@intCast(completion.result)) catch {
                                 continue :reap_loop;
@@ -227,31 +247,58 @@ pub fn Server(
                             // Store the index of this item.
                             provision.item.index = provision.index;
                             provision.item.socket = socket;
-                            provision.item.job = .{ .Recv = .{ .kind = .Header, .count = 0 } };
-                            _ = try backend.queue_recv(provision.item, socket, provision.item.sock_buffer);
+                            provision.item.job = .{ .Recv = .{ .count = 0 } };
+
+                            // Call the Accept Hook.
+                            @call(.auto, accept_fn, .{ provision.item, protocol_config, self.config, backend });
                         },
 
-                        .Recv => |*read_inner| {
-                            // If we have a TLS here, we want to decrypt
-                            // whatever chunk it is we read then pass that chunk on
-                            // to the application layer protocol handler.
-                            const read_count: u32 = @intCast(completion.result);
-                            read_inner.count += read_count;
-                            log.debug("Read Count: {d}", .{read_inner.count});
-                            log.debug("Recv: {s}", .{p.sock_buffer[0..read_inner.count]});
-                            _ = try backend.queue_recv(p, p.socket, p.sock_buffer);
+                        .Recv => |*inner| {
+                            log.debug("{d} - recv triggered", .{p.index});
+                            const read_count = completion.result;
+
+                            // If the socket is closed.
+                            if (read_count <= 0) {
+                                clean_connection(p, &provision_pool, self.config);
+                                continue :reap_loop;
+                            }
+
+                            inner.count += @intCast(read_count);
+                            @call(.auto, recv_fn, .{ p, protocol_config, self.config, backend, @as(u32, @intCast(read_count)) });
                         },
 
                         .Send => |*inner| {
-                            _ = inner;
-                            // We want to basically take whatever the application
-                            // layer protocol handler gives us, encrypt it
-                            // then send it in chunks as appropriate.
+                            log.debug("{d} - send triggered", .{p.index});
+                            const send_count = completion.result;
+                            inner.count += @intCast(send_count);
+
+                            // If the socket is closed.
+                            if (send_count <= 0) {
+                                clean_connection(p, &provision_pool, self.config);
+                                continue :reap_loop;
+                            }
+
+                            if (inner.count >= inner.slice.len) {
+                                log.debug("{d} - queueing a new recv", .{p.index});
+                                p.recv_buffer.clearRetainingCapacity();
+                                p.job = .{ .Recv = .{ .count = 0 } };
+                                try backend.queue_recv(p, p.socket, p.buffer);
+                            } else {
+                                log.debug("{d} - sending next chunk starting at index {d}", .{ p.index, inner.count });
+                                try backend.queue_send(
+                                    completion.context,
+                                    p.socket,
+                                    inner.slice.get(
+                                        inner.count,
+                                        inner.count + self.config.size_socket_buffer,
+                                    ),
+                                );
+                            }
                         },
 
                         .Close => {},
 
-                        else => @panic("Not implemented yet!"),
+                        else => @panic("not implemented yet!"),
                     }
                 }
 
@@ -274,19 +321,37 @@ pub fn Server(
             log.info("threading mode: {s}", .{@tagName(self.config.threading)});
             try std.posix.listen(server_socket, self.config.size_backlog);
 
-            // Initalize IO Uring
-            const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
-            var uring = try std.os.linux.IoUring.init(
-                self.config.size_connections_max,
-                base_flags,
-            );
-            defer uring.deinit();
+            var backend = blk: {
+                switch (self.backend_type) {
+                    .io_uring => {
+                        // Initalize IO Uring
+                        const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
 
-            var io_uring = try AsyncIoUring.init(&uring);
-            var backend = io_uring.to_async();
+                        const uring = try self.allocator.create(std.os.linux.IoUring);
+                        uring.* = try std.os.linux.IoUring.init(
+                            self.config.size_connections_max,
+                            base_flags,
+                        );
+
+                        var io_uring = try AsyncIoUring.init(uring);
+                        break :blk io_uring.to_async();
+                    },
+                    .custom => |inner| break :blk inner,
+                }
+            };
+
+            defer {
+                switch (self.backend_type) {
+                    .io_uring => {
+                        const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(backend.runner));
+                        self.allocator.destroy(uring);
+                    },
+                    else => {},
+                }
+            }
 
             switch (self.config.threading) {
-                .single_threaded => self.run(&backend, protocol_config) catch {
+                .single_threaded => self.run(protocol_config, &backend) catch {
                     log.err("failed due to unrecoverable error!", .{});
                     return;
                 },

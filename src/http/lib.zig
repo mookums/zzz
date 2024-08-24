@@ -8,10 +8,7 @@ pub const Router = @import("router.zig").Router;
 pub const Context = @import("context.zig").Context;
 pub const Headers = @import("headers.zig").Headers;
 
-pub const KVPair = struct {
-    key: []const u8,
-    value: []const u8,
-};
+pub const Server = @import("server.zig").Server;
 
 pub const HTTPError = error{
     TooManyHeaders,
