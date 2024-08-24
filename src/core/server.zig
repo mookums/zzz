@@ -77,7 +77,7 @@ pub fn Server(
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
     comptime accept_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void,
-    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, read_count: u32) void,
+    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) void,
 ) type {
     return struct {
         const Provision = ZProvision(ProtocolData);
@@ -255,16 +255,20 @@ pub fn Server(
 
                         .Recv => |*inner| {
                             log.debug("{d} - recv triggered", .{p.index});
-                            const read_count = completion.result;
 
                             // If the socket is closed.
-                            if (read_count <= 0) {
+                            if (completion.result <= 0) {
                                 clean_connection(p, &provision_pool, self.config);
                                 continue :reap_loop;
                             }
+                            const read_count: u32 = @intCast(completion.result);
+                            inner.count += read_count;
+                            const recv_buffer = p.buffer[0..read_count];
 
-                            inner.count += @intCast(read_count);
-                            @call(.auto, recv_fn, .{ p, protocol_config, self.config, backend, @as(u32, @intCast(read_count)) });
+                            // This is where any security thing would come,
+                            //intercept and decrypt the actual data.
+
+                            @call(.auto, recv_fn, .{ p, protocol_config, self.config, backend, recv_buffer });
                         },
 
                         .Send => |*inner| {
