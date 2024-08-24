@@ -1,5 +1,6 @@
 const std = @import("std");
 const zzz = @import("zzz");
+const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/embed");
 
 pub fn main() !void {
@@ -10,10 +11,13 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = zzz.Router.init(allocator);
-    try router.serve_embedded_file("/", zzz.Mime.HTML, @embedFile("index.html"));
+    var router = http.Router.init(allocator);
+    defer router.deinit();
+    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
 
-    var server = zzz.Server.init(.{ .allocator = allocator }, router);
+    var server = http.Server.init(.{ .allocator = allocator }, null);
+    defer server.deinit();
+
     try server.bind(host, port);
-    try server.listen();
+    try server.listen(.{ .router = &router });
 }

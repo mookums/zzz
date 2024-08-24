@@ -1,5 +1,6 @@
 const std = @import("std");
 const zzz = @import("zzz");
+const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/fs");
 
 pub fn main() !void {
@@ -8,9 +9,11 @@ pub fn main() !void {
 
     const allocator = std.heap.page_allocator;
 
-    var router = zzz.Router.init(allocator);
-    try router.serve_route("/", zzz.Route.init().get(struct {
-        pub fn handler_fn(_: zzz.Request, response: *zzz.Response, _: zzz.Context) void {
+    var router = http.Router.init(allocator);
+    defer router.deinit();
+
+    try router.serve_route("/", http.Route.init().get(struct {
+        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -22,7 +25,7 @@ pub fn main() !void {
 
             response.set(.{
                 .status = .OK,
-                .mime = zzz.Mime.HTML,
+                .mime = http.Mime.HTML,
                 .body = body[0..],
             });
         }
@@ -30,10 +33,7 @@ pub fn main() !void {
 
     try router.serve_fs_dir("/static", "./src/examples/fs/static");
 
-    var server = zzz.Server.init(.{
-        .allocator = allocator,
-        .threading = .{ .multi_threaded = .auto },
-    }, router);
+    var server = http.Server.init(.{ .allocator = allocator }, null);
     try server.bind(host, port);
-    try server.listen();
+    try server.listen(.{ .router = &router });
 }
