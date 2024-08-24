@@ -119,7 +119,7 @@ pub fn accept_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzC
     _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
 }
 
-pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, read_count: u32) void {
+pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) void {
     var stage = provision.data.stage;
     const job = provision.job.Recv;
 
@@ -136,7 +136,7 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
 
     switch (stage) {
         .Header => {
-            provision.recv_buffer.appendSlice(provision.buffer[0..@as(usize, @intCast(read_count))]) catch unreachable;
+            provision.recv_buffer.appendSlice(provision.buffer[0..@as(usize, @intCast(recv_buffer.len))]) catch unreachable;
             const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items, "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
