@@ -30,7 +30,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = zzz.Server.init(.{ .allocator = allocator }, router);
+    var server = zzz.Server2.init(.{ .allocator = allocator }, null);
     try server.bind(host, port);
-    try server.listen();
+    try server.listen(.{ .router = router });
 }
