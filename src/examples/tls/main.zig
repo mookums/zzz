@@ -1,15 +1,14 @@
 const std = @import("std");
 const zzz = @import("zzz");
 const http = zzz.HTTP;
-const log = std.log.scoped(.@"examples/minram");
-
+const log = std.log.scoped(.@"examples/basic");
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var buffer = [_]u8{undefined} ** (1024 * 100);
-    var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
-    const allocator = fba.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -35,18 +34,10 @@ pub fn main() !void {
 
     var server = http.Server.init(.{
         .allocator = allocator,
-        .size_backlog = 32,
-        .size_connections_max = 16,
-        .size_connection_arena_retain = 64,
-        .size_socket_buffer = 512,
+        .encryption = .{ .tls = .{ .cert = "server.crt", .key = "server.key" } },
     }, null);
+    defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen(.{
-        .router = &router,
-        .num_header_max = 32,
-        .num_captures_max = 0,
-        .size_request_max = 2048,
-        .size_request_uri_max = 256,
-    });
+    try server.listen(.{ .router = &router });
 }

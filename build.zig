@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     addExample(b, "basic", false, target, optimize, zzz);
+    addExample(b, "tls", true, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
     addExample(b, "embed", false, target, optimize, zzz);
     addExample(b, "fs", false, target, optimize, zzz);
@@ -36,6 +37,9 @@ fn addExample(
     if (link_libc) {
         example.linkLibC();
     }
+
+    example.linkSystemLibrary("ssl");
+    example.linkSystemLibrary("crypto");
 
     example.root_module.addImport("zzz", zzz_module);
     const install_artifact = b.addInstallArtifact(example, .{});

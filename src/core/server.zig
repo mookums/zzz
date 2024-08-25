@@ -12,9 +12,17 @@ const Pool = @import("pool.zig").Pool;
 const Socket = @import("socket.zig").Socket;
 const ZProvision = @import("zprovision.zig").ZProvision;
 
+const TLSContext = @import("../tls/lib.zig").TLSContext;
+const TLS = @import("../tls/lib.zig").TLS;
+
 pub const RecvStatus = union(enum) {
     Recv,
     Send: Pseudoslice,
+};
+
+const ServerTLS = union(enum) {
+    plain,
+    tls: struct { cert: []const u8, key: []const u8 },
 };
 
 const ServerThreadCount = union(enum) {
@@ -39,6 +47,10 @@ pub const zzzConfig = struct {
     ///
     /// Default: .single_threaded
     threading: ServerThreading = .single_threaded,
+    /// Encryption Model to use.
+    ///
+    /// Default: .plain (plaintext)
+    encryption: ServerTLS = .plain,
     /// Kernel Backlog Value.
     size_backlog: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
@@ -62,7 +74,7 @@ pub const zzzConfig = struct {
     /// will make allocators slower.
     ///
     /// Default: 1KB
-    size_context_arena_retain: u32 = 1024,
+    size_connection_arena_retain: u32 = 1024,
     /// Size of the buffer (in bytes) used for
     /// interacting with the Socket.
     ///
@@ -84,8 +96,29 @@ pub const zzzConfig = struct {
 pub fn Server(
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
-    comptime accept_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void,
-    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) RecvStatus,
+    /// This is called after the Accept.
+    comptime accept_fn: ?*const fn (
+        provision: *ZProvision(ProtocolData),
+        p_config: ProtocolConfig,
+        z_config: zzzConfig,
+        backend: *Async,
+    ) void,
+    /// This is called after the Recv.
+    comptime recv_fn: *const fn (
+        provision: *ZProvision(ProtocolData),
+        p_config: ProtocolConfig,
+        z_config: zzzConfig,
+        backend: *Async,
+        recv_buffer: []const u8,
+    ) RecvStatus,
+    /// This is called BEFORE the Send.
+    comptime send_fn: ?*const fn (
+        provision: *ZProvision(ProtocolData),
+        p_config: ProtocolConfig,
+        z_config: zzzConfig,
+        backend: *Async,
+        send_buffer: []u8,
+    ) void,
 ) type {
     return struct {
         const Provision = ZProvision(ProtocolData);
@@ -178,7 +211,7 @@ pub fn Server(
         ) void {
             defer provision_pool.release(provision.index);
             log.info("{d} - closing connection", .{provision.index});
-            _ = provision.arena.reset(.{ .retain_with_limit = config.size_context_arena_retain });
+            _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
         }
 
@@ -193,6 +226,10 @@ pub fn Server(
             for (provision_pool.items) |*provision| {
                 provision.data = ProtocolData.init(z_config.allocator, p_config);
             }
+
+            var tls_context = try TLSContext.init(z_config.encryption.tls.cert, z_config.encryption.tls.key);
+            var tls_connections = try z_config.allocator.alloc(TLS, z_config.size_connections_max);
+            defer z_config.allocator.free(tls_connections);
 
             defer {
                 for (provision_pool.items) |*provision| {
@@ -254,8 +291,16 @@ pub fn Server(
                             provision.item.socket = socket;
                             provision.item.job = .{ .Recv = .{ .count = 0 } };
 
+                            const tls_connection: *TLS = &tls_connections[provision.index];
+                            tls_connection.* = try tls_context.create(socket);
+                            try tls_connection.accept();
+
                             // Call the Accept Hook.
-                            @call(.auto, accept_fn, .{ provision.item, p_config, z_config, backend });
+                            if (accept_fn) |func| {
+                                @call(.auto, func, .{ provision.item, p_config, z_config, backend });
+                            }
+
+                            _ = try backend.queue_recv(provision.item, provision.item.socket, provision.item.buffer);
                         },
 
                         .Recv => |*inner| {
@@ -270,9 +315,22 @@ pub fn Server(
                             inner.count += read_count;
                             const recv_buffer = p.buffer[0..read_count];
 
-                            // This is where a security layer would decrypt the recv_buffer.
+                            log.debug("{d} - Recv[E]: {s}", .{ p.index, recv_buffer });
 
-                            var status: RecvStatus = @call(.auto, recv_fn, .{ p, p_config, z_config, backend, recv_buffer });
+                            const tls_connection: *TLS = &tls_connections[p.index];
+                            try tls_connection.decrypt(recv_buffer, recv_buffer);
+
+                            log.debug("{d} - Recv[D]: {s}", .{ p.index, recv_buffer });
+
+                            var status: RecvStatus = @call(.auto, recv_fn, .{
+                                p,
+                                p_config,
+                                z_config,
+                                backend,
+                                recv_buffer,
+                            });
+
+                            log.debug("{d} - Recv Fn Status: {s}", .{ p.index, @tagName(status) });
 
                             switch (status) {
                                 .Recv => {
@@ -282,6 +340,10 @@ pub fn Server(
                                     const send_buffer = pslice.get(0, z_config.size_socket_buffer);
                                     // This is where a security layer would encrypt the send_buffer.
                                     p.job = .{ .Send = .{ .slice = pslice.*, .count = 0 } };
+
+                                    if (send_fn) |func| {
+                                        @call(.auto, func, .{ p, p_config, z_config, backend, send_buffer });
+                                    }
                                     try backend.queue_send(p, p.socket, send_buffer);
                                 },
                             }
@@ -304,8 +366,18 @@ pub fn Server(
                                 p.job = .{ .Recv = .{ .count = 0 } };
                                 try backend.queue_recv(p, p.socket, p.buffer);
                             } else {
-                                log.debug("{d} - sending next chunk starting at index {d}", .{ p.index, inner.count });
-                                const send_buffer = inner.slice.get(inner.count, inner.count + z_config.size_socket_buffer);
+                                log.debug(
+                                    "{d} - sending next chunk starting at index {d}",
+                                    .{ p.index, inner.count },
+                                );
+                                const send_buffer = inner.slice.get(
+                                    inner.count,
+                                    inner.count + z_config.size_socket_buffer,
+                                );
+
+                                if (send_fn) |func| {
+                                    @call(.auto, func, .{ p, p_config, z_config, backend, send_buffer });
+                                }
                                 try backend.queue_send(completion.context, p.socket, send_buffer);
                             }
                         },
