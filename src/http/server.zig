@@ -24,13 +24,14 @@ const ProtocolConfig = @import("protocol.zig").ProtocolConfig;
 const zzzConfig = @import("../core/server.zig").zzzConfig;
 const Provision = @import("../core/zprovision.zig").ZProvision(ProtocolData);
 
+const RecvStatus = @import("../core/server.zig").RecvStatus;
 const zzzServer = @import("../core/server.zig").Server;
 
 /// Uses the current p.response to generate and queue up the sending
 /// of a response. This is used when we already know what we want to send.
 ///
 /// See: `route_and_respond`
-fn raw_respond(p: *Provision, z_config: zzzConfig, backend: *Async) !void {
+fn raw_respond(p: *Provision) !RecvStatus {
     {
         const status_code: u16 = if (p.data.response.status) |status| @intFromEnum(status) else 0;
         const status_name = if (p.data.response.status) |status| @tagName(status) else "No Status";
@@ -39,12 +40,11 @@ fn raw_respond(p: *Provision, z_config: zzzConfig, backend: *Async) !void {
 
     const body = p.data.response.body orelse "";
     const header_buffer = try p.data.response.headers_into_buffer(p.buffer, @intCast(body.len));
-    var pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
-    p.job = .{ .Send = .{ .slice = pseudo, .count = 0 } };
-    try backend.queue_send(p, p.socket, pseudo.get(0, z_config.size_socket_buffer));
+    const pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
+    return .{ .Send = pseudo };
 }
 
-fn route_and_respond(p: *Provision, z_config: zzzConfig, backend: *Async, router: *const Router) !void {
+fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
     route: {
         const captured = router.get_route_from_host(p.data.request.uri, p.data.captures);
         if (captured) |c| {
@@ -106,7 +106,7 @@ fn route_and_respond(p: *Provision, z_config: zzzConfig, backend: *Async, router
         return error.Kill;
     }
 
-    try raw_respond(p, z_config, backend);
+    return try raw_respond(p);
 }
 
 pub fn accept_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void {
@@ -119,7 +119,10 @@ pub fn accept_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzC
     _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
 }
 
-pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) void {
+pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) RecvStatus {
+    _ = z_config;
+    _ = backend;
+
     var stage = provision.data.stage;
     const job = provision.job.Recv;
 
@@ -130,8 +133,7 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
             .body = "Request was too large",
         });
 
-        raw_respond(provision, z_config, backend) catch unreachable;
-        return;
+        return raw_respond(provision) catch unreachable;
     }
 
     switch (stage) {
@@ -141,8 +143,7 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
-                _ = backend.queue_recv(provision, provision.socket, provision.buffer) catch unreachable;
-                return;
+                return .Recv;
             }
 
             // The +4 is to account for the slice we match.
@@ -193,8 +194,7 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                     },
                 }
 
-                raw_respond(provision, z_config, backend) catch unreachable;
-                return;
+                return raw_respond(provision) catch unreachable;
             };
 
             // Logging information about Request.
@@ -212,13 +212,12 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                     .mime = Mime.HTML,
                     .body = "Missing \"Host\" Header",
                 });
-                raw_respond(provision, z_config, backend) catch unreachable;
-                return;
+
+                return raw_respond(provision) catch unreachable;
             }
 
             if (!provision.data.request.expect_body()) {
-                route_and_respond(provision, z_config, backend, p_config.router) catch unreachable;
-                return;
+                return route_and_respond(provision, p_config.router) catch unreachable;
             }
 
             // Everything after here is a Request that is expecting a body.
@@ -233,8 +232,8 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                         .mime = Mime.HTML,
                         .body = "",
                     });
-                    raw_respond(provision, z_config, backend) catch unreachable;
-                    return;
+
+                    return raw_respond(provision) catch unreachable;
                 };
             };
 
@@ -245,14 +244,12 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                     log.debug("{d} - got whole body with header", .{provision.index});
                     const body_end = header_end + difference;
                     provision.data.request.set_body(provision.recv_buffer.items[header_end..body_end]);
-                    route_and_respond(provision, z_config, backend, p_config.router) catch unreachable;
-                    return;
+                    return route_and_respond(provision, p_config.router) catch unreachable;
                 } else {
                     // Partial Body
                     log.debug("{d} - got partial body with header", .{provision.index});
                     stage = .{ .Body = header_end };
-                    backend.queue_recv(provision, provision.socket, provision.buffer) catch unreachable;
-                    return;
+                    return .Recv;
                 }
             } else if (header_end == provision.recv_buffer.items.len) {
                 // Body of length 0 probably or only got header.
@@ -260,14 +257,12 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                     log.debug("{d} - got body of length 0", .{provision.index});
                     // Body of Length 0.
                     provision.data.request.set_body("");
-                    route_and_respond(provision, z_config, backend, p_config.router) catch unreachable;
-                    return;
+                    return route_and_respond(provision, p_config.router) catch unreachable;
                 } else {
                     // Got only header.
                     log.debug("{d} - got all header aka no body", .{provision.index});
                     stage = .{ .Body = header_end };
-                    backend.queue_recv(provision, provision.socket, provision.buffer) catch unreachable;
-                    return;
+                    return .Recv;
                 }
             } else unreachable;
         },
@@ -284,8 +279,8 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                         .mime = Mime.HTML,
                         .body = "",
                     });
-                    raw_respond(provision, z_config, backend) catch unreachable;
-                    return;
+
+                    return raw_respond(provision) catch unreachable;
                 };
 
                 break :blk std.fmt.parseInt(u32, length_string, 10) catch {
@@ -294,28 +289,28 @@ pub fn recv_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzCon
                         .mime = Mime.HTML,
                         .body = "",
                     });
-                    raw_respond(provision, z_config, backend) catch unreachable;
-                    return;
+
+                    return raw_respond(provision) catch unreachable;
                 };
             };
 
+            const request_length = header_end + content_length;
+
             // If this body will be too long, abort early.
-            if (header_end + content_length > p_config.size_request_max) {
+            if (request_length > p_config.size_request_max) {
                 provision.data.response.set(.{
                     .status = .@"Content Too Large",
                     .mime = Mime.HTML,
                     .body = "",
                 });
-                raw_respond(provision, z_config, backend) catch unreachable;
-                return;
+                return raw_respond(provision) catch unreachable;
             }
 
-            if (job.count >= content_length + header_end) {
-                const end = header_end + content_length;
-                provision.data.request.set_body(provision.recv_buffer.items[header_end..end]);
-                route_and_respond(provision, z_config, backend, p_config.router) catch unreachable;
+            if (job.count >= request_length) {
+                provision.data.request.set_body(provision.recv_buffer.items[header_end..request_length]);
+                return route_and_respond(provision, p_config.router) catch unreachable;
             } else {
-                backend.queue_recv(provision, provision.socket, provision.buffer) catch unreachable;
+                return .Recv;
             }
         },
     }
