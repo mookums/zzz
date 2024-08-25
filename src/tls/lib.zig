@@ -1,5 +1,6 @@
 const std = @import("std");
 const log = std.log.scoped(.@"zzz/tls");
+
 const Socket = @import("../core/socket.zig").Socket;
 
 const open = @cImport({
@@ -43,6 +44,7 @@ pub const TLSContext = struct {
 };
 
 pub const TLS = struct {
+    buffer: [4096]u8 = [_]u8{undefined} ** 4096,
     tls: *open.SSL,
     r_bio: *open.BIO,
     w_bio: *open.BIO,
@@ -67,13 +69,15 @@ pub const TLS = struct {
 
         open.SSL_set_bio(self.tls, self.r_bio, self.w_bio);
     }
-    pub fn decrypt(self: *TLS, encrypted: []const u8, plaintext: []u8) !void {
+    pub fn decrypt(self: *TLS, encrypted: []const u8) ![]const u8 {
         _ = open.BIO_write(self.r_bio, encrypted.ptr, @as(c_int, @intCast(encrypted.len)));
-        _ = open.SSL_read(self.tls, plaintext.ptr, @as(c_int, @intCast(plaintext.len)));
+        const len = open.SSL_read(self.tls, self.buffer[0..].ptr, @as(c_int, @intCast(self.buffer.len)));
+        return self.buffer[0..@intCast(len)];
     }
 
-    pub fn encrypt(self: *TLS, plaintext: []const u8, encrypted: []u8) !void {
+    pub fn encrypt(self: *TLS, plaintext: []const u8) ![]const u8 {
         _ = open.SSL_write(self.tls, plaintext.ptr, @as(c_int, @intCast(plaintext.len)));
-        _ = open.BIO_read(self.w_bio, encrypted.ptr, @as(c_int, @intCast(encrypted.len)));
+        const len = open.BIO_read(self.w_bio, self.buffer[0..].ptr, @as(c_int, @intCast(self.buffer.len)));
+        return self.buffer[0..@intCast(len)];
     }
 };

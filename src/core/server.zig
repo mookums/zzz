@@ -126,15 +126,24 @@ pub fn Server(
         allocator: std.mem.Allocator,
         config: zzzConfig,
         socket: ?Socket = null,
+        tls_ctx: ?TLSContext = null,
         backend_type: AsyncType,
 
         pub fn init(config: zzzConfig, async_type: ?AsyncType) Self {
             const backend_type = async_type orelse AutoAsyncType;
 
+            // The TLS ctx can be shared across all of the runs, right?
+            // This is not a specific thing just for this thread?
+            const tls_ctx = switch (config.encryption) {
+                .tls => |inner| TLSContext.init(inner.cert, inner.key) catch unreachable,
+                .plain => null,
+            };
+
             return Self{
                 .allocator = config.allocator,
                 .config = config,
                 .socket = null,
+                .tls_ctx = tls_ctx,
                 .backend_type = backend_type,
             };
         }
@@ -148,6 +157,10 @@ pub fn Server(
                     // For closing Windows
                     std.os.windows.closesocket(socket);
                 }
+            }
+
+            if (self.tls_ctx) |tls_ctx| {
+                tls_ctx.deinit();
             }
         }
 
@@ -212,10 +225,14 @@ pub fn Server(
             defer provision_pool.release(provision.index);
             log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
+            if (provision.tls) |*tls| {
+                tls.deinit();
+                provision.tls = null;
+            }
             provision.data.clean();
         }
 
-        fn run(z_config: zzzConfig, p_config: ProtocolConfig, backend: *Async, server_socket: Socket) !void {
+        fn run(z_config: zzzConfig, p_config: ProtocolConfig, backend: *Async, tls_ctx: ?TLSContext, server_socket: Socket) !void {
             // Creating everything we need to run for the foreseeable future.
             var provision_pool = try Pool(Provision).init(
                 z_config.allocator,
@@ -223,17 +240,18 @@ pub fn Server(
                 Provision.init_hook,
                 z_config,
             );
+
             for (provision_pool.items) |*provision| {
                 provision.data = ProtocolData.init(z_config.allocator, p_config);
             }
 
-            var tls_context = try TLSContext.init(z_config.encryption.tls.cert, z_config.encryption.tls.key);
-            var tls_connections = try z_config.allocator.alloc(TLS, z_config.size_connections_max);
-            defer z_config.allocator.free(tls_connections);
-
             defer {
                 for (provision_pool.items) |*provision| {
                     provision.data.deinit(z_config.allocator);
+
+                    if (provision.tls) |tls| {
+                        tls.deinit();
+                    }
                 }
                 provision_pool.deinit(Provision.deinit_hook, z_config);
             }
@@ -291,9 +309,16 @@ pub fn Server(
                             provision.item.socket = socket;
                             provision.item.job = .{ .Recv = .{ .count = 0 } };
 
-                            const tls_connection: *TLS = &tls_connections[provision.index];
-                            tls_connection.* = try tls_context.create(socket);
-                            try tls_connection.accept();
+                            switch (z_config.encryption) {
+                                .tls => |_| {
+                                    provision.item.tls = try tls_ctx.?.create(socket);
+                                    provision.item.tls.?.accept() catch {
+                                        log.debug("{d} - tls handshake failed", .{provision.item.index});
+                                        continue :reap_loop;
+                                    };
+                                },
+                                .plain => {},
+                            }
 
                             // Call the Accept Hook.
                             if (accept_fn) |func| {
@@ -313,14 +338,12 @@ pub fn Server(
                             }
                             const read_count: u32 = @intCast(completion.result);
                             inner.count += read_count;
-                            const recv_buffer = p.buffer[0..read_count];
+                            const pre_recv_buffer = p.buffer[0..read_count];
 
-                            log.debug("{d} - Recv[E]: {s}", .{ p.index, recv_buffer });
-
-                            const tls_connection: *TLS = &tls_connections[p.index];
-                            try tls_connection.decrypt(recv_buffer, recv_buffer);
-
-                            log.debug("{d} - Recv[D]: {s}", .{ p.index, recv_buffer });
+                            const recv_buffer = switch (z_config.encryption) {
+                                .tls => |_| try p.tls.?.decrypt(pre_recv_buffer),
+                                .plain => pre_recv_buffer,
+                            };
 
                             var status: RecvStatus = @call(.auto, recv_fn, .{
                                 p,
@@ -330,20 +353,25 @@ pub fn Server(
                                 recv_buffer,
                             });
 
-                            log.debug("{d} - Recv Fn Status: {s}", .{ p.index, @tagName(status) });
+                            log.debug("{d} - recv fn status: {s}", .{ p.index, @tagName(status) });
 
                             switch (status) {
                                 .Recv => {
                                     try backend.queue_recv(p, p.socket, p.buffer);
                                 },
                                 .Send => |*pslice| {
-                                    const send_buffer = pslice.get(0, z_config.size_socket_buffer);
-                                    // This is where a security layer would encrypt the send_buffer.
+                                    const pre_send_buffer = pslice.get(0, z_config.size_socket_buffer);
                                     p.job = .{ .Send = .{ .slice = pslice.*, .count = 0 } };
 
                                     if (send_fn) |func| {
-                                        @call(.auto, func, .{ p, p_config, z_config, backend, send_buffer });
+                                        @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
                                     }
+
+                                    const send_buffer = switch (z_config.encryption) {
+                                        .tls => |_| try p.tls.?.encrypt(pre_send_buffer),
+                                        .plain => pre_send_buffer,
+                                    };
+
                                     try backend.queue_send(p, p.socket, send_buffer);
                                 },
                             }
@@ -370,14 +398,20 @@ pub fn Server(
                                     "{d} - sending next chunk starting at index {d}",
                                     .{ p.index, inner.count },
                                 );
-                                const send_buffer = inner.slice.get(
+                                const pre_send_buffer = inner.slice.get(
                                     inner.count,
                                     inner.count + z_config.size_socket_buffer,
                                 );
 
                                 if (send_fn) |func| {
-                                    @call(.auto, func, .{ p, p_config, z_config, backend, send_buffer });
+                                    @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
                                 }
+
+                                const send_buffer = switch (z_config.encryption) {
+                                    .tls => |_| try p.tls.?.encrypt(pre_send_buffer),
+                                    .plain => pre_send_buffer,
+                                };
+
                                 try backend.queue_send(completion.context, p.socket, send_buffer);
                             }
                         },
@@ -438,7 +472,7 @@ pub fn Server(
             }
 
             switch (self.config.threading) {
-                .single_threaded => run(self.config, protocol_config, &backend, server_socket) catch {
+                .single_threaded => run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch {
                     log.err("failed due to unrecoverable error!", .{});
                     return;
                 },
@@ -462,6 +496,7 @@ pub fn Server(
                                 p_config: ProtocolConfig,
                                 z_config: zzzConfig,
                                 backend_type: AsyncType,
+                                thread_tls_ctx: ?TLSContext,
                                 s_socket: Socket,
                                 thread_id: usize,
                             ) void {
@@ -495,14 +530,14 @@ pub fn Server(
                                     }
                                 }
 
-                                run(z_config, p_config, &thread_backend, s_socket) catch {
+                                run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch {
                                     log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
                                 };
                             }
-                        }.handler_fn, .{ protocol_config, self.config, self.backend_type, server_socket, i }));
+                        }.handler_fn, .{ protocol_config, self.config, self.backend_type, self.tls_ctx, server_socket, i }));
                     }
 
-                    run(self.config, protocol_config, &backend, server_socket) catch {
+                    run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch {
                         log.err("root thread failed due to unrecoverable error!", .{});
                     };
 

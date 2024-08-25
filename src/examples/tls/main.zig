@@ -6,9 +6,7 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
+    const allocator = std.heap.page_allocator;
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -34,7 +32,11 @@ pub fn main() !void {
 
     var server = http.Server.init(.{
         .allocator = allocator,
-        .encryption = .{ .tls = .{ .cert = "server.crt", .key = "server.key" } },
+        .threading = .{ .multi_threaded = .auto },
+        .encryption = .{ .tls = .{
+            .cert = "src/examples/tls/certs/server.cert",
+            .key = "src/examples/tls/certs/server.key",
+        } },
     }, null);
     defer server.deinit();
 
