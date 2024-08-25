@@ -1,13 +1,21 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
+
+const Async = @import("../async/lib.zig").Async;
+const AutoAsyncType = @import("../async/lib.zig").AutoAsyncType;
+const AsyncType = @import("../async/lib.zig").AsyncType;
+const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
+
+const Pseudoslice = @import("pseudoslice.zig").Pseudoslice;
 const Pool = @import("pool.zig").Pool;
 const Socket = @import("socket.zig").Socket;
 const ZProvision = @import("zprovision.zig").ZProvision;
-const Async = @import("../async/lib.zig").Async;
-const AutoAsyncType = @import("../async/lib.zig").AutoAsyncType;
-const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
-const AsyncType = @import("../async/lib.zig").AsyncType;
-const assert = std.debug.assert;
+
+pub const RecvStatus = union(enum) {
+    Recv,
+    Send: Pseudoslice,
+};
 
 const ServerThreadCount = union(enum) {
     auto,
@@ -77,7 +85,7 @@ pub fn Server(
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
     comptime accept_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void,
-    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) void,
+    comptime recv_fn: *const fn (provision: *ZProvision(ProtocolData), p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async, recv_buffer: []const u8) RecvStatus,
 ) type {
     return struct {
         const Provision = ZProvision(ProtocolData);
@@ -262,10 +270,21 @@ pub fn Server(
                             inner.count += read_count;
                             const recv_buffer = p.buffer[0..read_count];
 
-                            // This is where any security thing would come,
-                            //intercept and decrypt the actual data.
+                            // This is where a security layer would decrypt the recv_buffer.
 
-                            @call(.auto, recv_fn, .{ p, p_config, z_config, backend, recv_buffer });
+                            var status: RecvStatus = @call(.auto, recv_fn, .{ p, p_config, z_config, backend, recv_buffer });
+
+                            switch (status) {
+                                .Recv => {
+                                    try backend.queue_recv(p, p.socket, p.buffer);
+                                },
+                                .Send => |*pslice| {
+                                    const send_buffer = pslice.get(0, z_config.size_socket_buffer);
+                                    // This is where a security layer would encrypt the send_buffer.
+                                    p.job = .{ .Send = .{ .slice = pslice.*, .count = 0 } };
+                                    try backend.queue_send(p, p.socket, send_buffer);
+                                },
+                            }
                         },
 
                         .Send => |*inner| {
@@ -286,14 +305,8 @@ pub fn Server(
                                 try backend.queue_recv(p, p.socket, p.buffer);
                             } else {
                                 log.debug("{d} - sending next chunk starting at index {d}", .{ p.index, inner.count });
-                                try backend.queue_send(
-                                    completion.context,
-                                    p.socket,
-                                    inner.slice.get(
-                                        inner.count,
-                                        inner.count + z_config.size_socket_buffer,
-                                    ),
-                                );
+                                const send_buffer = inner.slice.get(inner.count, inner.count + z_config.size_socket_buffer);
+                                try backend.queue_send(completion.context, p.socket, send_buffer);
                             }
                         },
 
@@ -345,6 +358,7 @@ pub fn Server(
                 switch (self.backend_type) {
                     .io_uring => {
                         const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(backend.runner));
+                        uring.deinit();
                         self.allocator.destroy(uring);
                     },
                     else => {},
@@ -402,6 +416,7 @@ pub fn Server(
                                     switch (backend_type) {
                                         .io_uring => {
                                             const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(thread_backend.runner));
+                                            uring.deinit();
                                             z_config.allocator.destroy(uring);
                                         },
                                         else => {},

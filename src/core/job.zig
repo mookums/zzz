@@ -11,11 +11,6 @@ const JobType = enum {
     Close,
 };
 
-const RecvKind = union(enum) {
-    Header,
-    Body: u32,
-};
-
 pub const Job = union(JobType) {
     Open,
     Read: struct { fd: std.posix.fd_t, count: u32 },
