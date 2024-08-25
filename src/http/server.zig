@@ -144,16 +144,16 @@ pub fn recv_fn(
 
     switch (stage) {
         .Header => {
-            provision.recv_buffer.appendSlice(
-                provision.buffer[0..@as(usize, @intCast(recv_buffer.len))],
-            ) catch unreachable;
+            provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
             const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items, "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
+                log.debug("{d} - header doesn't end in this chunk, continue", .{provision.index});
                 return .Recv;
             }
 
+            log.debug("{d} - parsing header", .{provision.index});
             // The +4 is to account for the slice we match.
             const header_end: u32 = @intCast(header_ends.? + 4);
             provision.data.request.parse_headers(provision.recv_buffer.items[0..header_end]) catch |e| {

@@ -10,12 +10,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    addExample(b, "basic", false, target, optimize, zzz);
+    addExample(b, "basic", true, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
     addExample(b, "embed", false, target, optimize, zzz);
     addExample(b, "fs", false, target, optimize, zzz);
-    addExample(b, "multithread", false, target, optimize, zzz);
+    addExample(b, "multithread", true, target, optimize, zzz);
     addExample(b, "valgrind", true, target, optimize, zzz);
 }
 
@@ -38,6 +38,7 @@ fn addExample(
         example.linkLibC();
     }
 
+    // These are for OpenSSL.
     example.linkSystemLibrary("ssl");
     example.linkSystemLibrary("crypto");
 

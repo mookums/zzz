@@ -2,12 +2,14 @@ const std = @import("std");
 const panic = std.debug.panic;
 const Socket = @import("socket.zig").Socket;
 const Job = @import("../core/lib.zig").Job;
+const TLS = @import("../tls/lib.zig").TLS;
 
 pub fn ZProvision(comptime ProtocolData: type) type {
     return struct {
         const Self = @This();
         index: usize,
         job: Job,
+        tls: ?TLS = null,
         socket: Socket,
         buffer: []u8,
         recv_buffer: std.ArrayList(u8),
@@ -18,6 +20,7 @@ pub fn ZProvision(comptime ProtocolData: type) type {
             for (provisions) |*provision| {
                 provision.socket = undefined;
                 provision.data = undefined;
+                provision.tls = null;
                 // Create Buffer
                 provision.buffer = ctx.allocator.alloc(u8, ctx.size_socket_buffer) catch {
                     panic("attempting to statically allocate more memory than available. (Socket Buffer)", .{});
