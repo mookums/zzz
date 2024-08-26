@@ -10,6 +10,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    var bear_test = b.addTest(.{
+        .name = "bear_test",
+        .root_source_file = b.path("src/tls/bear.zig"),
+        .link_libc = true,
+    });
+
+    bear_test.linkSystemLibrary("bearssl");
+
+    const test_step = b.step("test", "Run Library Tests");
+    test_step.dependOn(&b.addRunArtifact(bear_test).step);
+
     addExample(b, "basic", true, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
