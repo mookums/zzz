@@ -224,6 +224,7 @@ pub fn Server(
             config: zzzConfig,
         ) void {
             defer provision_pool.release(provision.index);
+
             log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             if (provision.tls) |*tls| {
@@ -231,6 +232,7 @@ pub fn Server(
                 provision.tls = null;
             }
             provision.data.clean();
+            std.posix.close(provision.socket);
         }
 
         fn run(
@@ -343,12 +345,16 @@ pub fn Server(
                                 clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
+
                             const read_count: u32 = @intCast(completion.result);
                             inner.count += read_count;
                             const pre_recv_buffer = p.buffer[0..read_count];
 
                             const recv_buffer = switch (z_config.encryption) {
-                                .tls => |_| try p.tls.?.decrypt(pre_recv_buffer),
+                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer) catch {
+                                    clean_connection(p, &provision_pool, z_config);
+                                    continue :reap_loop;
+                                },
                                 .plain => pre_recv_buffer,
                             };
 
@@ -375,7 +381,10 @@ pub fn Server(
 
                                     switch (z_config.encryption) {
                                         .tls => |_| {
-                                            const encrypted_buffer = try p.tls.?.encrypt(plain_buffer);
+                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer) catch {
+                                                clean_connection(p, &provision_pool, z_config);
+                                                continue :reap_loop;
+                                            };
 
                                             p.job = .{
                                                 .Send = .{
@@ -469,7 +478,11 @@ pub fn Server(
 
                                             inner.count += @intCast(inner_slice.len);
 
-                                            const encrypted = try p.tls.?.encrypt(inner_slice);
+                                            const encrypted = p.tls.?.encrypt(inner_slice) catch {
+                                                clean_connection(p, &provision_pool, z_config);
+                                                continue :reap_loop;
+                                            };
+
                                             inner.encrypted = encrypted;
                                             inner.encrypted_count = 0;
 
