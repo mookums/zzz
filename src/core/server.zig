@@ -143,12 +143,10 @@ pub fn Server(
 
         pub fn deinit(self: *Self) void {
             if (self.socket) |socket| {
-                if (Socket == std.posix.socket_t) {
-                    // For closing POSIX
-                    std.posix.close(socket);
-                } else if (Socket == std.os.windows.ws2_32.SOCKET) {
-                    // For closing Windows
-                    std.os.windows.closesocket(socket);
+                switch (@TypeOf(Socket)) {
+                    std.posix.socket_t => std.posix.close(socket),
+                    std.os.windows.ws2_32.SOCKET => std.os.windows.closesocket(socket),
+                    else => {},
                 }
             }
 
