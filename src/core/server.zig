@@ -120,6 +120,7 @@ pub fn Server(
         send_buffer: []u8,
     ) void,
 ) type {
+    _ = send_fn;
     return struct {
         const Provision = ZProvision(ProtocolData);
         const Self = @This();
@@ -232,7 +233,13 @@ pub fn Server(
             provision.data.clean();
         }
 
-        fn run(z_config: zzzConfig, p_config: ProtocolConfig, backend: *Async, tls_ctx: ?TLSContext, server_socket: Socket) !void {
+        fn run(
+            z_config: zzzConfig,
+            p_config: ProtocolConfig,
+            backend: *Async,
+            tls_ctx: ?TLSContext,
+            server_socket: Socket,
+        ) !void {
             // Creating everything we need to run for the foreseeable future.
             var provision_pool = try Pool(Provision).init(
                 z_config.allocator,
@@ -360,64 +367,124 @@ pub fn Server(
                                     try backend.queue_recv(p, p.socket, p.buffer);
                                 },
                                 .Send => |*pslice| {
-                                    const pre_send_buffer = pslice.get(0, z_config.size_socket_buffer);
-                                    p.job = .{ .Send = .{ .slice = pslice.*, .count = 0 } };
+                                    const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
 
-                                    if (send_fn) |func| {
-                                        @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
+                                    //if (send_fn) |func| {
+                                    //    @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
+                                    //}
+
+                                    switch (z_config.encryption) {
+                                        .tls => |_| {
+                                            const encrypted_buffer = try p.tls.?.encrypt(plain_buffer);
+
+                                            p.job = .{
+                                                .Send = .{
+                                                    .TLS = .{
+                                                        .slice = pslice.*,
+                                                        .count = @intCast(plain_buffer.len),
+                                                        .encrypted = encrypted_buffer,
+                                                        .encrypted_count = 0,
+                                                    },
+                                                },
+                                            };
+
+                                            try backend.queue_send(p, p.socket, encrypted_buffer);
+                                        },
+                                        .plain => {
+                                            p.job = .{
+                                                .Send = .{
+                                                    .Plain = .{
+                                                        .slice = pslice.*,
+                                                        .count = 0,
+                                                    },
+                                                },
+                                            };
+                                            try backend.queue_send(p, p.socket, plain_buffer);
+                                        },
                                     }
-
-                                    const send_buffer = switch (z_config.encryption) {
-                                        .tls => |_| try p.tls.?.encrypt(pre_send_buffer),
-                                        .plain => pre_send_buffer,
-                                    };
-
-                                    try backend.queue_send(p, p.socket, send_buffer);
                                 },
                             }
                         },
 
-                        .Send => |*inner| {
+                        .Send => |*send_type| {
                             log.debug("{d} - send triggered", .{p.index});
-                            // The problem is, if we have TLS enabled, this is no longer accurate.
-                            // This tracks the underlying unencrypted data while send would return the
-                            // encrypted count.
                             const send_count = completion.result;
-                            inner.count += @intCast(send_count);
 
-                            // If the socket is closed.
                             if (send_count <= 0) {
                                 clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
 
-                            if (inner.count >= inner.slice.len) {
-                                log.debug("{d} - queueing a new recv", .{p.index});
-                                p.recv_buffer.clearRetainingCapacity();
-                                p.job = .{ .Recv = .{ .count = 0 } };
-                                try backend.queue_recv(p, p.socket, p.buffer);
-                            } else {
-                                log.debug(
-                                    "{d} - sending next chunk starting at index {d}",
-                                    .{ p.index, inner.count },
-                                );
-                                const pre_send_buffer = inner.slice.get(
-                                    inner.count,
-                                    inner.count + z_config.size_socket_buffer,
-                                );
+                            switch (send_type.*) {
+                                .Plain => |*inner| {
+                                    // This is for when sending plaintext.
+                                    inner.count += @intCast(send_count);
 
-                                log.debug("{d} - chunk ends at: {d}", .{ p.index, pre_send_buffer.len + inner.count });
+                                    if (inner.count >= inner.slice.len) {
+                                        log.debug("{d} - queueing a new recv", .{p.index});
+                                        p.recv_buffer.clearRetainingCapacity();
+                                        p.job = .{ .Recv = .{ .count = 0 } };
+                                        try backend.queue_recv(p, p.socket, p.buffer);
+                                    } else {
+                                        log.debug(
+                                            "{d} - sending next chunk starting at index {d}",
+                                            .{ p.index, inner.count },
+                                        );
 
-                                if (send_fn) |func| {
-                                    @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
-                                }
+                                        const plain_buffer = inner.slice.get(
+                                            inner.count,
+                                            inner.count + z_config.size_socket_buffer,
+                                        );
 
-                                const send_buffer = switch (z_config.encryption) {
-                                    .tls => |_| try p.tls.?.encrypt(pre_send_buffer),
-                                    .plain => pre_send_buffer,
-                                };
+                                        log.debug("{d} - chunk ends at: {d}", .{
+                                            p.index,
+                                            plain_buffer.len + inner.count,
+                                        });
 
-                                try backend.queue_send(completion.context, p.socket, send_buffer);
+                                        try backend.queue_send(p, p.socket, plain_buffer);
+                                    }
+                                },
+                                .TLS => |*inner| {
+                                    // This is for when sending encrypted data.
+                                    inner.encrypted_count += @intCast(send_count);
+
+                                    if (inner.encrypted_count >= inner.encrypted.len) {
+                                        if (inner.count >= inner.slice.len) {
+                                            // All done sending.
+                                            log.debug("{d} - queueing a new recv", .{p.index});
+                                            p.recv_buffer.clearRetainingCapacity();
+                                            p.job = .{ .Recv = .{ .count = 0 } };
+                                            try backend.queue_recv(p, p.socket, p.buffer);
+                                        } else {
+                                            // Queue a new chunk up for sending.
+                                            log.debug(
+                                                "{d} - sending next chunk starting at index {d}",
+                                                .{ p.index, inner.count },
+                                            );
+
+                                            const inner_slice = inner.slice.get(
+                                                inner.count,
+                                                inner.count + z_config.size_socket_buffer,
+                                            );
+
+                                            inner.count += @intCast(inner_slice.len);
+
+                                            const encrypted = try p.tls.?.encrypt(inner_slice);
+                                            inner.encrypted = encrypted;
+                                            inner.encrypted_count = 0;
+
+                                            try backend.queue_send(p, p.socket, inner.encrypted);
+                                        }
+                                    } else {
+                                        log.debug(
+                                            "{d} - sending next encrypted chunk starting at index {d}",
+                                            .{ p.index, inner.encrypted_count },
+                                        );
+
+                                        const remainder = inner.encrypted[inner.encrypted_count..];
+                                        try backend.queue_send(p, p.socket, remainder);
+                                    }
+                                },
                             }
                         },
 
