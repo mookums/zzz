@@ -111,16 +111,7 @@ pub fn Server(
         backend: *Async,
         recv_buffer: []const u8,
     ) RecvStatus,
-    /// This is called BEFORE the Send.
-    comptime send_fn: ?*const fn (
-        provision: *ZProvision(ProtocolData),
-        p_config: ProtocolConfig,
-        z_config: zzzConfig,
-        backend: *Async,
-        send_buffer: []u8,
-    ) void,
 ) type {
-    _ = send_fn;
     return struct {
         const Provision = ZProvision(ProtocolData);
         const Self = @This();
@@ -374,10 +365,6 @@ pub fn Server(
                                 },
                                 .Send => |*pslice| {
                                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
-
-                                    //if (send_fn) |func| {
-                                    //    @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
-                                    //}
 
                                     switch (z_config.encryption) {
                                         .tls => |_| {
