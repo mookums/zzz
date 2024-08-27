@@ -324,4 +324,9 @@ pub fn recv_fn(
     }
 }
 
-pub const Server = zzzServer(ProtocolData, ProtocolConfig, accept_fn, recv_fn, null);
+pub const Server = zzzServer(
+    ProtocolData,
+    ProtocolConfig,
+    accept_fn,
+    recv_fn,
+);
