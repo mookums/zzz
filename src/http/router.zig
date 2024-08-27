@@ -104,13 +104,11 @@ pub const Router = struct {
                     .body = bytes,
                 });
 
-                // We can assume that this path will be unique SINCE this is an embedded file.
-                // This allows us to quickly generate a unique ETag.
-                const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Crc32.hash(path)});
-
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
                 if (comptime bytes.len > 1024) {
+                    @setEvalBranchQuota(1_000_000);
+                    const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
                     response.headers.add("ETag", etag[0..]) catch unreachable;
 
                     if (comptime builtin.mode == .Debug) {

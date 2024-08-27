@@ -6,14 +6,14 @@ fn CaseStringMap(comptime T: type) type {
     return std.HashMap([]const u8, T, struct {
         pub fn hash(self: @This(), input: []const u8) u64 {
             _ = self;
-            var crc = std.hash.Crc32.init();
+            var wyhash = std.hash.Wyhash.init(0);
 
             for (input) |byte| {
                 const lower = std.ascii.toLower(byte);
-                crc.update((&lower)[0..1]);
+                wyhash.update((&lower)[0..1]);
             }
 
-            return crc.final();
+            return wyhash.final();
         }
 
         pub fn eql(self: @This(), first: []const u8, second: []const u8) bool {

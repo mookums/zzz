@@ -63,7 +63,7 @@ pub fn Pool(comptime T: type) type {
         // Returns null otherwise.
         pub fn borrow(self: *Self, id: u32) !Borrow(T) {
             const bytes = std.mem.toBytes(id)[0..];
-            const hash = @mod(std.hash.Crc32.hash(bytes), self.items.len);
+            const hash = @mod(std.hash.Wyhash.hash(0, bytes), self.items.len);
 
             if (!self.dirty.isSet(hash)) {
                 self.dirty.set(hash);

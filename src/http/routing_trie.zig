@@ -16,7 +16,7 @@ fn TokenHashMap(comptime V: type) type {
                 }
             };
 
-            return std.hash.Crc32.hash(bytes);
+            return std.hash.Wyhash.hash(0, bytes);
         }
 
         pub fn eql(self: @This(), first: Token, second: Token) bool {
