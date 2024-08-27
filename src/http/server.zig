@@ -215,7 +215,9 @@ pub fn recv_fn(
             });
 
             // HTTP/1.1 REQUIRES a Host header to be present.
-            if (provision.data.request.version == .@"HTTP/1.1" and provision.data.request.headers.get("Host") == null) {
+            const is_http_1_1 = provision.data.request.version == .@"HTTP/1.1";
+            const is_host_present = provision.data.request.headers.get("Host") != null;
+            if (is_http_1_1 and !is_host_present) {
                 provision.data.response.set(.{
                     .status = .@"Bad Request",
                     .mime = Mime.HTML,
