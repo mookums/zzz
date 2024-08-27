@@ -314,6 +314,7 @@ pub fn Server(
                                     provision.item.tls = try tls_ctx.?.create(socket);
                                     provision.item.tls.?.accept() catch {
                                         log.debug("{d} - tls handshake failed", .{provision.item.index});
+                                        clean_connection(provision.item, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
                                 },
