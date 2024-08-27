@@ -11,10 +11,10 @@ fn Borrow(comptime T: type) type {
 pub fn Pool(comptime T: type) type {
     return struct {
         const Self = @This();
+        allocator: std.mem.Allocator,
         // Buffer for the Pool.
         items: []T,
         dirty: std.DynamicBitSet,
-        allocator: std.mem.Allocator,
         full: bool = false,
 
         /// Initalizes our items buffer as undefined.
@@ -25,7 +25,11 @@ pub fn Pool(comptime T: type) type {
             args: anytype,
         ) !Self {
             const items: []T = try allocator.alloc(T, size);
-            const self = Self{ .allocator = allocator, .items = items, .dirty = try std.DynamicBitSet.initEmpty(allocator, size) };
+            const self = Self{
+                .allocator = allocator,
+                .items = items,
+                .dirty = try std.DynamicBitSet.initEmpty(allocator, size),
+            };
 
             if (init_hook) |hook| {
                 @call(.auto, hook, .{ self.items, args });

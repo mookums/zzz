@@ -71,7 +71,7 @@ pub const TLS = struct {
                 open.SSL_ERROR_WANT_READ, open.SSL_ERROR_WANT_WRITE => return error.WouldBlock,
                 else => {
                     const error_string = open.ERR_error_string(open.ERR_get_error(), null);
-                    log.debug("SSL_accept failed: {s}\n", .{error_string});
+                    log.debug("SSL_accept failed: {s}", .{error_string});
                     return error.SSLAcceptFailed;
                 },
             }
