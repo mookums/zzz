@@ -379,6 +379,9 @@ pub fn Server(
 
                         .Send => |*inner| {
                             log.debug("{d} - send triggered", .{p.index});
+                            // The problem is, if we have TLS enabled, this is no longer accurate.
+                            // This tracks the underlying unencrypted data while send would return the
+                            // encrypted count.
                             const send_count = completion.result;
                             inner.count += @intCast(send_count);
 
@@ -402,6 +405,8 @@ pub fn Server(
                                     inner.count,
                                     inner.count + z_config.size_socket_buffer,
                                 );
+
+                                log.debug("{d} - chunk ends at: {d}", .{ p.index, pre_send_buffer.len + inner.count });
 
                                 if (send_fn) |func| {
                                     @call(.auto, func, .{ p, p_config, z_config, backend, pre_send_buffer });
@@ -472,8 +477,8 @@ pub fn Server(
             }
 
             switch (self.config.threading) {
-                .single_threaded => run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch {
-                    log.err("failed due to unrecoverable error!", .{});
+                .single_threaded => run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch |e| {
+                    log.err("failed due to unrecoverable error: {any}", .{e});
                     return;
                 },
                 .multi_threaded => |count| {
@@ -530,15 +535,15 @@ pub fn Server(
                                     }
                                 }
 
-                                run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch {
-                                    log.err("thread #{d} failed due to unrecoverable error!", .{thread_id});
+                                run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch |e| {
+                                    log.err("thread #{d} failed due to unrecoverable error: {any}", .{ thread_id, e });
                                 };
                             }
                         }.handler_fn, .{ protocol_config, self.config, self.backend_type, self.tls_ctx, server_socket, i }));
                     }
 
-                    run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch {
-                        log.err("root thread failed due to unrecoverable error!", .{});
+                    run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch |e| {
+                        log.err("root thread failed due to unrecoverable error: {any}", .{e});
                     };
 
                     for (threads.items) |thread| {
