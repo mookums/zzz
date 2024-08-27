@@ -40,6 +40,7 @@ fn raw_respond(p: *Provision) !RecvStatus {
 
     const body = p.data.response.body orelse "";
     const header_buffer = try p.data.response.headers_into_buffer(p.buffer, @intCast(body.len));
+    p.data.response.headers.clear();
     const pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
     return .{ .Send = pseudo };
 }
