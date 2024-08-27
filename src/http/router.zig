@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Route = @import("route.zig").Route;
 const Capture = @import("routing_trie.zig").Capture;
@@ -111,6 +112,20 @@ pub const Router = struct {
                 // it might be more beneficial to using caching.
                 if (comptime bytes.len > 1024) {
                     response.headers.add("ETag", etag[0..]) catch unreachable;
+
+                    if (comptime builtin.mode == .Debug) {
+                        // Don't Cache in Debug.
+                        response.headers.add(
+                            "Cache-Control",
+                            "no-cache",
+                        ) catch unreachable;
+                    } else {
+                        // Cache for 30 days.
+                        response.headers.add(
+                            "Cache-Control",
+                            comptime std.fmt.comptimePrint("max-age={d}", .{60 * 60 * 24 * 30}),
+                        ) catch unreachable;
+                    }
 
                     if (request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
