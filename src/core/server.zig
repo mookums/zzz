@@ -16,6 +16,7 @@ const TLSContext = @import("../tls/lib.zig").TLSContext;
 const TLS = @import("../tls/lib.zig").TLS;
 
 pub const RecvStatus = union(enum) {
+    Kill,
     Recv,
     Send: Pseudoslice,
 };
@@ -361,6 +362,9 @@ pub fn Server(
                             log.debug("{d} - recv fn status: {s}", .{ p.index, @tagName(status) });
 
                             switch (status) {
+                                .Kill => {
+                                    return;
+                                },
                                 .Recv => {
                                     try backend.queue_recv(p, p.socket, p.buffer);
                                 },

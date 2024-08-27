@@ -104,7 +104,7 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
     }
 
     if (p.data.response.status == .Kill) {
-        return error.Kill;
+        return .Kill;
     }
 
     return try raw_respond(p);
