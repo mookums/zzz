@@ -125,10 +125,13 @@ pub fn Server(
         pub fn init(config: zzzConfig, async_type: ?AsyncType) Self {
             const backend_type = async_type orelse AutoAsyncType;
 
-            // The TLS ctx can be shared across all of the runs, right?
-            // This is not a specific thing just for this thread?
             const tls_ctx = switch (config.encryption) {
-                .tls => |inner| TLSContext.init(inner.cert, inner.key) catch unreachable,
+                .tls => |inner| TLSContext.init(.{
+                    .allocator = config.allocator,
+                    .cert_path = inner.cert,
+                    .key_path = inner.key,
+                    .size_tls_buffer_max = config.size_socket_buffer * 2,
+                }) catch unreachable,
                 .plain => null,
             };
 
@@ -313,8 +316,8 @@ pub fn Server(
                             switch (z_config.encryption) {
                                 .tls => |_| {
                                     provision.tls = try tls_ctx.?.create(socket);
-                                    provision.tls.?.accept() catch {
-                                        log.debug("{d} - tls handshake failed", .{provision.index});
+                                    provision.tls.?.accept() catch |e| {
+                                        log.debug("{d} - tls handshake failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };

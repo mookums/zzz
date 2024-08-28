@@ -6,7 +6,7 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -35,12 +35,22 @@ pub fn main() !void {
         }
     }.handler_fn));
 
+    try router.serve_route("/kill", http.Route.init().get(struct {
+        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
+            response.set(.{
+                .status = .Kill,
+                .mime = http.Mime.HTML,
+                .body = "",
+            });
+        }
+    }.handler_fn));
+
     var server = http.Server.init(.{
         .allocator = allocator,
         .threading = .single_threaded,
         .encryption = .{ .tls = .{
-            .cert = "src/examples/tls/certs/server.cert",
-            .key = "src/examples/tls/certs/server.key",
+            .cert = "src/examples/tls/certs/cert.pem",
+            .key = "src/examples/tls/certs/key.pem",
         } },
     }, null);
     defer server.deinit();
