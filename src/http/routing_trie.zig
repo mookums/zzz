@@ -102,7 +102,7 @@ pub const Capture = union(TokenMatch) {
     Remaining: TokenMatch.Remaining.as_type(),
 };
 
-pub const CapturedRoute = struct {
+pub const FoundRoute = struct {
     route: Route,
     captures: []Capture,
 };
@@ -197,7 +197,7 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
-    pub fn get_route(self: RoutingTrie, path: []const u8, captures: []Capture) ?CapturedRoute {
+    pub fn get_route(self: RoutingTrie, path: []const u8, captures: []Capture) ?FoundRoute {
         // We need some way of also returning the capture groups here.
         var capture_idx: usize = 0;
         var iter = std.mem.tokenizeScalar(u8, path, '/');
@@ -233,7 +233,7 @@ pub const RoutingTrie = struct {
                         .Remaining => {
                             const rest = iter.buffer[iter.index - chunk.len ..];
                             captures[capture_idx] = Capture{ .Remaining = rest };
-                            return CapturedRoute{ .route = child.route.?, .captures = captures[0 .. capture_idx + 1] };
+                            return FoundRoute{ .route = child.route.?, .captures = captures[0 .. capture_idx + 1] };
                         },
                     }
 
@@ -258,7 +258,7 @@ pub const RoutingTrie = struct {
         }
 
         if (current.route) |r| {
-            return CapturedRoute{ .route = r, .captures = captures[0..capture_idx] };
+            return FoundRoute{ .route = r, .captures = captures[0..capture_idx] };
         } else {
             return null;
         }

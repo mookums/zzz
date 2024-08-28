@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Route = @import("route.zig").Route;
 const Capture = @import("routing_trie.zig").Capture;
-const CapturedRoute = @import("routing_trie.zig").CapturedRoute;
+const FoundRoute = @import("routing_trie.zig").FoundRoute;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
@@ -143,7 +143,7 @@ pub const Router = struct {
         try self.routes.add_route(path, route);
     }
 
-    pub fn get_route_from_host(self: Router, host: []const u8, captures: []Capture) ?CapturedRoute {
+    pub fn get_route_from_host(self: Router, host: []const u8, captures: []Capture) ?FoundRoute {
         return self.routes.get_route(host, captures);
     }
 };
