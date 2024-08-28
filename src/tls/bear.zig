@@ -154,6 +154,7 @@ pub const TLSContext = struct {
         }
 
         self.pkey = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
+        log.debug("Key Curve Type: {d}", .{self.pkey.curve});
         return self;
     }
 
@@ -188,7 +189,6 @@ pub const TLS = struct {
     allocator: std.mem.Allocator,
     socket: Socket,
     context: bearssl.br_ssl_server_context,
-    io_context: bearssl.br_sslio_context,
     iobuf: []u8,
 
     pub fn init(options: TLSOptions) TLS {
@@ -196,7 +196,6 @@ pub const TLS = struct {
             .allocator = options.allocator,
             .socket = options.socket,
             .context = options.context,
-            .io_context = undefined,
             .iobuf = options.allocator.alloc(u8, bearssl.BR_SSL_BUFSIZE_BIDI) catch unreachable,
         };
     }
@@ -210,10 +209,6 @@ pub const TLS = struct {
         bearssl.br_ssl_engine_set_buffer(engine, self.iobuf.ptr, self.iobuf.len, 1);
         bearssl.br_ssl_engine_set_versions(engine, bearssl.BR_TLS11, bearssl.BR_TLS12);
         _ = bearssl.br_ssl_server_reset(&self.context);
-
-        if (bearssl.br_ssl_engine_last_error(engine) != 0) {
-            return error.ServerAcceptFailed;
-        }
 
         var cycle_count: u32 = 0;
         while (cycle_count < 20) {
@@ -258,6 +253,7 @@ pub const TLS = struct {
                     total_read += read;
                     log.debug("Cycle {d} - Total Read: {d}", .{ cycle_count, total_read });
                 }
+
                 bearssl.br_ssl_engine_recvrec_ack(engine, total_read);
                 continue;
             }
