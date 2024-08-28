@@ -289,7 +289,7 @@ pub fn Server(
                             }
 
                             // Borrow a provision from the pool otherwise close the socket.
-                            const provision = provision_pool.borrow(@intCast(completion.result)) catch {
+                            const borrowed = provision_pool.borrow(@intCast(completion.result)) catch {
                                 continue :reap_loop;
                             };
 
@@ -303,17 +303,19 @@ pub fn Server(
                                 );
                             }
 
+                            const provision = borrowed.item;
+
                             // Store the index of this item.
-                            provision.item.index = provision.index;
-                            provision.item.socket = socket;
-                            provision.item.job = .{ .Recv = .{ .count = 0 } };
+                            provision.index = borrowed.index;
+                            provision.socket = socket;
+                            provision.job = .{ .Recv = .{ .count = 0 } };
 
                             switch (z_config.encryption) {
                                 .tls => |_| {
-                                    provision.item.tls = try tls_ctx.?.create(socket);
-                                    provision.item.tls.?.accept() catch {
-                                        log.debug("{d} - tls handshake failed", .{provision.item.index});
-                                        clean_connection(provision.item, &provision_pool, z_config);
+                                    provision.tls = try tls_ctx.?.create(socket);
+                                    provision.tls.?.accept() catch {
+                                        log.debug("{d} - tls handshake failed", .{provision.index});
+                                        clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
                                 },
@@ -322,10 +324,10 @@ pub fn Server(
 
                             // Call the Accept Hook.
                             if (accept_fn) |func| {
-                                @call(.auto, func, .{ provision.item, p_config, z_config, backend });
+                                @call(.auto, func, .{ provision, p_config, z_config, backend });
                             }
 
-                            _ = try backend.queue_recv(provision.item, provision.item.socket, provision.item.buffer);
+                            _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
                         },
 
                         .Recv => |*inner| {
