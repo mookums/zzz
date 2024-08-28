@@ -12,22 +12,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    zzz.linkSystemLibrary("ssl", .{});
-    zzz.linkSystemLibrary("crypto", .{});
-
-    //var bear_test = b.addTest(.{
-    //    .name = "bear_test",
-    //    .root_source_file = b.path("src/tls/bear.zig"),
-    //    .link_libc = true,
-    //});
-
-    //bear_test.linkSystemLibrary("bearssl");
-
-    //const test_step = b.step("test", "Run Library Tests");
-    //test_step.dependOn(&b.addRunArtifact(bear_test).step);
+    zzz.linkSystemLibrary("bearssl", .{});
 
     addExample(b, "basic", false, target, optimize, zzz);
-    addExample(b, "tls", false, target, optimize, zzz);
+    addExample(b, "tls", true, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
     addExample(b, "fs", false, target, optimize, zzz);
     addExample(b, "multithread", false, target, optimize, zzz);
@@ -53,10 +41,6 @@ fn addExample(
     if (link_libc) {
         example.linkLibC();
     }
-
-    // These are for OpenSSL.
-    example.linkSystemLibrary("ssl");
-    example.linkSystemLibrary("crypto");
 
     example.root_module.addImport("zzz", zzz_module);
     const install_artifact = b.addInstallArtifact(example, .{});
