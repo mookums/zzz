@@ -67,7 +67,6 @@ fn parse_pem(allocator: std.mem.Allocator, section: []const u8, buffer: []const 
             0, bearssl.BR_PEM_BEGIN_OBJ => {
                 const name = bearssl.br_pem_decoder_name(&p_ctx);
                 log.debug("Name: {s}", .{std.mem.span(name)});
-                // This should get passed in maybe?
                 if (std.mem.eql(u8, std.mem.span(name), section)) {
                     found = true;
                     decoded.clearRetainingCapacity();
@@ -86,17 +85,25 @@ fn parse_pem(allocator: std.mem.Allocator, section: []const u8, buffer: []const 
     return error.PrivateKeyNotFound;
 }
 
+const TLSKeyType = enum {
+    RSA,
+    EC,
+};
+
 const TLSContextOptions = struct {
     allocator: std.mem.Allocator,
     cert_path: []const u8,
+    cert_name: []const u8,
     key_path: []const u8,
+    key_name: []const u8,
     size_tls_buffer_max: u32,
 };
 
 pub const TLSContext = struct {
     allocator: std.mem.Allocator,
     x509: bearssl.br_x509_certificate,
-    pkey: bearssl.br_ec_private_key,
+    pkey: *anyopaque,
+    key_type: TLSKeyType,
     cert: []const u8,
     key: []const u8,
 
@@ -120,7 +127,7 @@ pub const TLSContext = struct {
         );
         defer self.allocator.free(key_buf);
 
-        self.cert = try parse_pem(self.allocator, "CERTIFICATE", cert_buf);
+        self.cert = try parse_pem(self.allocator, options.cert_name, cert_buf);
 
         var x_ctx: bearssl.br_x509_decoder_context = undefined;
         bearssl.br_x509_decoder_init(&x_ctx, null, null);
@@ -136,7 +143,7 @@ pub const TLSContext = struct {
         };
 
         // Read Private Key.
-        self.key = try parse_pem(self.allocator, "EC PRIVATE KEY", key_buf);
+        self.key = try parse_pem(self.allocator, options.key_name, key_buf);
 
         var sk_ctx: bearssl.br_skey_decoder_context = undefined;
         bearssl.br_skey_decoder_init(&sk_ctx);
@@ -148,9 +155,22 @@ pub const TLSContext = struct {
 
         const key_type = bearssl.br_skey_decoder_key_type(&sk_ctx);
 
-        if (key_type != bearssl.BR_KEYTYPE_EC) {
-            log.debug("Key Type: {d}", .{key_type});
-            return error.InvalidKeyType;
+        switch (key_type) {
+            bearssl.BR_KEYTYPE_RSA => {
+                self.key_type = .RSA;
+                self.pkey = try options.allocator.create(bearssl.br_rsa_private_key);
+                const rsa: *bearssl.br_rsa_private_key = @ptrCast(@alignCast(self.pkey));
+                rsa.* = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0];
+            },
+            bearssl.BR_KEYTYPE_EC => {
+                self.key_type = .EC;
+                self.pkey = try options.allocator.create(bearssl.br_ec_private_key);
+                const ec: *bearssl.br_ec_private_key = @ptrCast(@alignCast(self.pkey));
+                ec.* = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
+            },
+            else => {
+                return error.InvalidKeyType;
+            },
         }
 
         self.pkey = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
@@ -160,7 +180,25 @@ pub const TLSContext = struct {
 
     pub fn create(self: TLSContext, socket: Socket) !TLS {
         var ctx: bearssl.br_ssl_server_context = undefined;
-        bearssl.br_ssl_server_init_full_ec(&ctx, &self.x509, 1, bearssl.BR_KEYTYPE_EC, &self.pkey);
+        switch (self.key_type) {
+            .RSA => {
+                bearssl.br_ssl_server_init_full_rsa(
+                    &ctx,
+                    &self.x509,
+                    1,
+                    @ptrCast(@alignCast(self.pkey)),
+                );
+            },
+            .EC => {
+                bearssl.br_ssl_server_init_full_ec(
+                    &ctx,
+                    &self.x509,
+                    1,
+                    bearssl.BR_KEYTYPE_EC,
+                    @ptrCast(@alignCast(self.pkey)),
+                );
+            },
+        }
 
         if (bearssl.br_ssl_engine_last_error(&ctx.eng) != 0) {
             return error.ServerInitializationFailed;
@@ -176,6 +214,17 @@ pub const TLSContext = struct {
     pub fn deinit(self: TLSContext) void {
         self.allocator.free(self.cert);
         self.allocator.free(self.key);
+
+        switch (self.key_type) {
+            .RSA => {
+                const rsa: *bearssl.br_rsa_private_key = @ptrCast(@alignCast(self.pkey));
+                self.allocator.destroy(rsa);
+            },
+            .EC => {
+                const ec: *bearssl.br_ec_private_key = @ptrCast(@alignCast(self.pkey));
+                self.allocator.destroy(ec);
+            },
+        }
     }
 };
 
@@ -213,6 +262,7 @@ pub const TLS = struct {
         var cycle_count: u32 = 0;
         while (cycle_count < 20) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
+            log.debug("Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
             if (last_error != 0) {
                 log.debug("Cycle {d} - Handshake Failed | {s}", .{
                     cycle_count,
@@ -223,7 +273,7 @@ pub const TLS = struct {
 
             cycle_count += 1;
             const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("Cycle {d} - Engine State {any}", .{ cycle_count, state });
+            log.debug("Cycle {d} - Engine State | {any}", .{ cycle_count, state });
 
             if ((state & bearssl.BR_SSL_CLOSED) != 0) {
                 return error.HandshakeFailed;
