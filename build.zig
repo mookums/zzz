@@ -13,6 +13,8 @@ pub fn build(b: *std.Build) void {
     });
 
     zzz.linkSystemLibrary("bearssl", .{});
+    zzz.linkSystemLibrary("ssl", .{});
+    zzz.linkSystemLibrary("crypto", .{});
 
     addExample(b, "basic", false, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);
