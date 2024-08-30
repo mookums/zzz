@@ -7,6 +7,11 @@ const bearssl = @cImport({
     @cInclude("bearssl.h");
 });
 
+const PrivateKey = union(enum) {
+    RSA: bearssl.br_rsa_private_key,
+    EC: bearssl.br_ec_private_key,
+};
+
 fn fmt_bearssl_error(error_code: c_int) []const u8 {
     return switch (error_code) {
         bearssl.BR_ERR_OK => "BR_ERR_OK",
@@ -85,11 +90,6 @@ fn parse_pem(allocator: std.mem.Allocator, section: []const u8, buffer: []const 
     return error.PrivateKeyNotFound;
 }
 
-const TLSKeyType = enum {
-    RSA,
-    EC,
-};
-
 const TLSContextOptions = struct {
     allocator: std.mem.Allocator,
     cert_path: []const u8,
@@ -102,8 +102,7 @@ const TLSContextOptions = struct {
 pub const TLSContext = struct {
     allocator: std.mem.Allocator,
     x509: *bearssl.br_x509_certificate,
-    pkey: *anyopaque,
-    key_type: TLSKeyType,
+    pkey: PrivateKey,
     cert: []const u8,
     key: []const u8,
 
@@ -158,17 +157,11 @@ pub const TLSContext = struct {
 
         switch (key_type) {
             bearssl.BR_KEYTYPE_RSA => {
-                self.key_type = .RSA;
-                self.pkey = try options.allocator.create(bearssl.br_rsa_private_key);
-                const rsa: *bearssl.br_rsa_private_key = @ptrCast(@alignCast(self.pkey));
-                rsa.* = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0];
+                self.pkey = .{ .RSA = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0] };
             },
             bearssl.BR_KEYTYPE_EC => {
-                self.key_type = .EC;
-                self.pkey = try options.allocator.create(bearssl.br_ec_private_key);
-                const ec: *bearssl.br_ec_private_key = @ptrCast(@alignCast(self.pkey));
-                ec.* = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
-                log.debug("Key Curve Type: {d}", .{ec.curve});
+                self.pkey = .{ .EC = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0] };
+                log.debug("Key Curve Type: {d}", .{self.pkey.EC.curve});
             },
             else => {
                 return error.InvalidKeyType;
@@ -183,24 +176,26 @@ pub const TLSContext = struct {
             .allocator = self.allocator,
             .socket = socket,
             .context = undefined,
+            .pkey = self.pkey,
+            .chain = self.x509[0..1],
         });
 
-        switch (self.key_type) {
-            .RSA => {
+        switch (self.pkey) {
+            .RSA => |*inner| {
                 bearssl.br_ssl_server_init_full_rsa(
                     &tls.context,
                     self.x509,
                     1,
-                    @ptrCast(@alignCast(self.pkey)),
+                    inner,
                 );
             },
-            .EC => {
+            .EC => |*inner| {
                 bearssl.br_ssl_server_init_full_ec(
                     &tls.context,
                     self.x509,
                     1,
                     bearssl.BR_KEYTYPE_EC,
-                    @ptrCast(@alignCast(self.pkey)),
+                    inner,
                 );
             },
         }
@@ -216,24 +211,69 @@ pub const TLSContext = struct {
         self.allocator.free(self.cert);
         self.allocator.free(self.key);
         self.allocator.destroy(self.x509);
-
-        switch (self.key_type) {
-            .RSA => {
-                const rsa: *bearssl.br_rsa_private_key = @ptrCast(@alignCast(self.pkey));
-                self.allocator.destroy(rsa);
-            },
-            .EC => {
-                const ec: *bearssl.br_ec_private_key = @ptrCast(@alignCast(self.pkey));
-                self.allocator.destroy(ec);
-            },
-        }
     }
 };
+
+const PolicyContext = struct {
+    vtable: *bearssl.br_ssl_server_policy_class,
+    id: u32 = 0,
+    chain: []const bearssl.br_x509_certificate,
+    pkey: PrivateKey,
+};
+
+fn choose(
+    pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
+    ctx: [*c]const bearssl.br_ssl_server_context,
+    choices: [*c]bearssl.br_ssl_server_choices,
+) callconv(.C) c_int {
+    // https://www.bearssl.org/apidoc/structbr__ssl__server__policy__class__.html
+    const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
+    log.debug("Choose fired! | ID: {d}", .{policy.id});
+    _ = ctx;
+
+    choices.*.chain = policy.chain.ptr;
+    choices.*.chain_len = policy.chain.len;
+    choices.*.cipher_suite = bearssl.BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+    choices.*.algo_id = bearssl.br_sha256_ID;
+    return 1;
+}
+
+fn do_keyx(
+    pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
+    data: [*c]u8,
+    len: [*c]usize,
+) callconv(.C) u32 {
+    const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
+    log.debug("KeyX fired! | ID: {d}", .{policy.id});
+    _ = data;
+    _ = len;
+
+    return 0;
+}
+
+fn do_sign(
+    pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
+    algo_id: c_uint,
+    data: [*c]u8,
+    hv_len: usize,
+    len: usize,
+) callconv(.C) usize {
+    const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
+    log.debug("Sign fired! | ID: {d}", .{policy.id});
+    _ = algo_id;
+    _ = data;
+    _ = hv_len;
+    _ = len;
+
+    return 0;
+}
 
 const TLSOptions = struct {
     allocator: std.mem.Allocator,
     socket: Socket,
     context: bearssl.br_ssl_server_context,
+    chain: []const bearssl.br_x509_certificate,
+    pkey: PrivateKey,
 };
 
 pub const TLS = struct {
@@ -241,6 +281,9 @@ pub const TLS = struct {
     socket: Socket,
     context: bearssl.br_ssl_server_context,
     iobuf: []u8,
+    chain: []const bearssl.br_x509_certificate,
+    pkey: PrivateKey,
+    policy: *PolicyContext = undefined,
 
     pub fn init(options: TLSOptions) TLS {
         return .{
@@ -248,88 +291,37 @@ pub const TLS = struct {
             .socket = options.socket,
             .context = options.context,
             .iobuf = options.allocator.alloc(u8, bearssl.BR_SSL_BUFSIZE_BIDI) catch unreachable,
+            .chain = options.chain,
+            .pkey = options.pkey,
+            .policy = options.allocator.create(PolicyContext) catch unreachable,
         };
     }
 
     pub fn deinit(self: TLS) void {
         self.allocator.free(self.iobuf);
-    }
+        self.allocator.free(self.chain);
 
-    fn choose(
-        pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
-        ctx: [*c]const bearssl.br_ssl_server_context,
-        choices: [*c]bearssl.br_ssl_server_choices,
-    ) callconv(.C) c_int {
-        // https://www.bearssl.org/apidoc/structbr__ssl__server__policy__class__.html
-
-        const policy: *const bearssl.br_ssl_server_policy_ec_context = @ptrCast(@alignCast(pctx.*));
-
-        log.debug("Choose fired! | Key Type: {d}", .{policy.cert_issuer_key_type});
-        _ = ctx;
-        choices.*.cipher_suite = bearssl.BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
-        choices.*.algo_id = bearssl.br_sha256_ID;
-
-        return bearssl.BR_ERR_OK;
-    }
-
-    fn do_keyx(
-        pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
-        data: [*c]u8,
-        len: [*c]usize,
-    ) callconv(.C) u32 {
-        _ = pctx;
-        _ = data;
-        _ = len;
-        return bearssl.BR_ERR_OK;
-    }
-
-    fn do_sign(
-        pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
-        algo_id: c_uint,
-        data: [*c]u8,
-        hv_len: usize,
-        len: usize,
-    ) callconv(.C) usize {
-        _ = pctx;
-        _ = algo_id;
-        _ = data;
-        _ = hv_len;
-        _ = len;
-
-        return bearssl.BR_ERR_OK;
+        self.allocator.destroy(self.policy.vtable);
+        self.allocator.destroy(self.policy);
     }
 
     pub fn accept(self: *TLS) !void {
         const engine = &self.context.eng;
         bearssl.br_ssl_engine_set_buffer(engine, self.iobuf.ptr, self.iobuf.len, 1);
 
-        // define your own policy object type
-        // it needs to carry all of the special data we have
-        //
-        // we then need to set our policy class as the first element of the struct
-        // as it is being treated like a 'v_table".
-        //
-        // we can then attach this context and utilize the values from inside later functions.
-
-        const policy: *bearssl.br_ssl_server_policy_ec_context = try self.allocator.create(
-            bearssl.br_ssl_server_policy_ec_context,
-        );
-
-        const inner_policy: *bearssl.br_ssl_server_policy_class = try self.allocator.create(
-            bearssl.br_ssl_server_policy_class,
-        );
-
-        inner_policy.* = bearssl.br_ssl_server_policy_class{
-            .context_size = @sizeOf(bearssl.br_ssl_server_policy_ec_context),
+        // Build the Policy.
+        self.policy.vtable = try self.allocator.create(bearssl.br_ssl_server_policy_class);
+        self.policy.vtable.* = bearssl.br_ssl_server_policy_class{
+            .context_size = @sizeOf(PolicyContext),
             .choose = choose,
             .do_keyx = do_keyx,
             .do_sign = do_sign,
         };
+        self.policy.chain = self.chain;
+        self.policy.pkey = self.pkey;
+        self.policy.id = 100;
 
-        policy.cert_issuer_key_type = bearssl.BR_KEYTYPE_EC;
-        policy.vtable = inner_policy;
-
-        bearssl.br_ssl_server_set_policy(&self.context, &policy.vtable);
+        bearssl.br_ssl_server_set_policy(&self.context, @ptrCast(&self.policy.vtable));
 
         const reset_status = bearssl.br_ssl_server_reset(&self.context);
         if (reset_status < 0) {
