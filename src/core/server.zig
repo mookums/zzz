@@ -129,7 +129,9 @@ pub fn Server(
                 .tls => |inner| TLSContext.init(.{
                     .allocator = config.allocator,
                     .cert_path = inner.cert,
+                    .cert_name = "CERTIFICATE",
                     .key_path = inner.key,
+                    .key_name = "EC PRIVATE KEY",
                     .size_tls_buffer_max = config.size_socket_buffer * 2,
                 }) catch unreachable,
                 .plain => null,
@@ -153,7 +155,7 @@ pub fn Server(
                 }
             }
 
-            if (self.tls_ctx) |tls_ctx| {
+            if (self.tls_ctx) |*tls_ctx| {
                 tls_ctx.deinit();
             }
         }
@@ -251,7 +253,7 @@ pub fn Server(
                 for (provision_pool.items) |*provision| {
                     provision.data.deinit(z_config.allocator);
 
-                    if (provision.tls) |tls| {
+                    if (provision.tls) |*tls| {
                         tls.deinit();
                     }
                 }

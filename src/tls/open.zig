@@ -13,6 +13,8 @@ const TLSContextOptions = struct {
     allocator: std.mem.Allocator,
     cert_path: []const u8,
     key_path: []const u8,
+    cert_name: []const u8,
+    key_name: []const u8,
     size_tls_buffer_max: u32,
 };
 

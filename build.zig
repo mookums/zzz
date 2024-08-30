@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    zzz.linkSystemLibrary("bearssl", .{});
+    zzz.linkSystemLibrary("bearssl", .{ .preferred_link_mode = .static });
     zzz.linkSystemLibrary("ssl", .{});
     zzz.linkSystemLibrary("crypto", .{});
 
