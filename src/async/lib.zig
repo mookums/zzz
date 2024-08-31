@@ -15,7 +15,7 @@ pub const AsyncType = union(enum) {
 };
 
 pub const AutoAsyncType = switch (builtin.os.tag) {
-    .linux => if (builtin.os.version_range.linux.range.isAtLeast(.{ .major = 5, .minor = 1, .patch = 0 }).?) AsyncType.io_uring else @compileError("must provide a custom Async backend"),
+    .linux => AsyncType.io_uring,
     .windows => @compileError("iocp not supported yet"),
     .freestanding => @compileError("must provide a custom Async backend"),
     else => if (builtin.os.tag.isBSD()) @compileError("kqueue not supported yet") else @compileError("must provide a custom Async backend"),

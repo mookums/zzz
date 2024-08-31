@@ -2,7 +2,12 @@
     .name = "zzz",
     .version = "0.0.0",
     .minimum_zig_version = "0.11.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .bearssl = .{
+            .url = "https://github.com/mookums/bearssl-zig/archive/253ec8bf86ce131117ac893f80d2396402a7f0f5.tar.gz",
+            .hash = "122064f85b95e5cefa14a00e0d719bec545998266e210c1d96b2741002f38b111328",
+        },
+    },
 
     .paths = .{
         "build.zig",
