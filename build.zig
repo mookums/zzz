@@ -33,7 +33,6 @@ fn addExample(
     const example = b.addExecutable(.{
         .name = b.fmt("zzz_example_{s}", .{name}),
         .root_source_file = b.path(b.fmt("src/examples/{s}/main.zig", .{name})),
-        //.target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }),
         .target = target,
         .optimize = optimize,
     });
