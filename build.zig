@@ -8,13 +8,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        // for now.
         .link_libc = true,
     });
 
     zzz.linkSystemLibrary("bearssl", .{ .preferred_link_mode = .static });
-    zzz.linkSystemLibrary("ssl", .{});
-    zzz.linkSystemLibrary("crypto", .{});
 
     addExample(b, "basic", false, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);

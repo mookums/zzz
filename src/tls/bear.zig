@@ -162,11 +162,14 @@ pub const TLSContext = struct {
             },
             bearssl.BR_KEYTYPE_EC => {
                 const key = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
-                self.pkey = .{ .EC = bearssl.br_ec_private_key{
-                    .x = (try options.allocator.dupe(u8, std.mem.span(key.x))).ptr,
-                    .xlen = key.xlen,
-                    .curve = key.curve,
-                } };
+                self.pkey = .{
+                    .EC = bearssl.br_ec_private_key{
+                        // TODO: This leaks right now, needs to be fixed.
+                        .x = (try options.allocator.dupe(u8, std.mem.span(key.x))).ptr,
+                        .xlen = key.xlen,
+                        .curve = key.curve,
+                    },
+                };
                 log.debug("Key Curve Type: {d}", .{self.pkey.EC.curve});
                 log.debug("Key X: {x}", .{std.mem.span(self.pkey.EC.x)});
             },
@@ -226,6 +229,7 @@ pub const TLSContext = struct {
 
 const PolicyContext = struct {
     vtable: *bearssl.br_ssl_server_policy_class,
+    // TODO: this isn't needed.
     id: u32 = 0,
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
@@ -349,12 +353,14 @@ fn choose(
             },
 
             bearssl.BR_SSLKEYX_ECDH_RSA => {
+                // TODO: Implement this.
                 log.debug("Choosing BR_SSLKEYX_ECDH_RSA | TODO!", .{});
                 choices.*.cipher_suite = suites[i][0];
                 return 0;
             },
 
             bearssl.BR_SSLKEYX_ECDH_ECDSA => {
+                // TODO: Implement this.
                 log.debug("Choosing BR_SSLKEYX_ECDH_RECDSA | TODO!", .{});
                 choices.*.cipher_suite = suites[i][0];
                 return 0;
@@ -410,6 +416,8 @@ fn do_sign(
         algo_inner_id &= 0xFF;
         std.mem.copyForwards(u8, &hv, data[0..hv_len]);
     } else {
+        // Q: Is this even needed? We aren't doing callback
+        // hashing so?
         log.err("Triggered Callback Hashing", .{});
         var class: *const bearssl.br_hash_class = undefined;
         var zc: bearssl.br_hash_compat_context = undefined;
@@ -430,6 +438,7 @@ fn do_sign(
 
     switch (policy.pkey) {
         .RSA => |_| {
+            // TODO: Implement this.
             @panic("not yet supported!");
         },
 
@@ -444,7 +453,7 @@ fn do_sign(
                 return 0;
             }
 
-            log.debug("Cert: {x}", .{policy.chain[0].data[0..policy.chain[0].data_len]});
+            log.debug("Cert: {x}", .{std.mem.span(policy.chain[0].data)});
             log.debug("EC Key: {x}", .{inner.x[0..inner.xlen]});
             log.debug("EC key curve: {d}", .{inner.curve});
             log.debug("EC key xlen: {d}", .{inner.xlen});
