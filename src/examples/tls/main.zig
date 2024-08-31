@@ -48,10 +48,12 @@ pub fn main() !void {
     var server = http.Server.init(.{
         .allocator = allocator,
         .threading = .single_threaded,
-        .encryption = .{ .tls = .{
-            .cert = "src/examples/tls/certs/cert.pem",
-            .key = "src/examples/tls/certs/key.pem",
-        } },
+        .encryption = .{
+            .tls = .{
+                .cert = "src/examples/tls/certs/cert.pem",
+                .key = "src/examples/tls/certs/key.pem",
+            },
+        },
     }, null);
     defer server.deinit();
 
