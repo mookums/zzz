@@ -349,13 +349,15 @@ pub fn Server(
                             const pre_recv_buffer = p.buffer[0..read_count];
 
                             const recv_buffer = switch (z_config.encryption) {
-                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer, p.buffer) catch |e| {
+                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer) catch |e| {
                                     log.debug("{d} - Decrypt Failed: {any}", .{ p.index, e });
                                     clean_connection(p, &provision_pool, z_config);
                                     continue :reap_loop;
                                 },
                                 .plain => pre_recv_buffer,
                             };
+
+                            log.info("{d} - Recv Buffer: {s}", .{ p.index, recv_buffer });
 
                             var status: RecvStatus = @call(.auto, recv_fn, .{
                                 p,
@@ -379,7 +381,7 @@ pub fn Server(
 
                                     switch (z_config.encryption) {
                                         .tls => |_| {
-                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer, p.buffer) catch {
+                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer) catch {
                                                 clean_connection(p, &provision_pool, z_config);
                                                 continue :reap_loop;
                                             };
@@ -476,7 +478,7 @@ pub fn Server(
 
                                             inner.count += @intCast(inner_slice.len);
 
-                                            const encrypted = p.tls.?.encrypt(inner_slice, p.buffer) catch {
+                                            const encrypted = p.tls.?.encrypt(inner_slice) catch {
                                                 clean_connection(p, &provision_pool, z_config);
                                                 continue :reap_loop;
                                             };
