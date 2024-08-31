@@ -552,6 +552,11 @@ pub const TLS = struct {
                 return error.HandshakeFailed;
             }
 
+            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
+                log.debug("Cycle {d} - Handshake Complete!", .{cycle_count});
+                return;
+            }
+
             if ((state & bearssl.BR_SSL_SENDREC) != 0) {
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
@@ -559,12 +564,11 @@ pub const TLS = struct {
                 if (length == 0) {
                     continue;
                 }
-                var total_sent: usize = 0;
-                while (total_sent < length) {
-                    const sent = try std.posix.send(self.socket, buf[total_sent..length], 0);
-                    total_sent += sent;
-                }
-                bearssl.br_ssl_engine_sendrec_ack(engine, total_sent);
+
+                const sent = try std.posix.send(self.socket, buf[0..length], 0);
+                log.debug("Cycle {d} - Total Sent: {d}", .{ cycle_count, sent });
+
+                bearssl.br_ssl_engine_sendrec_ack(engine, sent);
                 bearssl.br_ssl_engine_flush(engine, 0);
                 continue;
             }
@@ -576,20 +580,12 @@ pub const TLS = struct {
                 if (length == 0) {
                     continue;
                 }
-                var total_read: usize = 0;
-                while (total_read < length) {
-                    const read = try std.posix.recv(self.socket, buf[total_read..length], 0);
-                    total_read += read;
-                    log.debug("Cycle {d} - Total Read: {d}", .{ cycle_count, total_read });
-                }
 
-                bearssl.br_ssl_engine_recvrec_ack(engine, total_read);
+                const read = try std.posix.recv(self.socket, buf[0..length], 0);
+                log.debug("Cycle {d} - Total Read: {d}", .{ cycle_count, read });
+
+                bearssl.br_ssl_engine_recvrec_ack(engine, read);
                 continue;
-            }
-
-            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
-                log.debug("Cycle {d} - Handshake Complete!", .{cycle_count});
-                return;
             }
 
             if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
