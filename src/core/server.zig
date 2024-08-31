@@ -222,10 +222,10 @@ pub fn Server(
 
             log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
-            if (provision.tls) |*tls| {
-                tls.deinit();
-                provision.tls = null;
-            }
+            //if (provision.tls) |*tls| {
+            //    tls.deinit();
+            //    provision.tls = null;
+            //}
             provision.data.clean();
             std.posix.close(provision.socket);
         }
@@ -349,7 +349,8 @@ pub fn Server(
                             const pre_recv_buffer = p.buffer[0..read_count];
 
                             const recv_buffer = switch (z_config.encryption) {
-                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer) catch {
+                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer, p.buffer) catch |e| {
+                                    log.debug("{d} - Decrypt Failed: {any}", .{ p.index, e });
                                     clean_connection(p, &provision_pool, z_config);
                                     continue :reap_loop;
                                 },
@@ -378,7 +379,7 @@ pub fn Server(
 
                                     switch (z_config.encryption) {
                                         .tls => |_| {
-                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer) catch {
+                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer, p.buffer) catch {
                                                 clean_connection(p, &provision_pool, z_config);
                                                 continue :reap_loop;
                                             };
@@ -475,7 +476,7 @@ pub fn Server(
 
                                             inner.count += @intCast(inner_slice.len);
 
-                                            const encrypted = p.tls.?.encrypt(inner_slice) catch {
+                                            const encrypted = p.tls.?.encrypt(inner_slice, p.buffer) catch {
                                                 clean_connection(p, &provision_pool, z_config);
                                                 continue :reap_loop;
                                             };

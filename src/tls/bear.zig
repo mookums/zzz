@@ -506,10 +506,10 @@ pub const TLS = struct {
         };
     }
 
+    // THIS WILL DESTROY THE TLS OBJECT!
     pub fn deinit(self: TLS) void {
         self.allocator.free(self.iobuf);
         self.allocator.free(self.chain);
-
         self.allocator.destroy(self.policy);
     }
 
@@ -533,7 +533,7 @@ pub const TLS = struct {
         }
 
         var cycle_count: u32 = 0;
-        while (cycle_count < 20) {
+        while (cycle_count < 50) : (cycle_count += 1) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
             log.debug("Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
             if (last_error != 0) {
@@ -544,7 +544,6 @@ pub const TLS = struct {
                 return error.HandshakeFailed;
             }
 
-            cycle_count += 1;
             const state = bearssl.br_ssl_engine_current_state(engine);
             log.debug("Cycle {d} - Engine State | {any}", .{ cycle_count, state });
 
@@ -596,74 +595,188 @@ pub const TLS = struct {
         return error.HandshakeTimeout;
     }
 
-    pub fn decrypt(self: *TLS, encrypted: []const u8) ![]const u8 {
-        _ = self;
-        _ = encrypted;
-        @panic("TODO DECRYPTION");
-        //const engine = &self.context.eng;
+    pub fn decrypt(self: *TLS, encrypted: []const u8, buffer: []u8) ![]const u8 {
+        const engine = &self.context.eng;
 
-        //// Push the encrypted data.
-        //const buffer = bearssl.br_ssl_engine_sendrec_buf(engine, encrypted.len)[0..encrypted.len];
-        //std.mem.copyForwards(u8, buffer, encrypted);
-        //bearssl.br_ssl_engine_sendrec_ack(engine, encrypted.len);
+        var recv_app = false;
+        var encrypted_index: usize = 0;
+        var decrypted_index: usize = 0;
 
-        //// Read out the plaintext data.
-        //const unencrypted = bearssl.br_ssl_engine_recvapp_buf(engine, encrypted.len)[0..encrypted.len];
-        //return unencrypted;
+        var cycle_count: u32 = 0;
+        while (cycle_count < 50) : (cycle_count += 1) {
+            const last_error = bearssl.br_ssl_engine_last_error(engine);
+            log.debug("D Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
+            if (last_error != 0) {
+                log.debug("D Cycle {d} - Decrypt Failed | {s}", .{
+                    cycle_count,
+                    fmt_bearssl_error(last_error),
+                });
+                return error.DecryptFailed;
+            }
+
+            const state = bearssl.br_ssl_engine_current_state(engine);
+            log.debug("D Cycle {d} - Engine State | {any}", .{ cycle_count, state });
+
+            if ((state & bearssl.BR_SSL_CLOSED) != 0) {
+                return error.DecryptFailed;
+            }
+
+            if ((state & bearssl.BR_SSL_RECVREC) != 0) {
+                if (recv_app) {
+                    return buffer[0..decrypted_index];
+                }
+
+                log.debug("Triggered BR_SSL_RECVREC", .{});
+                // We are writing in the encrypted data...
+                var length: usize = undefined;
+                const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
+                log.debug("D Cycle {d} - Recv Rec Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                if (length == 0) {
+                    continue;
+                }
+
+                const min_length = @min(length, encrypted.len - encrypted_index);
+
+                std.mem.copyForwards(
+                    u8,
+                    buf[0..min_length],
+                    encrypted[encrypted_index .. encrypted_index + min_length],
+                );
+                encrypted_index += min_length;
+                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, min_length });
+                bearssl.br_ssl_engine_recvrec_ack(engine, min_length);
+                continue;
+            }
+
+            if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
+                recv_app = true;
+                // Now we are reading out the decrypted data...
+                log.debug("Triggered BR_SSL_RECVAPP", .{});
+                var length: usize = undefined;
+                const buf = bearssl.br_ssl_engine_recvapp_buf(engine, &length);
+                log.debug("D Cycle {d} - Recv App Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+
+                if (length == 0) {
+                    continue;
+                }
+
+                const min_length = @min(length, buffer.len - decrypted_index);
+
+                std.mem.copyForwards(
+                    u8,
+                    buffer[decrypted_index .. decrypted_index + min_length],
+                    buf[0..min_length],
+                );
+                decrypted_index += min_length;
+                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, min_length });
+                log.debug("D Cycle {d} - Unencrypted Read: {s}", .{ cycle_count, buffer[0 .. decrypted_index - 1] });
+                bearssl.br_ssl_engine_recvapp_ack(engine, min_length);
+                continue;
+            }
+
+            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
+                return error.SendAppWhy;
+            }
+
+            if ((state & bearssl.BR_SSL_SENDREC) != 0) {
+                return error.SendRecWhy;
+            }
+        }
+
+        return error.DecryptTimeout;
     }
 
-    pub fn encrypt(self: *TLS, plaintext: []const u8) ![]const u8 {
-        _ = self;
-        _ = plaintext;
-        @panic("TODO ENCRYPTION");
-        //const engine = &self.context.eng;
-        //var encrypted = std.ArrayList(u8).init(self.allocator);
-        //defer encrypted.deinit();
+    pub fn encrypt(self: *TLS, plaintext: []const u8, buffer: []u8) ![]const u8 {
+        const engine = &self.context.eng;
 
-        //var total_written: usize = 0;
-        //const send_rec_state = bearssl.br_ssl_engine_current_state(engine) == bearssl.BR_SSL_SENDREC;
-        //while (total_written < plaintext.len or send_rec_state) {
-        //    switch (bearssl.br_ssl_engine_current_state(engine)) {
-        //        bearssl.BR_SSL_CLOSED => return error.EngineClosed,
-        //        bearssl.BR_SSL_SENDAPP => {
-        //            var length: usize = undefined;
-        //            const rec_buf = bearssl.br_ssl_engine_sendapp_buf(engine, &length);
-        //            if (length == 0) {
-        //                continue; // Buffer not ready, try again
-        //            }
-        //            const to_write = @min(length, plaintext.len - total_written);
-        //            std.mem.copyForwards(
-        //                u8,
-        //                rec_buf[0..to_write],
-        //                plaintext[total_written .. total_written + to_write],
-        //            );
-        //            bearssl.br_ssl_engine_sendapp_ack(engine, to_write);
-        //            total_written += to_write;
-        //        },
-        //        bearssl.BR_SSL_SENDREC => {
-        //            var length: usize = undefined;
-        //            const encrypted_buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
-        //            if (length == 0) {
-        //                continue; // Buffer not ready, try again
-        //            }
-        //            try encrypted.appendSlice(encrypted_buf[0..length]);
-        //            bearssl.br_ssl_engine_sendrec_ack(engine, length);
-        //        },
-        //        bearssl.BR_SSL_RECVAPP => return error.UnexpectedRecvApp,
-        //        bearssl.BR_SSL_RECVREC => {
-        //            var length: usize = undefined;
-        //            _ = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
-        //            if (length > 0) {
-        //                bearssl.br_ssl_engine_recvrec_ack(engine, 0);
-        //            } else {
-        //                _ = bearssl.br_ssl_engine_flush(engine, 0);
-        //            }
-        //        },
-        //        else => return error.UnexpectedState,
-        //    }
-        //}
+        var sent_rec = false;
+        var plaintext_index: usize = 0;
+        var encrypted_index: usize = 0;
 
-        //return encrypted.toOwnedSlice();
+        var cycle_count: u32 = 0;
+        while (cycle_count < 50) : (cycle_count += 1) {
+            const last_error = bearssl.br_ssl_engine_last_error(engine);
+            log.debug("E Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
+            if (last_error != 0) {
+                log.debug("E Cycle {d} - Encrypt Failed | {s}", .{
+                    cycle_count,
+                    fmt_bearssl_error(last_error),
+                });
+                return error.DecryptFailed;
+            }
+
+            const state = bearssl.br_ssl_engine_current_state(engine);
+            log.debug("E Cycle {d} - Engine State | {any}", .{ cycle_count, state });
+
+            if ((state & bearssl.BR_SSL_CLOSED) != 0) {
+                return error.DecryptFailed;
+            }
+
+            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
+                log.debug("Triggered BR_SSL_SENDAPP", .{});
+
+                if (sent_rec) {
+                    return buffer[0..encrypted_index];
+                }
+
+                var length: usize = undefined;
+                const buf = bearssl.br_ssl_engine_sendapp_buf(engine, &length);
+
+                log.debug("E Cycle {d} - Send App Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                if (length == 0) {
+                    continue;
+                }
+
+                const min_length = @min(length, plaintext.len - plaintext_index);
+                std.mem.copyForwards(
+                    u8,
+                    buf[0..min_length],
+                    plaintext[plaintext_index .. plaintext_index + min_length],
+                );
+
+                plaintext_index += min_length;
+                log.debug("E Cycle {d} - Total Send App: {d}", .{ cycle_count, min_length });
+                bearssl.br_ssl_engine_sendapp_ack(engine, min_length);
+
+                if (plaintext_index >= plaintext.len) {
+                    // Force a record to be made.
+                    bearssl.br_ssl_engine_flush(engine, 0);
+                }
+
+                continue;
+            }
+
+            if ((state & bearssl.BR_SSL_SENDREC) != 0) {
+                sent_rec = true;
+                log.debug("Triggered BR_SSL_SENDREC", .{});
+
+                var length: usize = undefined;
+                const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
+
+                log.debug("E Cycle {d} - Send Rec Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                if (length == 0) {
+                    continue;
+                }
+
+                const min_length = @min(length, buffer.len - encrypted_index);
+                std.mem.copyForwards(
+                    u8,
+                    buffer[encrypted_index .. encrypted_index + min_length],
+                    buf[0..min_length],
+                );
+
+                encrypted_index += min_length;
+                log.debug("E Cycle {d} - Total Send Rec: {d}", .{ cycle_count, min_length });
+                bearssl.br_ssl_engine_sendrec_ack(engine, min_length);
+                continue;
+            }
+
+            if ((state & bearssl.BR_SSL_RECVREC) != 0) {}
+
+            if ((state & bearssl.BR_SSL_RECVAPP) != 0) {}
+        }
+
+        return error.EncryptTimeout;
     }
 };
 
