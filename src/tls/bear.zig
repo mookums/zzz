@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/tls/bearssl");
 
 const Socket = @import("../core/socket.zig").Socket;
@@ -160,8 +161,14 @@ pub const TLSContext = struct {
                 self.pkey = .{ .RSA = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0] };
             },
             bearssl.BR_KEYTYPE_EC => {
-                self.pkey = .{ .EC = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0] };
+                const key = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
+                self.pkey = .{ .EC = bearssl.br_ec_private_key{
+                    .x = (try options.allocator.dupe(u8, std.mem.span(key.x))).ptr,
+                    .xlen = key.xlen,
+                    .curve = key.curve,
+                } };
                 log.debug("Key Curve Type: {d}", .{self.pkey.EC.curve});
+                log.debug("Key X: {x}", .{std.mem.span(self.pkey.EC.x)});
             },
             else => {
                 return error.InvalidKeyType;
@@ -179,6 +186,9 @@ pub const TLSContext = struct {
             .pkey = self.pkey,
             .chain = self.x509[0..1],
         });
+
+        log.debug("Self Key X: {x}", .{std.mem.span(self.pkey.EC.x)});
+        log.debug("TLS Key X: {x}", .{std.mem.span(tls.pkey.EC.x)});
 
         switch (self.pkey) {
             .RSA => |*inner| {
@@ -221,6 +231,48 @@ const PolicyContext = struct {
     pkey: PrivateKey,
 };
 
+const HashFunction = struct {
+    name: []const u8,
+    hclass: *const bearssl.br_hash_class,
+    comment: []const u8,
+};
+
+const hash_functions = [_]?HashFunction{
+    HashFunction{ .name = "md5", .hclass = &bearssl.br_md5_vtable, .comment = "MD5" },
+    HashFunction{ .name = "sha1", .hclass = &bearssl.br_sha1_vtable, .comment = "SHA-1" },
+    HashFunction{ .name = "sha224", .hclass = &bearssl.br_sha224_vtable, .comment = "SHA-224" },
+    HashFunction{ .name = "sha256", .hclass = &bearssl.br_sha256_vtable, .comment = "SHA-256" },
+    HashFunction{ .name = "sha384", .hclass = &bearssl.br_sha384_vtable, .comment = "SHA-384" },
+    HashFunction{ .name = "sha512", .hclass = &bearssl.br_sha512_vtable, .comment = "SHA-512" },
+    null,
+};
+
+fn choose_hash(chashes: u32) u32 {
+    var hash_id: u32 = 6;
+
+    while (hash_id >= 2) : (hash_id -= 1) {
+        if (((chashes >> @intCast(hash_id)) & 0x1) != 0) {
+            return @intCast(hash_id);
+        }
+    }
+
+    unreachable;
+}
+
+fn get_hash_impl(hash_id: c_uint) !*const bearssl.br_hash_class {
+    for (hash_functions) |hash| {
+        if (hash) |h| {
+            const id = (h.hclass.desc >> bearssl.BR_HASHDESC_ID_OFF) & bearssl.BR_HASHDESC_ID_MASK;
+            if (id == hash_id) {
+                log.debug("Matching Hash: {s}", .{h.name});
+                return h.hclass;
+            }
+        } else break;
+    }
+
+    return error.HashNotSupported;
+}
+
 fn choose(
     pctx: [*c][*c]const bearssl.br_ssl_server_policy_class,
     ctx: [*c]const bearssl.br_ssl_server_context,
@@ -229,13 +281,100 @@ fn choose(
     // https://www.bearssl.org/apidoc/structbr__ssl__server__policy__class__.html
     const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
     log.debug("Choose fired! | ID: {d}", .{policy.id});
-    _ = ctx;
 
-    choices.*.chain = policy.chain.ptr;
-    choices.*.chain_len = policy.chain.len;
-    choices.*.cipher_suite = bearssl.BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
-    choices.*.algo_id = bearssl.br_sha256_ID;
-    return 1;
+    var suite_num: usize = 0;
+    const suites: [*c]const bearssl.br_suite_translated = bearssl.br_ssl_server_get_client_suites(ctx, &suite_num);
+    const hashes: u32 = bearssl.br_ssl_server_get_client_hashes(ctx);
+
+    var ok: bool = false;
+
+    for (0..suite_num) |i| {
+        const tt = suites[i][1];
+
+        switch (tt >> 12) {
+            bearssl.BR_SSLKEYX_RSA => {
+                log.debug("Choosing BR_SSLKEYX_RSA", .{});
+                switch (policy.pkey) {
+                    .RSA => {
+                        choices.*.cipher_suite = suites[i][0];
+                        ok = true;
+                        break;
+                    },
+                    else => continue,
+                }
+            },
+            bearssl.BR_SSLKEYX_ECDHE_RSA => {
+                log.debug("Choosing BR_SSLKEYX_ECDHE_RSA", .{});
+                switch (policy.pkey) {
+                    .RSA => {
+                        choices.*.cipher_suite = suites[i][0];
+
+                        if (bearssl.br_ssl_engine_get_version(&ctx.*.eng) < bearssl.BR_TLS12) {
+                            choices.*.algo_id = 0xFF00;
+                            log.debug("Algo ID: {X}", .{choices.*.algo_id});
+                        } else {
+                            const id = choose_hash(hashes);
+                            choices.*.algo_id = 0xFF00 + id;
+                            log.debug("Algo ID: {X}", .{choices.*.algo_id});
+                        }
+
+                        // goto ok
+                        ok = true;
+                        break;
+                    },
+                    else => continue,
+                }
+            },
+
+            bearssl.BR_SSLKEYX_ECDHE_ECDSA => {
+                log.debug("Choosing BR_SSLKEYX_ECDHE_ECDSA", .{});
+                switch (policy.pkey) {
+                    .EC => {
+                        choices.*.cipher_suite = suites[i][0];
+
+                        if (bearssl.br_ssl_engine_get_version(&ctx.*.eng) < bearssl.BR_TLS12) {
+                            choices.*.algo_id = 0xFF00 + bearssl.br_sha1_ID;
+                            log.debug("Under TLS1.2 | Algo ID: {X}", .{choices.*.algo_id});
+                        } else {
+                            const id = choose_hash(hashes >> 8);
+                            choices.*.algo_id = 0xFF00 + id;
+                            log.debug("GEQ TLS1.2 | Algo ID: {X}", .{choices.*.algo_id});
+                        }
+
+                        ok = true;
+                        break;
+                    },
+                    else => continue,
+                }
+            },
+
+            bearssl.BR_SSLKEYX_ECDH_RSA => {
+                log.debug("Choosing BR_SSLKEYX_ECDH_RSA | TODO!", .{});
+                choices.*.cipher_suite = suites[i][0];
+                return 0;
+            },
+
+            bearssl.BR_SSLKEYX_ECDH_ECDSA => {
+                log.debug("Choosing BR_SSLKEYX_ECDH_RECDSA | TODO!", .{});
+                choices.*.cipher_suite = suites[i][0];
+                return 0;
+            },
+
+            else => {
+                log.debug("Unknown Client Suite: {d}", .{tt >> 12});
+                return 0;
+            },
+        }
+    }
+
+    if (ok) {
+        // This is the good path.
+        choices.*.chain = policy.chain.ptr;
+        choices.*.chain_len = policy.chain.len;
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 fn do_keyx(
@@ -260,10 +399,73 @@ fn do_sign(
 ) callconv(.C) usize {
     const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
     log.debug("Sign fired! | ID: {d}", .{policy.id});
-    _ = algo_id;
-    _ = data;
-    _ = hv_len;
-    _ = len;
+
+    var hv: [64]u8 = undefined;
+    var algo_inner_id = algo_id;
+    var hv_inner_len = hv_len;
+
+    if (algo_inner_id >= 0xFF00) {
+        log.debug("Copy Branch of Do Sign", .{});
+        log.debug("Data: {x}", .{data[0..hv_len]});
+        algo_inner_id &= 0xFF;
+        std.mem.copyForwards(u8, &hv, data[0..hv_len]);
+    } else {
+        log.err("Triggered Callback Hashing", .{});
+        var class: *const bearssl.br_hash_class = undefined;
+        var zc: bearssl.br_hash_compat_context = undefined;
+
+        algo_inner_id >>= 8;
+        class = get_hash_impl(algo_inner_id) catch {
+            log.err("unsupported hash function {d}", .{algo_inner_id});
+            return 0;
+        };
+
+        class.init.?(&zc.vtable);
+        class.update.?(&zc.vtable, data, hv_len);
+        class.out.?(&zc.vtable, &hv);
+        hv_inner_len = (class.desc >> bearssl.BR_HASHDESC_OUT_OFF) & bearssl.BR_HASHDESC_OUT_MASK;
+    }
+
+    var sig_len: usize = 0;
+
+    switch (policy.pkey) {
+        .RSA => |_| {
+            @panic("not yet supported!");
+        },
+
+        .EC => |*inner| {
+            const class = get_hash_impl(algo_inner_id) catch {
+                log.err("unsupported hash function {d}", .{algo_inner_id});
+                return 0;
+            };
+
+            if (len < 139) {
+                log.err("cannot ECDSA-sign len={d}", .{len});
+                return 0;
+            }
+
+            log.debug("Cert: {x}", .{policy.chain[0].data[0..policy.chain[0].data_len]});
+            log.debug("EC Key: {x}", .{inner.x[0..inner.xlen]});
+            log.debug("EC key curve: {d}", .{inner.curve});
+            log.debug("EC key xlen: {d}", .{inner.xlen});
+            log.debug("Hash value length: {d}", .{hv_inner_len});
+
+            sig_len = bearssl.br_ecdsa_sign_asn1_get_default().?(
+                bearssl.br_ec_get_default(),
+                class,
+                &hv,
+                inner,
+                data,
+            );
+
+            if (sig_len == 0) {
+                log.err("ECDSA-sign failure", .{});
+                return 0;
+            }
+
+            return sig_len;
+        },
+    }
 
     return 0;
 }
@@ -274,6 +476,13 @@ const TLSOptions = struct {
     context: bearssl.br_ssl_server_context,
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
+};
+
+const policy_vtable = bearssl.br_ssl_server_policy_class{
+    .context_size = @sizeOf(PolicyContext),
+    .choose = choose,
+    .do_keyx = do_keyx,
+    .do_sign = do_sign,
 };
 
 pub const TLS = struct {
@@ -301,7 +510,6 @@ pub const TLS = struct {
         self.allocator.free(self.iobuf);
         self.allocator.free(self.chain);
 
-        self.allocator.destroy(self.policy.vtable);
         self.allocator.destroy(self.policy);
     }
 
@@ -310,15 +518,11 @@ pub const TLS = struct {
         bearssl.br_ssl_engine_set_buffer(engine, self.iobuf.ptr, self.iobuf.len, 1);
 
         // Build the Policy.
-        self.policy.vtable = try self.allocator.create(bearssl.br_ssl_server_policy_class);
-        self.policy.vtable.* = bearssl.br_ssl_server_policy_class{
-            .context_size = @sizeOf(PolicyContext),
-            .choose = choose,
-            .do_keyx = do_keyx,
-            .do_sign = do_sign,
-        };
+        self.policy.vtable = @constCast(&policy_vtable);
         self.policy.chain = self.chain;
         self.policy.pkey = self.pkey;
+        log.debug("Private Key: {x}", .{std.mem.span(self.pkey.EC.x)});
+        log.debug("Policy Private Key: {x}", .{std.mem.span(self.policy.pkey.EC.x)});
         self.policy.id = 100;
 
         bearssl.br_ssl_server_set_policy(&self.context, @ptrCast(&self.policy.vtable));
