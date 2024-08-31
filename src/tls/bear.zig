@@ -499,7 +499,7 @@ pub const TLS = struct {
     socket: Socket,
     context: bearssl.br_ssl_server_context,
     iobuf: []u8,
-    buffer: []u8,
+    buffer: std.ArrayList(u8),
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
     policy: *PolicyContext = undefined,
@@ -510,7 +510,7 @@ pub const TLS = struct {
             .socket = options.socket,
             .context = options.context,
             .iobuf = options.allocator.alloc(u8, bearssl.BR_SSL_BUFSIZE_BIDI) catch unreachable,
-            .buffer = options.allocator.alloc(u8, 8192) catch unreachable,
+            .buffer = std.ArrayList(u8).init(options.allocator),
             .chain = options.chain,
             .pkey = options.pkey,
             .policy = options.allocator.create(PolicyContext) catch unreachable,
@@ -520,8 +520,8 @@ pub const TLS = struct {
     // THIS WILL DESTROY THE TLS OBJECT!
     pub fn deinit(self: TLS) void {
         self.allocator.free(self.iobuf);
-        self.allocator.free(self.chain);
         self.allocator.destroy(self.policy);
+        self.buffer.deinit();
     }
 
     pub fn accept(self: *TLS) !void {
@@ -607,11 +607,12 @@ pub const TLS = struct {
     }
 
     pub fn decrypt(self: *TLS, encrypted: []const u8) ![]const u8 {
+        self.buffer.clearRetainingCapacity();
+
         const engine = &self.context.eng;
 
         var recv_app = false;
         var encrypted_index: usize = 0;
-        var decrypted_index: usize = 0;
 
         var cycle_count: u32 = 0;
         while (cycle_count < 50) : (cycle_count += 1) {
@@ -634,7 +635,7 @@ pub const TLS = struct {
 
             if ((state & bearssl.BR_SSL_RECVREC) != 0) {
                 if (recv_app) {
-                    return self.buffer[0..decrypted_index];
+                    return self.buffer.items;
                 }
 
                 log.debug("Triggered BR_SSL_RECVREC", .{});
@@ -671,17 +672,10 @@ pub const TLS = struct {
                     continue;
                 }
 
-                const min_length = @min(length, self.buffer.len - decrypted_index);
-
-                std.mem.copyForwards(
-                    u8,
-                    self.buffer[decrypted_index .. decrypted_index + min_length],
-                    buf[0..min_length],
-                );
-                decrypted_index += min_length;
-                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, min_length });
-                log.debug("D Cycle {d} - Unencrypted Read: {s}", .{ cycle_count, self.buffer[0 .. decrypted_index - 1] });
-                bearssl.br_ssl_engine_recvapp_ack(engine, min_length);
+                try self.buffer.appendSlice(buf[0..length]);
+                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, length });
+                log.debug("D Cycle {d} - Unencrypted Read: {s}", .{ cycle_count, buf[0..length] });
+                bearssl.br_ssl_engine_recvapp_ack(engine, length);
                 continue;
             }
 
@@ -698,13 +692,14 @@ pub const TLS = struct {
     }
 
     pub fn encrypt(self: *TLS, plaintext: []const u8) ![]const u8 {
+        self.buffer.clearRetainingCapacity();
+
         const engine = &self.context.eng;
 
         log.debug("E - Plaintext Length: {d}", .{plaintext.len});
 
         var sent_rec = false;
         var plaintext_index: usize = 0;
-        var encrypted_index: usize = 0;
 
         var cycle_count: u32 = 0;
         while (cycle_count < 50) : (cycle_count += 1) {
@@ -729,7 +724,7 @@ pub const TLS = struct {
                 log.debug("Triggered BR_SSL_SENDAPP", .{});
 
                 if (sent_rec) {
-                    return self.buffer[0..encrypted_index];
+                    return self.buffer.items;
                 }
 
                 var length: usize = undefined;
@@ -741,6 +736,7 @@ pub const TLS = struct {
                 }
 
                 const min_length = @min(length, plaintext.len - plaintext_index);
+
                 std.mem.copyForwards(
                     u8,
                     buf[0..min_length],
@@ -771,16 +767,9 @@ pub const TLS = struct {
                     continue;
                 }
 
-                const min_length = @min(length, self.buffer.len - encrypted_index);
-                std.mem.copyForwards(
-                    u8,
-                    self.buffer[encrypted_index .. encrypted_index + min_length],
-                    buf[0..min_length],
-                );
-
-                encrypted_index += min_length;
-                log.debug("E Cycle {d} - Total Send Rec: {d}", .{ cycle_count, min_length });
-                bearssl.br_ssl_engine_sendrec_ack(engine, min_length);
+                try self.buffer.appendSlice(buf[0..length]);
+                log.debug("E Cycle {d} - Total Send Rec: {d}", .{ cycle_count, length });
+                bearssl.br_ssl_engine_sendrec_ack(engine, length);
                 continue;
             }
 

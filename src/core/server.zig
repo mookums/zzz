@@ -222,10 +222,10 @@ pub fn Server(
 
             log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
-            //if (provision.tls) |*tls| {
-            //    tls.deinit();
-            //    provision.tls = null;
-            //}
+            if (provision.tls) |*tls| {
+                tls.deinit();
+                provision.tls = null;
+            }
             provision.data.clean();
             std.posix.close(provision.socket);
         }
