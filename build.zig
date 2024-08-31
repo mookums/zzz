@@ -4,14 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const bearssl = b.dependency("bearssl", .{
+        .target = target,
+        .optimize = optimize,
+    }).artifact("bearssl");
+
     const zzz = b.addModule("zzz", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
     });
 
-    zzz.linkSystemLibrary("bearssl", .{ .preferred_link_mode = .static });
+    zzz.linkLibrary(bearssl);
 
     addExample(b, "basic", false, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);
