@@ -51,7 +51,9 @@ pub fn main() !void {
         .encryption = .{
             .tls = .{
                 .cert = "src/examples/tls/certs/cert.pem",
+                .cert_name = "CERTIFICATE",
                 .key = "src/examples/tls/certs/key.pem",
+                .key_name = "EC PRIVATE KEY",
             },
         },
     }, null);
