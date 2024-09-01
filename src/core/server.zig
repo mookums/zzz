@@ -350,14 +350,12 @@ pub fn Server(
 
                             const recv_buffer = switch (z_config.encryption) {
                                 .tls => |_| p.tls.?.decrypt(pre_recv_buffer) catch |e| {
-                                    log.debug("{d} - Decrypt Failed: {any}", .{ p.index, e });
+                                    log.debug("{d} - decrypt failed: {any}", .{ p.index, e });
                                     clean_connection(p, &provision_pool, z_config);
                                     continue :reap_loop;
                                 },
                                 .plain => pre_recv_buffer,
                             };
-
-                            log.info("{d} - Recv Buffer: {s}", .{ p.index, recv_buffer });
 
                             var status: RecvStatus = @call(.auto, recv_fn, .{
                                 p,
@@ -366,8 +364,6 @@ pub fn Server(
                                 backend,
                                 recv_buffer,
                             });
-
-                            log.debug("{d} - recv fn status: {s}", .{ p.index, @tagName(status) });
 
                             switch (status) {
                                 .Kill => {
@@ -524,6 +520,7 @@ pub fn Server(
 
             log.info("server listening...", .{});
             log.info("threading mode: {s}", .{@tagName(self.config.threading)});
+            log.info("encryption mode: {s}", .{@tagName(self.config.encryption)});
             try std.posix.listen(server_socket, self.config.size_backlog);
 
             var backend = blk: {

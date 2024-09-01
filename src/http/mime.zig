@@ -112,21 +112,7 @@ pub const Mime = struct {
     }
 
     fn content_type_to_key(content_type: []const u8) u64 {
-        // Our p needs to be larger than the cardinality of our input set.
-        // Our input set includes 26 lowercase letters, 10 digits and
-        // 2 symbols ('.' and '-').
-        const p = 43;
-        // https://planetmath.org/goodhashtableprimes
-        const m = 25165843;
-        var hash: u64 = 0;
-
-        // Polynomial Rolling Hash.
-        var p_power: u64 = 1;
-        for (content_type) |byte| {
-            hash = @mod(hash + byte * p_power, m);
-            p_power = @mod(p_power * p, m);
-        }
-
+        const hash = std.hash.Wyhash.hash(0, content_type);
         return hash;
     }
 

@@ -170,8 +170,6 @@ pub const TLSContext = struct {
                         .curve = key.curve,
                     },
                 };
-                log.debug("Key Curve Type: {d}", .{self.pkey.EC.curve});
-                log.debug("Key X: {x}", .{std.mem.span(self.pkey.EC.x)});
             },
             else => {
                 return error.InvalidKeyType;
@@ -190,9 +188,6 @@ pub const TLSContext = struct {
             .chain = self.x509[0..1],
         });
 
-        log.debug("Self Key X: {x}", .{std.mem.span(self.pkey.EC.x)});
-        log.debug("TLS Key X: {x}", .{std.mem.span(tls.pkey.EC.x)});
-
         switch (self.pkey) {
             .RSA => |*inner| {
                 bearssl.br_ssl_server_init_full_rsa(
@@ -203,6 +198,10 @@ pub const TLSContext = struct {
                 );
             },
             .EC => |*inner| {
+                assert(inner.x != 0);
+                assert(inner.curve != 0);
+                assert(inner.xlen != 0);
+
                 bearssl.br_ssl_server_init_full_ec(
                     &tls.context,
                     self.x509,
@@ -229,8 +228,6 @@ pub const TLSContext = struct {
 
 const PolicyContext = struct {
     vtable: *bearssl.br_ssl_server_policy_class,
-    // TODO: this isn't needed.
-    id: u32 = 0,
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
 };
@@ -268,7 +265,7 @@ fn get_hash_impl(hash_id: c_uint) !*const bearssl.br_hash_class {
         if (hash) |h| {
             const id = (h.hclass.desc >> bearssl.BR_HASHDESC_ID_OFF) & bearssl.BR_HASHDESC_ID_MASK;
             if (id == hash_id) {
-                log.debug("Matching Hash: {s}", .{h.name});
+                log.debug("using hash: {s}", .{h.name});
                 return h.hclass;
             }
         } else break;
@@ -284,10 +281,10 @@ fn choose(
 ) callconv(.C) c_int {
     // https://www.bearssl.org/apidoc/structbr__ssl__server__policy__class__.html
     const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
-    log.debug("Choose fired! | ID: {d}", .{policy.id});
 
     var suite_num: usize = 0;
     const suites: [*c]const bearssl.br_suite_translated = bearssl.br_ssl_server_get_client_suites(ctx, &suite_num);
+
     const hashes: u32 = bearssl.br_ssl_server_get_client_hashes(ctx);
 
     var ok: bool = false;
@@ -338,11 +335,9 @@ fn choose(
 
                         if (bearssl.br_ssl_engine_get_version(&ctx.*.eng) < bearssl.BR_TLS12) {
                             choices.*.algo_id = 0xFF00 + bearssl.br_sha1_ID;
-                            log.debug("Under TLS1.2 | Algo ID: {X}", .{choices.*.algo_id});
                         } else {
                             const id = choose_hash(hashes >> 8);
                             choices.*.algo_id = 0xFF00 + id;
-                            log.debug("GEQ TLS1.2 | Algo ID: {X}", .{choices.*.algo_id});
                         }
 
                         ok = true;
@@ -389,7 +384,7 @@ fn do_keyx(
     len: [*c]usize,
 ) callconv(.C) u32 {
     const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
-    log.debug("KeyX fired! | ID: {d}", .{policy.id});
+    _ = policy;
     _ = data;
     _ = len;
 
@@ -404,38 +399,16 @@ fn do_sign(
     len: usize,
 ) callconv(.C) usize {
     const policy: *const PolicyContext = @ptrCast(@alignCast(pctx));
-    log.debug("Sign fired! | ID: {d}", .{policy.id});
 
     var hv: [64]u8 = undefined;
     var algo_inner_id = algo_id;
-    var hv_inner_len = hv_len;
 
     if (algo_inner_id >= 0xFF00) {
-        log.debug("Copy Branch of Do Sign", .{});
-        log.debug("Data: {x}", .{data[0..hv_len]});
         algo_inner_id &= 0xFF;
         std.mem.copyForwards(u8, &hv, data[0..hv_len]);
-    } else {
-        // Q: Is this even needed? We aren't doing callback
-        // hashing so?
-        log.err("Triggered Callback Hashing", .{});
-        var class: *const bearssl.br_hash_class = undefined;
-        var zc: bearssl.br_hash_compat_context = undefined;
-
-        algo_inner_id >>= 8;
-        class = get_hash_impl(algo_inner_id) catch {
-            log.err("unsupported hash function {d}", .{algo_inner_id});
-            return 0;
-        };
-
-        class.init.?(&zc.vtable);
-        class.update.?(&zc.vtable, data, hv_len);
-        class.out.?(&zc.vtable, &hv);
-        hv_inner_len = (class.desc >> bearssl.BR_HASHDESC_OUT_OFF) & bearssl.BR_HASHDESC_OUT_MASK;
     }
 
     var sig_len: usize = 0;
-
     switch (policy.pkey) {
         .RSA => |_| {
             // TODO: Implement this.
@@ -449,15 +422,9 @@ fn do_sign(
             };
 
             if (len < 139) {
-                log.err("cannot ECDSA-sign len={d}", .{len});
+                log.err("failed to ecdsa-sign, wrong len={d}", .{len});
                 return 0;
             }
-
-            log.debug("Cert: {x}", .{std.mem.span(policy.chain[0].data)});
-            log.debug("EC Key: {x}", .{inner.x[0..inner.xlen]});
-            log.debug("EC key curve: {d}", .{inner.curve});
-            log.debug("EC key xlen: {d}", .{inner.xlen});
-            log.debug("Hash value length: {d}", .{hv_inner_len});
 
             sig_len = bearssl.br_ecdsa_sign_asn1_get_default().?(
                 bearssl.br_ec_get_default(),
@@ -468,7 +435,7 @@ fn do_sign(
             );
 
             if (sig_len == 0) {
-                log.err("ECDSA-sign failure", .{});
+                log.err("failed to ecdsa-sign, sig_len=0", .{});
                 return 0;
             }
 
@@ -517,7 +484,6 @@ pub const TLS = struct {
         };
     }
 
-    // THIS WILL DESTROY THE TLS OBJECT!
     pub fn deinit(self: TLS) void {
         self.allocator.free(self.iobuf);
         self.allocator.destroy(self.policy);
@@ -532,14 +498,11 @@ pub const TLS = struct {
         self.policy.vtable = @constCast(&policy_vtable);
         self.policy.chain = self.chain;
         self.policy.pkey = self.pkey;
-        log.debug("Private Key: {x}", .{std.mem.span(self.pkey.EC.x)});
-        log.debug("Policy Private Key: {x}", .{std.mem.span(self.policy.pkey.EC.x)});
-        self.policy.id = 100;
 
         bearssl.br_ssl_server_set_policy(&self.context, @ptrCast(&self.policy.vtable));
 
         const reset_status = bearssl.br_ssl_server_reset(&self.context);
-        if (reset_status < 0) {
+        if (reset_status <= 0) {
             return error.ServerResetFailed;
         }
 
@@ -639,7 +602,6 @@ pub const TLS = struct {
                 }
 
                 log.debug("Triggered BR_SSL_RECVREC", .{});
-                // We are writing in the encrypted data...
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
                 log.debug("D Cycle {d} - Recv Rec Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
@@ -674,7 +636,6 @@ pub const TLS = struct {
 
                 try self.buffer.appendSlice(buf[0..length]);
                 log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, length });
-                log.debug("D Cycle {d} - Unencrypted Read: {s}", .{ cycle_count, buf[0..length] });
                 bearssl.br_ssl_engine_recvapp_ack(engine, length);
                 continue;
             }
@@ -695,8 +656,6 @@ pub const TLS = struct {
         self.buffer.clearRetainingCapacity();
 
         const engine = &self.context.eng;
-
-        log.debug("E - Plaintext Length: {d}", .{plaintext.len});
 
         var sent_rec = false;
         var plaintext_index: usize = 0;
@@ -791,6 +750,6 @@ test "Parsing Certificates" {
     const context = try TLSContext.init(testing.allocator, cert, key);
     defer context.deinit();
 
-    const tls = try context.create();
+    const tls = try context.create(undefined);
     defer tls.deinit();
 }
