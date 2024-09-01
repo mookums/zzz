@@ -190,7 +190,7 @@ pub const Status = enum(u16) {
     /// 511 Network Authentication Required
     /// https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/511
     @"Network Authentication Required" = 511,
-    // Interally used, will cause the thread that accepts it
-    // to gracefully shutdown.
+    /// Interally used, will cause the thread that accepts it
+    /// to gracefully shutdown.
     Kill = 999,
 };
