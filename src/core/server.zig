@@ -23,7 +23,12 @@ pub const RecvStatus = union(enum) {
 
 const ServerTLS = union(enum) {
     plain,
-    tls: struct { cert: []const u8, key: []const u8 },
+    tls: struct {
+        cert: []const u8,
+        key: []const u8,
+        cert_name: []const u8 = "CERTIFICATE",
+        key_name: []const u8 = "PRIVATE KEY",
+    },
 };
 
 const ServerThreadCount = union(enum) {
@@ -129,9 +134,9 @@ pub fn Server(
                 .tls => |inner| TLSContext.init(.{
                     .allocator = config.allocator,
                     .cert_path = inner.cert,
-                    .cert_name = "CERTIFICATE",
+                    .cert_name = inner.cert_name,
                     .key_path = inner.key,
-                    .key_name = "EC PRIVATE KEY",
+                    .key_name = inner.key_name,
                     .size_tls_buffer_max = config.size_socket_buffer * 2,
                 }) catch unreachable,
                 .plain => null,
