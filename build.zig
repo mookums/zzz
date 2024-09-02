@@ -7,6 +7,8 @@ pub fn build(b: *std.Build) void {
     const bearssl = b.dependency("bearssl", .{
         .target = target,
         .optimize = optimize,
+        .BR_LE_UNALIGNED = false,
+        .BR_BE_UNALIGNED = false,
     }).artifact("bearssl");
 
     const zzz = b.addModule("zzz", .{
