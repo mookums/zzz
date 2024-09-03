@@ -47,9 +47,13 @@ pub fn main() !void {
 
     var server = http.Server(.{
         .tls = .{
-            .cert = "src/examples/tls/certs/cert.pem",
+            .cert = .{
+                .file = .{ .path = "src/examples/tls/certs/cert.pem" },
+            },
+            .key = .{
+                .file = .{ .path = "src/examples/tls/certs/key.pem" },
+            },
             .cert_name = "CERTIFICATE",
-            .key = "src/examples/tls/certs/key.pem",
             .key_name = "EC PRIVATE KEY",
         },
     }).init(.{
