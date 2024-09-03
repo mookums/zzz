@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 
 fn Borrow(comptime T: type) type {
     return struct {
-        index: usize,
+        index: u64,
         item: *T,
     };
 }
@@ -69,9 +69,9 @@ pub fn Pool(comptime T: type) type {
             const bytes = std.mem.toBytes(id)[0..];
             const hash = @mod(std.hash.Wyhash.hash(0, bytes), self.items.len);
 
-            if (!self.dirty.isSet(hash)) {
-                self.dirty.set(hash);
-                return Borrow(T){ .index = hash, .item = self.get_ptr(hash) };
+            if (!self.dirty.isSet(@intCast(hash))) {
+                self.dirty.set(@intCast(hash));
+                return Borrow(T){ .index = hash, .item = self.get_ptr(@intCast(hash)) };
             }
 
             // Linear probing if the first fails.
@@ -79,9 +79,9 @@ pub fn Pool(comptime T: type) type {
             for (0..self.items.len) |i| {
                 const index = @mod(hash + i, self.items.len);
 
-                if (!self.dirty.isSet(index)) {
-                    self.dirty.set(index);
-                    return Borrow(T){ .index = index, .item = self.get_ptr(index) };
+                if (!self.dirty.isSet(@intCast(index))) {
+                    self.dirty.set(@intCast(index));
+                    return Borrow(T){ .index = index, .item = self.get_ptr(@intCast(index)) };
                 }
             }
 

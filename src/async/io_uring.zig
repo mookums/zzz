@@ -68,7 +68,7 @@ pub const AsyncIoUring = struct {
         for (0..min) |i| {
             self.completions[i] = Completion{
                 .result = cqes[i].res,
-                .context = @ptrFromInt(cqes[i].user_data),
+                .context = @ptrFromInt(@as(usize, @intCast(cqes[i].user_data))),
             };
         }
 
