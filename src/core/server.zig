@@ -184,7 +184,7 @@ pub fn Server(
             const addr = try std.net.Address.resolveIp(host, port);
 
             const socket: std.posix.socket_t = blk: {
-                const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC;
+                const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
                 break :blk try std.posix.socket(
                     addr.any.family,
                     socket_flags,
@@ -314,7 +314,7 @@ pub fn Server(
             while (true) {
                 const completions = try backend.reap();
                 const completions_count = completions.len;
-                assert(completions_count > 0);
+                //assert(completions_count > 0);
 
                 reap_loop: for (completions[0..completions_count]) |completion| {
                     const p: *Provision = @ptrCast(@alignCast(completion.context));

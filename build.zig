@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     zzz.linkLibrary(bearssl);
 
     addExample(b, "basic", false, target, optimize, zzz);
+    addExample(b, "custom", false, target, optimize, zzz);
     addExample(b, "tls", true, target, optimize, zzz);
     addExample(b, "minram", false, target, optimize, zzz);
     addExample(b, "fs", false, target, optimize, zzz);

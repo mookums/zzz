@@ -50,7 +50,11 @@ pub const Route = struct {
             }
         }
 
-        return current[0 .. current.len - 1];
+        if (current.len == 0) {
+            return current;
+        } else {
+            return current[0 .. current.len - 1];
+        }
     }
 
     pub fn get_handler(self: Route, method: Method) ?RouteHandlerFn {
