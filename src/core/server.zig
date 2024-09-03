@@ -121,13 +121,14 @@ pub fn Server(
     /// This is called after the Recv.
     comptime recv_fn: RecvFn(ProtocolData, ProtocolConfig),
 ) type {
+    const TLSContextType = if (comptime security == .tls) TLSContext else void;
     const Provision = ZProvision(ProtocolData);
     return struct {
         const Self = @This();
         allocator: std.mem.Allocator,
         config: zzzConfig,
         socket: ?Socket = null,
-        tls_ctx: ?TLSContext = null,
+        tls_ctx: TLSContextType,
         backend_type: AsyncType,
 
         pub fn init(config: zzzConfig, async_type: ?AsyncType) Self {
@@ -142,7 +143,7 @@ pub fn Server(
                     .key_name = inner.key_name,
                     .size_tls_buffer_max = config.size_socket_buffer * 2,
                 }) catch unreachable,
-                .plain => null,
+                .plain => void{},
             };
 
             return Self{
@@ -163,8 +164,8 @@ pub fn Server(
                 }
             }
 
-            if (self.tls_ctx) |*tls_ctx| {
-                tls_ctx.deinit();
+            if (comptime security == .tls) {
+                self.tls_ctx.deinit();
             }
         }
 
@@ -246,7 +247,7 @@ pub fn Server(
             z_config: zzzConfig,
             p_config: ProtocolConfig,
             backend: *Async,
-            tls_ctx: ?TLSContext,
+            tls_ctx: TLSContextType,
             server_socket: Socket,
         ) !void {
             // Creating everything we need to run for the foreseeable future.
@@ -356,7 +357,7 @@ pub fn Server(
                                     const tls_ptr: *?TLS = &tls_pool[provision.index];
                                     assert(tls_ptr.* == null);
 
-                                    tls_ptr.* = tls_ctx.?.create(socket) catch |e| {
+                                    tls_ptr.* = tls_ctx.create(socket) catch |e| {
                                         log.debug("{d} - tls creation failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
@@ -655,7 +656,7 @@ pub fn Server(
                                 p_config: ProtocolConfig,
                                 z_config: zzzConfig,
                                 backend_type: AsyncType,
-                                thread_tls_ctx: ?TLSContext,
+                                thread_tls_ctx: TLSContextType,
                                 s_socket: Socket,
                                 thread_id: usize,
                             ) void {
