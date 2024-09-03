@@ -157,7 +157,7 @@ pub fn Server(
 
         pub fn deinit(self: *Self) void {
             if (self.socket) |socket| {
-                switch (@TypeOf(Socket)) {
+                switch (comptime Socket) {
                     std.posix.socket_t => std.posix.close(socket),
                     std.os.windows.ws2_32.SOCKET => std.os.windows.closesocket(socket),
                     else => {},
@@ -315,7 +315,7 @@ pub fn Server(
             while (true) {
                 const completions = try backend.reap();
                 const completions_count = completions.len;
-                //assert(completions_count > 0);
+                assert(completions_count > 0);
 
                 reap_loop: for (completions[0..completions_count]) |completion| {
                     const p: *Provision = @ptrCast(@alignCast(completion.context));
@@ -335,14 +335,23 @@ pub fn Server(
                                 continue :reap_loop;
                             };
 
-                            // Disable Nagle's.
-                            if (Socket == std.posix.socket_t) {
-                                try std.posix.setsockopt(
-                                    socket,
-                                    std.posix.IPPROTO.TCP,
-                                    std.posix.TCP.NODELAY,
-                                    &std.mem.toBytes(@as(c_int, 1)),
-                                );
+                            switch (comptime Socket) {
+                                std.posix.socket_t => {
+                                    try std.posix.setsockopt(
+                                        socket,
+                                        std.posix.IPPROTO.TCP,
+                                        std.posix.TCP.NODELAY,
+                                        &std.mem.toBytes(@as(c_int, 1)),
+                                    );
+
+                                    // Set this socket as non-blocking.
+                                    const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
+                                    var new_flags = @as(std.os.linux.O, @bitCast(@as(u32, @intCast(current_flags))));
+                                    new_flags.NONBLOCK = true;
+                                    const arg: u32 = @bitCast(new_flags);
+                                    _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
+                                },
+                                else => {},
                             }
 
                             const provision = borrowed.item;
@@ -599,7 +608,11 @@ pub fn Server(
             log.info("server listening...", .{});
             log.info("threading mode: {s}", .{@tagName(self.config.threading)});
             log.info("security mode: {s}", .{@tagName(security)});
-            try std.posix.listen(server_socket, self.config.size_backlog);
+
+            switch (comptime Socket) {
+                std.posix.socket_t => try std.posix.listen(server_socket, self.config.size_backlog),
+                else => unreachable,
+            }
 
             var backend = blk: {
                 switch (self.backend_type) {

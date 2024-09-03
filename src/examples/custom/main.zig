@@ -47,59 +47,76 @@ pub const CustomAsync = struct {
         const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
         var reaped: usize = 0;
 
-        log.debug("List Size: {d}", .{list.items.len});
+        while (reaped < 1) {
+            var i: usize = 0;
 
-        while (reaped == 0) {
-            for (0..list.items.len) |_| {
-                const item = list.swapRemove(0);
+            while (i < list.items.len and reaped < self.completions.len) : (i += 1) {
+                const item = list.items[i];
                 switch (item) {
                     .Accept => |inner| {
                         const com_ptr = &self.completions[reaped];
-                        const res = std.posix.accept(
-                            inner.socket,
-                            null,
-                            null,
-                            0,
-                        ) catch |e| {
-                            if (e == error.WouldBlock) {
-                                list.append(item) catch unreachable;
-                                continue;
-                            } else unreachable;
+
+                        const res: i32 = blk: {
+                            const ad = std.posix.accept(inner.socket, null, null, 0) catch |e| {
+                                if (e == error.WouldBlock) {
+                                    continue;
+                                } else {
+                                    break :blk -1;
+                                }
+                            };
+
+                            break :blk @intCast(ad);
                         };
 
                         log.debug("Reap Accept", .{});
                         com_ptr.result = @intCast(res);
                         com_ptr.context = inner.context;
+                        _ = list.swapRemove(i);
+                        i -|= 1;
                         reaped += 1;
                     },
 
                     .Recv => |inner| {
                         const com_ptr = &self.completions[reaped];
-                        const len = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
-                            if (e == error.WouldBlock) {
-                                list.append(item) catch unreachable;
-                                continue;
-                            } else unreachable;
+                        const len: i32 = blk: {
+                            const rd = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
+                                if (e == error.WouldBlock) {
+                                    continue;
+                                } else {
+                                    break :blk -1;
+                                }
+                            };
+
+                            break :blk @intCast(rd);
                         };
 
                         log.debug("Reap Recv", .{});
                         com_ptr.result = @intCast(len);
                         com_ptr.context = inner.context;
+                        _ = list.swapRemove(i);
+                        i -|= 1;
                         reaped += 1;
                     },
 
                     .Send => |inner| {
                         const com_ptr = &self.completions[reaped];
-                        const len = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
-                            if (e == error.WouldBlock) {
-                                list.append(item) catch unreachable;
-                                continue;
-                            } else unreachable;
+                        const len: i32 = blk: {
+                            const sd = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
+                                if (e == error.WouldBlock) {
+                                    continue;
+                                } else {
+                                    break :blk -1;
+                                }
+                            };
+
+                            break :blk @intCast(sd);
                         };
 
                         log.debug("Reap Send", .{});
                         com_ptr.result = @intCast(len);
                         com_ptr.context = inner.context;
+                        _ = list.swapRemove(i);
+                        i -|= 1;
                         reaped += 1;
                     },
                 }
