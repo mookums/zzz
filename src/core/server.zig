@@ -12,6 +12,7 @@ const Pool = @import("pool.zig").Pool;
 const Socket = @import("socket.zig").Socket;
 const ZProvision = @import("zprovision.zig").ZProvision;
 
+const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
 const TLSContext = @import("../tls/lib.zig").TLSContext;
 const TLS = @import("../tls/lib.zig").TLS;
 
@@ -27,8 +28,8 @@ pub const RecvStatus = union(enum) {
 pub const Security = union(enum) {
     plain,
     tls: struct {
-        cert: []const u8,
-        key: []const u8,
+        cert: TLSFileOptions,
+        key: TLSFileOptions,
         cert_name: []const u8 = "CERTIFICATE",
         key_name: []const u8 = "PRIVATE KEY",
     },
@@ -137,9 +138,9 @@ pub fn Server(
             const tls_ctx = switch (comptime security) {
                 .tls => |inner| TLSContext.init(.{
                     .allocator = config.allocator,
-                    .cert_path = inner.cert,
+                    .cert = inner.cert,
                     .cert_name = inner.cert_name,
-                    .key_path = inner.key,
+                    .key = inner.key,
                     .key_name = inner.key_name,
                     .size_tls_buffer_max = config.size_socket_buffer * 2,
                 }) catch unreachable,

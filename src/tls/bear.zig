@@ -2,6 +2,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/tls/bearssl");
 
+const TLSFileOptions = @import("lib.zig").TLSFileOptions;
+
 const Socket = @import("../core/socket.zig").Socket;
 
 const bearssl = @cImport({
@@ -93,9 +95,9 @@ fn parse_pem(allocator: std.mem.Allocator, section: []const u8, buffer: []const 
 
 const TLSContextOptions = struct {
     allocator: std.mem.Allocator,
-    cert_path: []const u8,
-    key_path: []const u8,
+    cert: TLSFileOptions,
     cert_name: []const u8,
+    key: TLSFileOptions,
     key_name: []const u8,
     size_tls_buffer_max: u32,
 };
@@ -116,20 +118,31 @@ pub const TLSContext = struct {
         self.arena = std.heap.ArenaAllocator.init(options.allocator);
         self.allocator = self.arena.allocator();
 
-        // Read Certificate.
-        const cert_buf = try std.fs.cwd().readFileAlloc(
-            self.allocator,
-            options.cert_path,
-            1024 * 1024,
-        );
-        defer self.allocator.free(cert_buf);
+        const cert_buf = blk: {
+            switch (options.cert) {
+                .buffer => |inner| break :blk inner,
+                .file => |inner| {
+                    break :blk try std.fs.cwd().readFileAlloc(
+                        self.allocator,
+                        inner.path,
+                        inner.size_buffer_max,
+                    );
+                },
+            }
+        };
 
-        const key_buf = try std.fs.cwd().readFileAlloc(
-            self.allocator,
-            options.key_path,
-            1024 * 1024,
-        );
-        defer self.allocator.free(key_buf);
+        const key_buf = blk: {
+            switch (options.key) {
+                .buffer => |inner| break :blk inner,
+                .file => |inner| {
+                    break :blk try std.fs.cwd().readFileAlloc(
+                        self.allocator,
+                        inner.path,
+                        inner.size_buffer_max,
+                    );
+                },
+            }
+        };
 
         self.cert = try parse_pem(self.allocator, options.cert_name, cert_buf);
 
@@ -552,7 +565,15 @@ pub const TLS = struct {
                     continue;
                 }
 
-                const sent = try std.posix.send(self.socket, buf[0..length], 0);
+                const sent = blk: while (true) {
+                    break :blk std.posix.send(self.socket, buf[0..length], 0) catch |e| {
+                        switch (e) {
+                            error.WouldBlock => continue,
+                            else => unreachable,
+                        }
+                    };
+                };
+
                 log.debug("cycle {d} - total sent: {d}", .{ cycle_count, sent });
 
                 bearssl.br_ssl_engine_sendrec_ack(engine, sent);
@@ -568,7 +589,15 @@ pub const TLS = struct {
                     continue;
                 }
 
-                const read = try std.posix.recv(self.socket, buf[0..length], 0);
+                const read = blk: while (true) {
+                    break :blk std.posix.recv(self.socket, buf[0..length], 0) catch |e| {
+                        switch (e) {
+                            error.WouldBlock => continue,
+                            else => unreachable,
+                        }
+                    };
+                };
+
                 log.debug("cycle {d} - total read: {d}", .{ cycle_count, read });
 
                 bearssl.br_ssl_engine_recvrec_ack(engine, read);
