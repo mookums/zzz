@@ -101,7 +101,9 @@ const TLSContextOptions = struct {
 };
 
 pub const TLSContext = struct {
+    parent_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     x509: *bearssl.br_x509_certificate,
     pkey: PrivateKey,
     cert: []const u8,
@@ -110,7 +112,9 @@ pub const TLSContext = struct {
     /// This only needs to be called once and it should create all of the stuff needed.
     pub fn init(options: TLSContextOptions) !TLSContext {
         var self: TLSContext = undefined;
-        self.allocator = options.allocator;
+        self.parent_allocator = options.allocator;
+        self.arena = std.heap.ArenaAllocator.init(options.allocator);
+        self.allocator = self.arena.allocator();
 
         // Read Certificate.
         const cert_buf = try std.fs.cwd().readFileAlloc(
@@ -137,7 +141,7 @@ pub const TLSContext = struct {
             return error.CertificateDecodeFailed;
         }
 
-        self.x509 = try options.allocator.create(bearssl.br_x509_certificate);
+        self.x509 = try self.allocator.create(bearssl.br_x509_certificate);
         self.x509.* = bearssl.br_x509_certificate{
             .data = @constCast(self.cert.ptr),
             .data_len = self.cert.len,
@@ -158,14 +162,28 @@ pub const TLSContext = struct {
 
         switch (key_type) {
             bearssl.BR_KEYTYPE_RSA => {
-                self.pkey = .{ .RSA = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0] };
+                const key = bearssl.br_skey_decoder_get_rsa(&sk_ctx)[0];
+                self.pkey = .{
+                    .RSA = bearssl.br_rsa_private_key{
+                        .p = (try self.allocator.dupe(u8, key.p[0..key.plen])).ptr,
+                        .plen = key.plen,
+                        .q = (try self.allocator.dupe(u8, key.q[0..key.qlen])).ptr,
+                        .qlen = key.qlen,
+                        .dp = (try self.allocator.dupe(u8, key.dp[0..key.dplen])).ptr,
+                        .dplen = key.dplen,
+                        .dq = (try self.allocator.dupe(u8, key.dq[0..key.dqlen])).ptr,
+                        .dqlen = key.dqlen,
+                        .iq = (try self.allocator.dupe(u8, key.iq[0..key.iqlen])).ptr,
+                        .iqlen = key.iqlen,
+                        .n_bitlen = key.n_bitlen,
+                    },
+                };
             },
             bearssl.BR_KEYTYPE_EC => {
                 const key = bearssl.br_skey_decoder_get_ec(&sk_ctx)[0];
                 self.pkey = .{
                     .EC = bearssl.br_ec_private_key{
-                        // TODO: This leaks right now, needs to be fixed.
-                        .x = (try options.allocator.dupe(u8, std.mem.span(key.x))).ptr,
+                        .x = (try self.allocator.dupe(u8, key.x[0..key.xlen])).ptr,
                         .xlen = key.xlen,
                         .curve = key.curve,
                     },
@@ -181,7 +199,7 @@ pub const TLSContext = struct {
 
     pub fn create(self: TLSContext, socket: Socket) !TLS {
         var tls = TLS.init(.{
-            .allocator = self.allocator,
+            .allocator = self.parent_allocator,
             .socket = socket,
             .context = undefined,
             .pkey = self.pkey,
@@ -220,9 +238,7 @@ pub const TLSContext = struct {
     }
 
     pub fn deinit(self: TLSContext) void {
-        self.allocator.free(self.cert);
-        self.allocator.free(self.key);
-        self.allocator.destroy(self.x509);
+        self.arena.deinit();
     }
 };
 
@@ -238,14 +254,13 @@ const HashFunction = struct {
     comment: []const u8,
 };
 
-const hash_functions = [_]?HashFunction{
+const hash_functions = [_]HashFunction{
     HashFunction{ .name = "md5", .hclass = &bearssl.br_md5_vtable, .comment = "MD5" },
     HashFunction{ .name = "sha1", .hclass = &bearssl.br_sha1_vtable, .comment = "SHA-1" },
     HashFunction{ .name = "sha224", .hclass = &bearssl.br_sha224_vtable, .comment = "SHA-224" },
     HashFunction{ .name = "sha256", .hclass = &bearssl.br_sha256_vtable, .comment = "SHA-256" },
     HashFunction{ .name = "sha384", .hclass = &bearssl.br_sha384_vtable, .comment = "SHA-384" },
     HashFunction{ .name = "sha512", .hclass = &bearssl.br_sha512_vtable, .comment = "SHA-512" },
-    null,
 };
 
 fn choose_hash(chashes: u32) u32 {
@@ -262,13 +277,11 @@ fn choose_hash(chashes: u32) u32 {
 
 fn get_hash_impl(hash_id: c_uint) !*const bearssl.br_hash_class {
     for (hash_functions) |hash| {
-        if (hash) |h| {
-            const id = (h.hclass.desc >> bearssl.BR_HASHDESC_ID_OFF) & bearssl.BR_HASHDESC_ID_MASK;
-            if (id == hash_id) {
-                log.debug("using hash: {s}", .{h.name});
-                return h.hclass;
-            }
-        } else break;
+        const id = (hash.hclass.desc >> bearssl.BR_HASHDESC_ID_OFF) & bearssl.BR_HASHDESC_ID_MASK;
+        if (id == hash_id) {
+            log.debug("using hash: {s}", .{hash.name});
+            return hash.hclass;
+        }
     }
 
     return error.HashNotSupported;
@@ -467,6 +480,7 @@ pub const TLS = struct {
     context: bearssl.br_ssl_server_context,
     iobuf: []u8,
     buffer: std.ArrayList(u8),
+    // chain is not owned, we are just using the ref from tlsctx.
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
     policy: *PolicyContext = undefined,
@@ -509,9 +523,9 @@ pub const TLS = struct {
         var cycle_count: u32 = 0;
         while (cycle_count < 50) : (cycle_count += 1) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
-            log.debug("Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
+            log.debug("cycle {d} - last error | {d}", .{ cycle_count, last_error });
             if (last_error != 0) {
-                log.debug("Cycle {d} - Handshake Failed | {s}", .{
+                log.debug("cycle {d} - handshake failed | {s}", .{
                     cycle_count,
                     fmt_bearssl_error(last_error),
                 });
@@ -519,27 +533,27 @@ pub const TLS = struct {
             }
 
             const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("Cycle {d} - Engine State | {any}", .{ cycle_count, state });
+            log.debug("cycle {d} - engine state | {any}", .{ cycle_count, state });
 
             if ((state & bearssl.BR_SSL_CLOSED) != 0) {
                 return error.HandshakeFailed;
             }
 
             if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
-                log.debug("Cycle {d} - Handshake Complete!", .{cycle_count});
+                log.debug("cycle {d} - handshake complete!", .{cycle_count});
                 return;
             }
 
             if ((state & bearssl.BR_SSL_SENDREC) != 0) {
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
-                log.debug("Cycle {d} - Send Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("cycle {d} - send buffer: address={*}, length={d}", .{ cycle_count, buf, length });
                 if (length == 0) {
                     continue;
                 }
 
                 const sent = try std.posix.send(self.socket, buf[0..length], 0);
-                log.debug("Cycle {d} - Total Sent: {d}", .{ cycle_count, sent });
+                log.debug("cycle {d} - total sent: {d}", .{ cycle_count, sent });
 
                 bearssl.br_ssl_engine_sendrec_ack(engine, sent);
                 bearssl.br_ssl_engine_flush(engine, 0);
@@ -549,13 +563,13 @@ pub const TLS = struct {
             if ((state & bearssl.BR_SSL_RECVREC) != 0) {
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
-                log.debug("Cycle {d} - Recv Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("cycle {d} - recv buffer: address={*}, length={d}", .{ cycle_count, buf, length });
                 if (length == 0) {
                     continue;
                 }
 
                 const read = try std.posix.recv(self.socket, buf[0..length], 0);
-                log.debug("Cycle {d} - Total Read: {d}", .{ cycle_count, read });
+                log.debug("cycle {d} - total read: {d}", .{ cycle_count, read });
 
                 bearssl.br_ssl_engine_recvrec_ack(engine, read);
                 continue;
@@ -580,9 +594,9 @@ pub const TLS = struct {
         var cycle_count: u32 = 0;
         while (cycle_count < 50) : (cycle_count += 1) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
-            log.debug("D Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
+            log.debug("d cycle {d} - last error | {d}", .{ cycle_count, last_error });
             if (last_error != 0) {
-                log.debug("D Cycle {d} - Decrypt Failed | {s}", .{
+                log.debug("d cycle {d} - decrypt failed | {s}", .{
                     cycle_count,
                     fmt_bearssl_error(last_error),
                 });
@@ -590,7 +604,7 @@ pub const TLS = struct {
             }
 
             const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("D Cycle {d} - Engine State | {any}", .{ cycle_count, state });
+            log.debug("d cycle {d} - engine state | {any}", .{ cycle_count, state });
 
             if ((state & bearssl.BR_SSL_CLOSED) != 0) {
                 return error.DecryptFailed;
@@ -604,7 +618,7 @@ pub const TLS = struct {
                 log.debug("Triggered BR_SSL_RECVREC", .{});
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
-                log.debug("D Cycle {d} - Recv Rec Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("d cycle {d} - recv rec buffer: address={*}, length={d}", .{ cycle_count, buf, length });
                 if (length == 0) {
                     continue;
                 }
@@ -617,7 +631,7 @@ pub const TLS = struct {
                     encrypted[encrypted_index .. encrypted_index + min_length],
                 );
                 encrypted_index += min_length;
-                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, min_length });
+                log.debug("d cycle {d} - total read: {d}", .{ cycle_count, min_length });
                 bearssl.br_ssl_engine_recvrec_ack(engine, min_length);
                 continue;
             }
@@ -628,14 +642,14 @@ pub const TLS = struct {
                 log.debug("Triggered BR_SSL_RECVAPP", .{});
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvapp_buf(engine, &length);
-                log.debug("D Cycle {d} - Recv App Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("d cycle {d} - recv app buffer: address={*}, length={d}", .{ cycle_count, buf, length });
 
                 if (length == 0) {
                     continue;
                 }
 
                 try self.buffer.appendSlice(buf[0..length]);
-                log.debug("D Cycle {d} - Total Read: {d}", .{ cycle_count, length });
+                log.debug("d cycle {d} - total read: {d}", .{ cycle_count, length });
                 bearssl.br_ssl_engine_recvapp_ack(engine, length);
                 continue;
             }
@@ -663,9 +677,9 @@ pub const TLS = struct {
         var cycle_count: u32 = 0;
         while (cycle_count < 50) : (cycle_count += 1) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
-            log.debug("E Cycle {d} - Last Error | {d}", .{ cycle_count, last_error });
+            log.debug("e cycle {d} - last error | {d}", .{ cycle_count, last_error });
             if (last_error != 0) {
-                log.debug("E Cycle {d} - Encrypt Failed | {s}", .{
+                log.debug("e cycle {d} - encrypt failed | {s}", .{
                     cycle_count,
                     fmt_bearssl_error(last_error),
                 });
@@ -673,7 +687,7 @@ pub const TLS = struct {
             }
 
             const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("E Cycle {d} - Engine State | {any}", .{ cycle_count, state });
+            log.debug("e cycle {d} - engine state | {any}", .{ cycle_count, state });
 
             if ((state & bearssl.BR_SSL_CLOSED) != 0) {
                 return error.DecryptFailed;
@@ -689,7 +703,7 @@ pub const TLS = struct {
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_sendapp_buf(engine, &length);
 
-                log.debug("E Cycle {d} - Send App Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("e cycle {d} - send app buffer: address={*}, length={d}", .{ cycle_count, buf, length });
                 if (length == 0) {
                     continue;
                 }
@@ -703,7 +717,7 @@ pub const TLS = struct {
                 );
 
                 plaintext_index += min_length;
-                log.debug("E Cycle {d} - Total Send App: {d}", .{ cycle_count, min_length });
+                log.debug("e cycle {d} - total send app: {d}", .{ cycle_count, min_length });
                 bearssl.br_ssl_engine_sendapp_ack(engine, min_length);
 
                 if (plaintext_index >= plaintext.len) {
@@ -721,20 +735,24 @@ pub const TLS = struct {
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
 
-                log.debug("E Cycle {d} - Send Rec Buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("e cycle {d} - send rec buffer: address={*}, length={d}", .{ cycle_count, buf, length });
                 if (length == 0) {
                     continue;
                 }
 
                 try self.buffer.appendSlice(buf[0..length]);
-                log.debug("E Cycle {d} - Total Send Rec: {d}", .{ cycle_count, length });
+                log.debug("e cycle {d} - total send rec: {d}", .{ cycle_count, length });
                 bearssl.br_ssl_engine_sendrec_ack(engine, length);
                 continue;
             }
 
-            if ((state & bearssl.BR_SSL_RECVREC) != 0) {}
+            if ((state & bearssl.BR_SSL_RECVREC) != 0) {
+                return error.RecvRecWhy;
+            }
 
-            if ((state & bearssl.BR_SSL_RECVAPP) != 0) {}
+            if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
+                return error.RecvAppWhy;
+            }
         }
 
         return error.EncryptTimeout;
