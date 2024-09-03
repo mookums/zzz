@@ -21,7 +21,10 @@ pub const RecvStatus = union(enum) {
     Send: Pseudoslice,
 };
 
-const ServerTLS = union(enum) {
+/// Security Model to use.
+///
+/// Default: .plain (plaintext)
+pub const Security = union(enum) {
     plain,
     tls: struct {
         cert: []const u8,
@@ -53,10 +56,6 @@ pub const zzzConfig = struct {
     ///
     /// Default: .single_threaded
     threading: ServerThreading = .single_threaded,
-    /// Encryption Model to use.
-    ///
-    /// Default: .plain (plaintext)
-    encryption: ServerTLS = .plain,
     /// Kernel Backlog Value.
     size_backlog: u31 = 512,
     /// Number of Maximum Concurrnet Connections.
@@ -94,32 +93,36 @@ pub const zzzConfig = struct {
     size_recv_buffer_max: u32 = 1024 * 1024 * 2,
 };
 
-/// This is a basic Server building block of the zzz framework. To build a server,
-/// you must provide an Async Backend, your Provision type, your provision init and deinit
-/// functions and an allocator.
-///
-/// You then must provide the hooks (aka the actual functions) that handle your communication.
-pub fn Server(
-    comptime ProtocolData: type,
-    comptime ProtocolConfig: type,
-    /// This is called after the Accept.
-    comptime accept_fn: ?*const fn (
+fn AcceptFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
+    return *const fn (
         provision: *ZProvision(ProtocolData),
         p_config: ProtocolConfig,
         z_config: zzzConfig,
         backend: *Async,
-    ) void,
-    /// This is called after the Recv.
-    comptime recv_fn: *const fn (
+    ) void;
+}
+
+fn RecvFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
+    return *const fn (
         provision: *ZProvision(ProtocolData),
         p_config: ProtocolConfig,
         z_config: zzzConfig,
         backend: *Async,
         recv_buffer: []const u8,
-    ) RecvStatus,
+    ) RecvStatus;
+}
+
+pub fn Server(
+    comptime security: Security,
+    comptime ProtocolData: type,
+    comptime ProtocolConfig: type,
+    /// This is called after the Accept.
+    comptime accept_fn: ?AcceptFn(ProtocolData, ProtocolConfig),
+    /// This is called after the Recv.
+    comptime recv_fn: RecvFn(ProtocolData, ProtocolConfig),
 ) type {
+    const Provision = ZProvision(ProtocolData);
     return struct {
-        const Provision = ZProvision(ProtocolData);
         const Self = @This();
         allocator: std.mem.Allocator,
         config: zzzConfig,
@@ -130,7 +133,7 @@ pub fn Server(
         pub fn init(config: zzzConfig, async_type: ?AsyncType) Self {
             const backend_type = async_type orelse AutoAsyncType;
 
-            const tls_ctx = switch (config.encryption) {
+            const tls_ctx = switch (comptime security) {
                 .tls => |inner| TLSContext.init(.{
                     .allocator = config.allocator,
                     .cert_path = inner.cert,
@@ -218,6 +221,14 @@ pub fn Server(
             self.socket = socket;
         }
 
+        /// Cleans up the TLS instance.
+        inline fn clean_tls(tls_ptr: *?TLS) void {
+            defer tls_ptr.* = null;
+
+            assert(tls_ptr.* != null);
+            tls_ptr.*.?.deinit();
+        }
+
         fn clean_connection(
             provision: *Provision,
             provision_pool: *Pool(Provision),
@@ -227,10 +238,6 @@ pub fn Server(
 
             log.info("{d} - closing connection", .{provision.index});
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
-            if (provision.tls) |*tls| {
-                tls.deinit();
-                provision.tls = null;
-            }
             provision.data.clean();
             std.posix.close(provision.socket);
         }
@@ -257,12 +264,36 @@ pub fn Server(
             defer {
                 for (provision_pool.items) |*provision| {
                     provision.data.deinit(z_config.allocator);
-
-                    if (provision.tls) |*tls| {
-                        tls.deinit();
-                    }
                 }
+
                 provision_pool.deinit(Provision.deinit_hook, z_config);
+            }
+
+            // If we don't have TLS set, this becomes 0 sized.
+            const tls_pool = blk: {
+                switch (comptime security) {
+                    .tls => |_| {
+                        const pool = try z_config.allocator.alloc(?TLS, z_config.size_connections_max);
+                        for (pool) |*tls| {
+                            tls.* = null;
+                        }
+
+                        break :blk pool;
+                    },
+                    .plain => break :blk void{},
+                }
+            };
+
+            defer {
+                if (comptime security == .tls) {
+                    for (tls_pool) |*tls| {
+                        if (tls.*) |_| {
+                            clean_tls(tls);
+                        }
+                    }
+
+                    z_config.allocator.free(tls_pool);
+                }
             }
 
             // Create and send the first Job.
@@ -316,14 +347,23 @@ pub fn Server(
                             const provision = borrowed.item;
 
                             // Store the index of this item.
-                            provision.index = borrowed.index;
+                            provision.index = @intCast(borrowed.index);
                             provision.socket = socket;
                             provision.job = .{ .Recv = .{ .count = 0 } };
 
-                            switch (z_config.encryption) {
+                            switch (comptime security) {
                                 .tls => |_| {
-                                    provision.tls = try tls_ctx.?.create(socket);
-                                    provision.tls.?.accept() catch |e| {
+                                    const tls_ptr: *?TLS = &tls_pool[provision.index];
+                                    assert(tls_ptr.* == null);
+
+                                    tls_ptr.* = tls_ctx.?.create(socket) catch |e| {
+                                        log.debug("{d} - tls creation failed={any}", .{ provision.index, e });
+                                        clean_connection(provision, &provision_pool, z_config);
+                                        continue :reap_loop;
+                                    };
+
+                                    tls_ptr.*.?.accept() catch |e| {
+                                        clean_tls(tls_ptr);
                                         log.debug("{d} - tls handshake failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
@@ -333,7 +373,7 @@ pub fn Server(
                             }
 
                             // Call the Accept Hook.
-                            if (accept_fn) |func| {
+                            if (comptime accept_fn) |func| {
                                 @call(.auto, func, .{ provision, p_config, z_config, backend });
                             }
 
@@ -345,6 +385,11 @@ pub fn Server(
 
                             // If the socket is closed.
                             if (completion.result <= 0) {
+                                if (comptime security == .tls) {
+                                    const tls_ptr: *?TLS = &tls_pool[p.index];
+                                    clean_tls(tls_ptr);
+                                }
+
                                 clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
@@ -353,13 +398,21 @@ pub fn Server(
                             inner.count += read_count;
                             const pre_recv_buffer = p.buffer[0..read_count];
 
-                            const recv_buffer = switch (z_config.encryption) {
-                                .tls => |_| p.tls.?.decrypt(pre_recv_buffer) catch |e| {
-                                    log.debug("{d} - decrypt failed: {any}", .{ p.index, e });
-                                    clean_connection(p, &provision_pool, z_config);
-                                    continue :reap_loop;
-                                },
-                                .plain => pre_recv_buffer,
+                            const recv_buffer = blk: {
+                                switch (comptime security) {
+                                    .tls => |_| {
+                                        const tls_ptr: *?TLS = &tls_pool[p.index];
+                                        assert(tls_ptr.* != null);
+
+                                        break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
+                                            log.debug("{d} - decrypt failed: {any}", .{ p.index, e });
+                                            clean_tls(tls_ptr);
+                                            clean_connection(p, &provision_pool, z_config);
+                                            continue :reap_loop;
+                                        };
+                                    },
+                                    .plain => break :blk pre_recv_buffer,
+                                }
                             };
 
                             var status: RecvStatus = @call(.auto, recv_fn, .{
@@ -380,9 +433,13 @@ pub fn Server(
                                 .Send => |*pslice| {
                                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
 
-                                    switch (z_config.encryption) {
+                                    switch (comptime security) {
                                         .tls => |_| {
-                                            const encrypted_buffer = p.tls.?.encrypt(plain_buffer) catch {
+                                            const tls_ptr: *?TLS = &tls_pool[p.index];
+                                            assert(tls_ptr.* != null);
+
+                                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch {
+                                                clean_tls(tls_ptr);
                                                 clean_connection(p, &provision_pool, z_config);
                                                 continue :reap_loop;
                                             };
@@ -421,13 +478,73 @@ pub fn Server(
                             const send_count = completion.result;
 
                             if (send_count <= 0) {
+                                if (comptime security == .tls) {
+                                    const tls_ptr: *?TLS = &tls_pool[p.index];
+                                    clean_tls(tls_ptr);
+                                }
+
                                 clean_connection(p, &provision_pool, z_config);
                                 continue :reap_loop;
                             }
 
-                            switch (send_type.*) {
-                                .Plain => |*inner| {
+                            switch (comptime security) {
+                                .tls => {
+                                    // This is for when sending encrypted data.
+                                    assert(send_type.* == .TLS);
+
+                                    const inner = &send_type.TLS;
+                                    inner.encrypted_count += @intCast(send_count);
+
+                                    if (inner.encrypted_count >= inner.encrypted.len) {
+                                        if (inner.count >= inner.slice.len) {
+                                            // All done sending.
+                                            log.debug("{d} - queueing a new recv", .{p.index});
+                                            p.recv_buffer.clearRetainingCapacity();
+                                            p.job = .{ .Recv = .{ .count = 0 } };
+                                            try backend.queue_recv(p, p.socket, p.buffer);
+                                        } else {
+                                            // Queue a new chunk up for sending.
+                                            log.debug(
+                                                "{d} - sending next chunk starting at index {d}",
+                                                .{ p.index, inner.count },
+                                            );
+
+                                            const inner_slice = inner.slice.get(
+                                                inner.count,
+                                                inner.count + z_config.size_socket_buffer,
+                                            );
+
+                                            inner.count += @intCast(inner_slice.len);
+
+                                            const tls_ptr: *?TLS = &tls_pool[p.index];
+                                            assert(tls_ptr.* != null);
+
+                                            const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch {
+                                                clean_tls(tls_ptr);
+                                                clean_connection(p, &provision_pool, z_config);
+                                                continue :reap_loop;
+                                            };
+
+                                            inner.encrypted = encrypted;
+                                            inner.encrypted_count = 0;
+
+                                            try backend.queue_send(p, p.socket, inner.encrypted);
+                                        }
+                                    } else {
+                                        log.debug(
+                                            "{d} - sending next encrypted chunk starting at index {d}",
+                                            .{ p.index, inner.encrypted_count },
+                                        );
+
+                                        const remainder = inner.encrypted[inner.encrypted_count..];
+                                        try backend.queue_send(p, p.socket, remainder);
+                                    }
+                                },
+                                .plain => {
                                     // This is for when sending plaintext.
+                                    assert(send_type.* == .Plain);
+
+                                    const inner = &send_type.Plain;
                                     inner.count += @intCast(send_count);
 
                                     if (inner.count >= inner.slice.len) {
@@ -452,51 +569,6 @@ pub fn Server(
                                         });
 
                                         try backend.queue_send(p, p.socket, plain_buffer);
-                                    }
-                                },
-                                .TLS => |*inner| {
-                                    // This is for when sending encrypted data.
-                                    inner.encrypted_count += @intCast(send_count);
-
-                                    if (inner.encrypted_count >= inner.encrypted.len) {
-                                        if (inner.count >= inner.slice.len) {
-                                            // All done sending.
-                                            log.debug("{d} - queueing a new recv", .{p.index});
-                                            p.recv_buffer.clearRetainingCapacity();
-                                            p.job = .{ .Recv = .{ .count = 0 } };
-                                            try backend.queue_recv(p, p.socket, p.buffer);
-                                        } else {
-                                            // Queue a new chunk up for sending.
-                                            log.debug(
-                                                "{d} - sending next chunk starting at index {d}",
-                                                .{ p.index, inner.count },
-                                            );
-
-                                            const inner_slice = inner.slice.get(
-                                                inner.count,
-                                                inner.count + z_config.size_socket_buffer,
-                                            );
-
-                                            inner.count += @intCast(inner_slice.len);
-
-                                            const encrypted = p.tls.?.encrypt(inner_slice) catch {
-                                                clean_connection(p, &provision_pool, z_config);
-                                                continue :reap_loop;
-                                            };
-
-                                            inner.encrypted = encrypted;
-                                            inner.encrypted_count = 0;
-
-                                            try backend.queue_send(p, p.socket, inner.encrypted);
-                                        }
-                                    } else {
-                                        log.debug(
-                                            "{d} - sending next encrypted chunk starting at index {d}",
-                                            .{ p.index, inner.encrypted_count },
-                                        );
-
-                                        const remainder = inner.encrypted[inner.encrypted_count..];
-                                        try backend.queue_send(p, p.socket, remainder);
                                     }
                                 },
                             }
@@ -525,7 +597,7 @@ pub fn Server(
 
             log.info("server listening...", .{});
             log.info("threading mode: {s}", .{@tagName(self.config.threading)});
-            log.info("encryption mode: {s}", .{@tagName(self.config.encryption)});
+            log.info("security mode: {s}", .{@tagName(security)});
             try std.posix.listen(server_socket, self.config.size_backlog);
 
             var backend = blk: {

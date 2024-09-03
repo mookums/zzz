@@ -21,6 +21,7 @@ const Router = @import("lib.zig").Router;
 const Capture = @import("routing_trie.zig").Capture;
 const ProtocolData = @import("protocol.zig").ProtocolData;
 const ProtocolConfig = @import("protocol.zig").ProtocolConfig;
+const Security = @import("../core/server.zig").Security;
 const zzzConfig = @import("../core/server.zig").zzzConfig;
 const Provision = @import("../core/zprovision.zig").ZProvision(ProtocolData);
 
@@ -327,9 +328,6 @@ pub fn recv_fn(
     }
 }
 
-pub const Server = zzzServer(
-    ProtocolData,
-    ProtocolConfig,
-    accept_fn,
-    recv_fn,
-);
+pub fn Server(comptime security: Security) type {
+    return zzzServer(security, ProtocolData, ProtocolConfig, accept_fn, recv_fn);
+}

@@ -7,7 +7,7 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var buffer = [_]u8{undefined} ** (1024 * 100);
+    var buffer = [_]u8{undefined} ** (1024 * 200);
     var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
     const allocator = fba.allocator();
 
@@ -33,7 +33,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server.init(.{
+    var server = http.Server(.plain).init(.{
         .allocator = allocator,
         .size_backlog = 32,
         .size_connections_max = 16,

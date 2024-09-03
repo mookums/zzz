@@ -45,17 +45,16 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server.init(.{
+    var server = http.Server(.{
+        .tls = .{
+            .cert = "src/examples/tls/certs/cert.pem",
+            .cert_name = "CERTIFICATE",
+            .key = "src/examples/tls/certs/key.pem",
+            .key_name = "EC PRIVATE KEY",
+        },
+    }).init(.{
         .allocator = allocator,
         .threading = .single_threaded,
-        .encryption = .{
-            .tls = .{
-                .cert = "src/examples/tls/certs/cert.pem",
-                .cert_name = "CERTIFICATE",
-                .key = "src/examples/tls/certs/key.pem",
-                .key_name = "EC PRIVATE KEY",
-            },
-        },
     }, null);
     defer server.deinit();
 
