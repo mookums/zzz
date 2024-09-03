@@ -7,6 +7,8 @@ pub fn build(b: *std.Build) void {
     const bearssl = b.dependency("bearssl", .{
         .target = target,
         .optimize = optimize,
+        // Without this, you get an illegal instruction error on certain paths.
+        // This makes it slightly.slower but prevents faults.
         .BR_LE_UNALIGNED = false,
         .BR_BE_UNALIGNED = false,
     }).artifact("bearssl");
