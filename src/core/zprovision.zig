@@ -9,7 +9,6 @@ pub fn ZProvision(comptime ProtocolData: type) type {
         const Self = @This();
         index: usize,
         job: Job,
-        tls: ?TLS = null,
         socket: Socket,
         buffer: []u8,
         recv_buffer: std.ArrayList(u8),
@@ -20,7 +19,6 @@ pub fn ZProvision(comptime ProtocolData: type) type {
             for (provisions) |*provision| {
                 provision.socket = undefined;
                 provision.data = undefined;
-                provision.tls = null;
                 // Create Buffer
                 provision.buffer = ctx.allocator.alloc(u8, ctx.size_socket_buffer) catch {
                     panic("attempting to statically allocate more memory than available. (Socket Buffer)", .{});
