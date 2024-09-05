@@ -6,7 +6,7 @@ const Response = @import("response.zig").Response;
 
 const Context = @import("context.zig").Context;
 
-const RouteHandlerFn = *const fn (request: Request, response: *Response, context: Context) void;
+pub const RouteHandlerFn = *const fn (request: Request, response: *Response, context: Context) void;
 
 pub const Route = struct {
     handlers: [9]?RouteHandlerFn = [_]?RouteHandlerFn{null} ** 9,
