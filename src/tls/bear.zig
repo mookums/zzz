@@ -569,7 +569,7 @@ pub const TLS = struct {
                     break :blk std.posix.send(self.socket, buf[0..length], 0) catch |e| {
                         switch (e) {
                             error.WouldBlock => continue,
-                            else => unreachable,
+                            else => return error.HandshakeFailed,
                         }
                     };
                 };
@@ -593,7 +593,7 @@ pub const TLS = struct {
                     break :blk std.posix.recv(self.socket, buf[0..length], 0) catch |e| {
                         switch (e) {
                             error.WouldBlock => continue,
-                            else => unreachable,
+                            else => return error.HandshakeFailed,
                         }
                     };
                 };
