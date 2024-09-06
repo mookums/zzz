@@ -1,3 +1,5 @@
+// These purposefully do not fit the general snake_case enum style.
+// This is so that we can just use @tagName for the Status.
 pub const Status = enum(u16) {
     /// 100 Continue
     /// https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/100

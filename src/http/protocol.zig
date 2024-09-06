@@ -28,7 +28,7 @@ pub const ProtocolData = struct {
 
     pub fn init(allocator: std.mem.Allocator, config: ProtocolConfig) ProtocolData {
         return ProtocolData{
-            .stage = .Header,
+            .stage = .header,
             .captures = allocator.alloc(Capture, config.num_captures_max) catch unreachable,
             .request = Request.init(allocator, .{
                 .num_header_max = config.num_header_max,

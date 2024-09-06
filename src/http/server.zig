@@ -43,7 +43,7 @@ fn raw_respond(p: *Provision) !RecvStatus {
     const header_buffer = try p.data.response.headers_into_buffer(p.buffer, @intCast(body.len));
     p.data.response.headers.clear();
     const pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
-    return .{ .Send = pseudo };
+    return .{ .send = pseudo };
 }
 
 fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
@@ -105,7 +105,7 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
     }
 
     if (p.data.response.status == .Kill) {
-        return .Kill;
+        return .kill;
     }
 
     return try raw_respond(p);
@@ -118,7 +118,7 @@ pub fn accept_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzC
     _ = p_config;
     _ = z_config;
     _ = backend;
-    provision.data.stage = .Header;
+    provision.data.stage = .header;
 }
 
 pub fn recv_fn(
@@ -132,7 +132,7 @@ pub fn recv_fn(
     _ = backend;
 
     var stage = provision.data.stage;
-    const job = provision.job.Recv;
+    const job = provision.job.recv;
 
     if (job.count >= p_config.size_request_max) {
         provision.data.response.set(.{
@@ -145,14 +145,14 @@ pub fn recv_fn(
     }
 
     switch (stage) {
-        .Header => {
+        .header => {
             provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
             const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items, "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
                 log.debug("{d} - header doesn't end in this chunk, continue", .{provision.index});
-                return .Recv;
+                return .recv;
             }
 
             log.debug("{d} - parsing header", .{provision.index});
@@ -260,8 +260,8 @@ pub fn recv_fn(
                 } else {
                     // Partial Body
                     log.debug("{d} - got partial body with header", .{provision.index});
-                    stage = .{ .Body = header_end };
-                    return .Recv;
+                    stage = .{ .body = header_end };
+                    return .recv;
                 }
             } else if (header_end == provision.recv_buffer.items.len) {
                 // Body of length 0 probably or only got header.
@@ -273,13 +273,13 @@ pub fn recv_fn(
                 } else {
                     // Got only header.
                     log.debug("{d} - got all header aka no body", .{provision.index});
-                    stage = .{ .Body = header_end };
-                    return .Recv;
+                    stage = .{ .body = header_end };
+                    return .recv;
                 }
             } else unreachable;
         },
 
-        .Body => |header_end| {
+        .body => |header_end| {
             // We should ONLY be here if we expect there to be a body.
             assert(provision.data.request.expect_body());
             log.debug("{d} - body matching triggered", .{provision.index});
@@ -322,7 +322,7 @@ pub fn recv_fn(
                 provision.data.request.set_body(provision.recv_buffer.items[header_end..request_length]);
                 return route_and_respond(provision, p_config.router) catch unreachable;
             } else {
-                return .Recv;
+                return .recv;
             }
         },
     }
