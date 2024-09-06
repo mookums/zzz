@@ -29,6 +29,17 @@ pub fn build(b: *std.Build) void {
     addExample(b, "multithread", false, target, optimize, zzz);
     addExample(b, "benchmark", false, target, optimize, zzz);
     addExample(b, "valgrind", true, target, optimize, zzz);
+
+    const tests = b.addTest(.{
+        .name = "tests",
+        .root_source_file = b.path("./src/test.zig"),
+    });
+
+    const run_test = b.addRunArtifact(tests);
+    run_test.step.dependOn(&tests.step);
+
+    const test_step = b.step("test", "Run general unit tests");
+    test_step.dependOn(&run_test.step);
 }
 
 fn addExample(
