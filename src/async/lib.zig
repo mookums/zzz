@@ -30,7 +30,7 @@ pub const Async = struct {
     _queue_open: *const fn (self: *Async, context: *anyopaque, rel_path: [:0]const u8) AsyncError!void,
     _queue_read: *const fn (self: *Async, context: *anyopaque, fd: std.posix.fd_t, buffer: []u8) AsyncError!void,
     _queue_write: *const fn (self: *Async, context: *anyopaque, fd: std.posix.fd_t, buffer: []const u8) AsyncError!void,
-    _queue_accept: *const fn (self: *Async, context: *anyopaque, fd: std.posix.fd_t) AsyncError!void,
+    _queue_accept: *const fn (self: *Async, context: *anyopaque, socket: Socket) AsyncError!void,
     _queue_recv: *const fn (self: *Async, context: *anyopaque, socket: Socket, buffer: []u8) AsyncError!void,
     _queue_send: *const fn (self: *Async, context: *anyopaque, socket: Socket, buffer: []const u8) AsyncError!void,
     _queue_close: *const fn (self: *Async, context: *anyopaque, fd: std.posix.fd_t) AsyncError!void,
