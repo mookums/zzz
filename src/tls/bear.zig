@@ -496,7 +496,7 @@ pub const TLS = struct {
     // chain is not owned, we are just using the ref from tlsctx.
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
-    policy: *PolicyContext = undefined,
+    policy: *PolicyContext,
 
     pub fn init(options: TLSOptions) TLS {
         return .{

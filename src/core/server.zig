@@ -17,9 +17,9 @@ const TLSContext = @import("../tls/lib.zig").TLSContext;
 const TLS = @import("../tls/lib.zig").TLS;
 
 pub const RecvStatus = union(enum) {
-    Kill,
-    Recv,
-    Send: Pseudoslice,
+    kill,
+    recv,
+    send: Pseudoslice,
 };
 
 /// Security Model to use.
@@ -300,7 +300,7 @@ pub fn Server(
 
             // Create and send the first Job.
             var first_provision = Provision{
-                .job = .Accept,
+                .job = .accept,
                 .index = undefined,
                 .socket = undefined,
                 .buffer = undefined,
@@ -322,7 +322,7 @@ pub fn Server(
                     const p: *Provision = @ptrCast(@alignCast(completion.context));
 
                     switch (p.job) {
-                        .Accept => {
+                        .accept => {
                             accepted = true;
                             const socket: Socket = completion.result;
 
@@ -360,7 +360,7 @@ pub fn Server(
                             // Store the index of this item.
                             provision.index = @intCast(borrowed.index);
                             provision.socket = socket;
-                            provision.job = .{ .Recv = .{ .count = 0 } };
+                            provision.job = .{ .recv = .{ .count = 0 } };
 
                             switch (comptime security) {
                                 .tls => |_| {
@@ -391,7 +391,7 @@ pub fn Server(
                             _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
                         },
 
-                        .Recv => |*inner| {
+                        .recv => |*inner| {
                             log.debug("{d} - recv triggered", .{p.index});
 
                             // If the socket is closed.
@@ -435,13 +435,13 @@ pub fn Server(
                             });
 
                             switch (status) {
-                                .Kill => {
+                                .kill => {
                                     return;
                                 },
-                                .Recv => {
+                                .recv => {
                                     try backend.queue_recv(p, p.socket, p.buffer);
                                 },
-                                .Send => |*pslice| {
+                                .send => |*pslice| {
                                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
 
                                     switch (comptime security) {
@@ -456,8 +456,8 @@ pub fn Server(
                                             };
 
                                             p.job = .{
-                                                .Send = .{
-                                                    .TLS = .{
+                                                .send = .{
+                                                    .tls = .{
                                                         .slice = pslice.*,
                                                         .count = @intCast(plain_buffer.len),
                                                         .encrypted = encrypted_buffer,
@@ -470,8 +470,8 @@ pub fn Server(
                                         },
                                         .plain => {
                                             p.job = .{
-                                                .Send = .{
-                                                    .Plain = .{
+                                                .send = .{
+                                                    .plain = .{
                                                         .slice = pslice.*,
                                                         .count = 0,
                                                     },
@@ -484,7 +484,7 @@ pub fn Server(
                             }
                         },
 
-                        .Send => |*send_type| {
+                        .send => |*send_type| {
                             log.debug("{d} - send triggered", .{p.index});
                             const send_count = completion.result;
 
@@ -501,9 +501,9 @@ pub fn Server(
                             switch (comptime security) {
                                 .tls => {
                                     // This is for when sending encrypted data.
-                                    assert(send_type.* == .TLS);
+                                    assert(send_type.* == .tls);
 
-                                    const inner = &send_type.TLS;
+                                    const inner = &send_type.tls;
                                     inner.encrypted_count += @intCast(send_count);
 
                                     if (inner.encrypted_count >= inner.encrypted.len) {
@@ -511,7 +511,7 @@ pub fn Server(
                                             // All done sending.
                                             log.debug("{d} - queueing a new recv", .{p.index});
                                             p.recv_buffer.clearRetainingCapacity();
-                                            p.job = .{ .Recv = .{ .count = 0 } };
+                                            p.job = .{ .recv = .{ .count = 0 } };
                                             try backend.queue_recv(p, p.socket, p.buffer);
                                         } else {
                                             // Queue a new chunk up for sending.
@@ -553,15 +553,15 @@ pub fn Server(
                                 },
                                 .plain => {
                                     // This is for when sending plaintext.
-                                    assert(send_type.* == .Plain);
+                                    assert(send_type.* == .plain);
 
-                                    const inner = &send_type.Plain;
+                                    const inner = &send_type.plain;
                                     inner.count += @intCast(send_count);
 
                                     if (inner.count >= inner.slice.len) {
                                         log.debug("{d} - queueing a new recv", .{p.index});
                                         p.recv_buffer.clearRetainingCapacity();
-                                        p.job = .{ .Recv = .{ .count = 0 } };
+                                        p.job = .{ .recv = .{ .count = 0 } };
                                         try backend.queue_recv(p, p.socket, p.buffer);
                                     } else {
                                         log.debug(
@@ -585,7 +585,7 @@ pub fn Server(
                             }
                         },
 
-                        .Close => {},
+                        .close => {},
 
                         else => @panic("not implemented yet!"),
                     }

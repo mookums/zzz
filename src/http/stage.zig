@@ -1,4 +1,4 @@
 pub const Stage = union(enum) {
-    Header,
-    Body: u32,
+    header,
+    body: u32,
 };

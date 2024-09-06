@@ -11,8 +11,8 @@ fn TokenHashMap(comptime V: type) type {
 
             const bytes = blk: {
                 switch (input) {
-                    .Fragment => |inner| break :blk inner,
-                    .Match => |inner| break :blk @tagName(inner),
+                    .fragment => |inner| break :blk inner,
+                    .match => |inner| break :blk @tagName(inner),
                 }
             };
 
@@ -24,15 +24,15 @@ fn TokenHashMap(comptime V: type) type {
 
             const result = blk: {
                 switch (first) {
-                    .Fragment => |f_inner| {
+                    .fragment => |f_inner| {
                         switch (second) {
-                            .Fragment => |s_inner| break :blk std.mem.eql(u8, f_inner, s_inner),
+                            .fragment => |s_inner| break :blk std.mem.eql(u8, f_inner, s_inner),
                             else => break :blk false,
                         }
                     },
-                    .Match => |f_inner| {
+                    .match => |f_inner| {
                         switch (second) {
-                            .Match => |s_inner| break :blk f_inner == s_inner,
+                            .match => |s_inner| break :blk f_inner == s_inner,
                             else => break :blk false,
                         }
                     },
@@ -49,31 +49,31 @@ fn TokenHashMap(comptime V: type) type {
 // parsed into a token and assembled later.
 
 const TokenEnum = enum(u8) {
-    Fragment = 0,
-    Match = 1,
+    fragment = 0,
+    match = 1,
 };
 
 pub const TokenMatch = enum {
-    Unsigned,
-    Signed,
-    Float,
-    String,
-    Remaining,
+    unsigned,
+    signed,
+    float,
+    string,
+    remaining,
 
     pub fn as_type(match: TokenMatch) type {
         switch (match) {
-            .Unsigned => return u64,
-            .Signed => return i64,
-            .Float => return f64,
-            .String => return []const u8,
-            .Remaining => return []const u8,
+            .unsigned => return u64,
+            .signed => return i64,
+            .float => return f64,
+            .string => return []const u8,
+            .remaining => return []const u8,
         }
     }
 };
 
 pub const Token = union(TokenEnum) {
-    Fragment: []const u8,
-    Match: TokenMatch,
+    fragment: []const u8,
+    match: TokenMatch,
 
     pub fn parse_chunk(chunk: []const u8) Token {
         if (std.mem.startsWith(u8, chunk, "%")) {
@@ -81,25 +81,25 @@ pub const Token = union(TokenEnum) {
             assert(chunk.len == 2);
 
             switch (chunk[1]) {
-                'i', 'd' => return .{ .Match = .Signed },
-                'u' => return .{ .Match = .Unsigned },
-                'f' => return .{ .Match = .Float },
-                's' => return .{ .Match = .String },
-                'r' => return .{ .Match = .Remaining },
+                'i', 'd' => return .{ .match = .signed },
+                'u' => return .{ .match = .unsigned },
+                'f' => return .{ .match = .float },
+                's' => return .{ .match = .string },
+                'r' => return .{ .match = .remaining },
                 else => @panic("Unsupported Match!"),
             }
         } else {
-            return .{ .Fragment = chunk };
+            return .{ .fragment = chunk };
         }
     }
 };
 
 pub const Capture = union(TokenMatch) {
-    Unsigned: TokenMatch.Unsigned.as_type(),
-    Signed: TokenMatch.Signed.as_type(),
-    Float: TokenMatch.Float.as_type(),
-    String: TokenMatch.String.as_type(),
-    Remaining: TokenMatch.Remaining.as_type(),
+    unsigned: TokenMatch.unsigned.as_type(),
+    signed: TokenMatch.signed.as_type(),
+    float: TokenMatch.float.as_type(),
+    string: TokenMatch.string.as_type(),
+    remaining: TokenMatch.remaining.as_type(),
 };
 
 pub const FoundRoute = struct {
@@ -147,7 +147,7 @@ pub const RoutingTrie = struct {
             .allocator = allocator,
             .root = try Node.init(
                 allocator,
-                Token{ .Fragment = "" },
+                Token{ .fragment = "" },
                 Route.init(),
             ),
         };
@@ -205,7 +205,7 @@ pub const RoutingTrie = struct {
         var current = self.root;
 
         while (iter.next()) |chunk| {
-            const fragment = Token{ .Fragment = chunk };
+            const fragment = Token{ .fragment = chunk };
 
             // If it is the fragment, match it here.
             if (current.children.get(fragment)) |child| {
@@ -215,25 +215,28 @@ pub const RoutingTrie = struct {
 
             var matched = false;
             for (std.meta.tags(TokenMatch)) |token_type| {
-                const token = Token{ .Match = token_type };
+                const token = Token{ .match = token_type };
                 if (current.children.get(token)) |child| {
                     matched = true;
                     switch (token_type) {
-                        .Signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
-                            captures[capture_idx] = Capture{ .Signed = value };
+                        .signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
+                            captures[capture_idx] = Capture{ .signed = value };
                         } else |_| continue,
-                        .Unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
-                            captures[capture_idx] = Capture{ .Unsigned = value };
+                        .unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
+                            captures[capture_idx] = Capture{ .unsigned = value };
                         } else |_| continue,
-                        .Float => if (std.fmt.parseFloat(f64, chunk)) |value| {
-                            captures[capture_idx] = Capture{ .Float = value };
+                        .float => if (std.fmt.parseFloat(f64, chunk)) |value| {
+                            captures[capture_idx] = Capture{ .float = value };
                         } else |_| continue,
-                        .String => captures[capture_idx] = Capture{ .String = chunk },
+                        .string => captures[capture_idx] = Capture{ .string = chunk },
                         // This ends the matching sequence and claims everything.
-                        .Remaining => {
+                        .remaining => {
                             const rest = iter.buffer[iter.index - chunk.len ..];
-                            captures[capture_idx] = Capture{ .Remaining = rest };
-                            return FoundRoute{ .route = child.route.?, .captures = captures[0 .. capture_idx + 1] };
+                            captures[capture_idx] = Capture{ .remaining = rest };
+                            return FoundRoute{
+                                .route = child.route.?,
+                                .captures = captures[0 .. capture_idx + 1],
+                            };
                         },
                     }
 
@@ -272,8 +275,8 @@ test "Chunk Parsing (Fragment)" {
     const token: Token = Token.parse_chunk(chunk);
 
     switch (token) {
-        .Fragment => |inner| try testing.expectEqualStrings(chunk, inner),
-        .Match => return error.IncorrectTokenParsing,
+        .fragment => |inner| try testing.expectEqualStrings(chunk, inner),
+        .match => return error.IncorrectTokenParsing,
     }
 }
 
@@ -287,19 +290,19 @@ test "Chunk Parsing (Match)" {
     };
 
     const matches = [_]TokenMatch{
-        TokenMatch.Signed,
-        TokenMatch.Signed,
-        TokenMatch.Unsigned,
-        TokenMatch.Float,
-        TokenMatch.String,
+        TokenMatch.signed,
+        TokenMatch.signed,
+        TokenMatch.unsigned,
+        TokenMatch.float,
+        TokenMatch.string,
     };
 
     for (chunks, matches) |chunk, match| {
         const token: Token = Token.parse_chunk(chunk);
 
         switch (token) {
-            .Fragment => return error.IncorrectTokenParsing,
-            .Match => |inner| try testing.expectEqual(match, inner),
+            .fragment => return error.IncorrectTokenParsing,
+            .match => |inner| try testing.expectEqual(match, inner),
         }
     }
 }
@@ -308,9 +311,9 @@ test "Path Parsing (Mixed)" {
     const path = "/item/%i/description";
 
     const parsed: [3]Token = .{
-        .{ .Fragment = "item" },
-        .{ .Match = .Signed },
-        .{ .Fragment = "description" },
+        .{ .fragment = "item" },
+        .{ .match = .signed },
+        .{ .fragment = "description" },
     };
 
     var iter = std.mem.tokenizeScalar(u8, path, '/');
@@ -318,8 +321,8 @@ test "Path Parsing (Mixed)" {
     for (parsed) |expected| {
         const token = Token.parse_chunk(iter.next().?);
         switch (token) {
-            .Fragment => |inner| try testing.expectEqualStrings(expected.Fragment, inner),
-            .Match => |inner| try testing.expectEqual(expected.Match, inner),
+            .fragment => |inner| try testing.expectEqualStrings(expected.fragment, inner),
+            .match => |inner| try testing.expectEqual(expected.match, inner),
         }
     }
 }
@@ -327,28 +330,28 @@ test "Path Parsing (Mixed)" {
 test "Custom Hashing" {
     var s = TokenHashMap(bool).init(testing.allocator);
     {
-        try s.put(.{ .Fragment = "item" }, true);
-        try s.put(.{ .Fragment = "thisisfalse" }, false);
+        try s.put(.{ .fragment = "item" }, true);
+        try s.put(.{ .fragment = "thisisfalse" }, false);
 
-        const state = s.get(.{ .Fragment = "item" }).?;
+        const state = s.get(.{ .fragment = "item" }).?;
         try testing.expect(state);
 
-        const should_be_false = s.get(.{ .Fragment = "thisisfalse" }).?;
+        const should_be_false = s.get(.{ .fragment = "thisisfalse" }).?;
         try testing.expect(!should_be_false);
     }
 
     {
-        try s.put(.{ .Match = .Unsigned }, true);
-        try s.put(.{ .Match = .Float }, false);
-        try s.put(.{ .Match = .String }, false);
+        try s.put(.{ .match = .unsigned }, true);
+        try s.put(.{ .match = .float }, false);
+        try s.put(.{ .match = .string }, false);
 
-        const state = s.get(.{ .Match = .Unsigned }).?;
+        const state = s.get(.{ .match = .unsigned }).?;
         try testing.expect(state);
 
-        const should_be_false = s.get(.{ .Match = .Float }).?;
+        const should_be_false = s.get(.{ .match = .float }).?;
         try testing.expect(!should_be_false);
 
-        const string_state = s.get(.{ .Match = .String }).?;
+        const string_state = s.get(.{ .match = .string }).?;
         try testing.expect(!string_state);
     }
 
@@ -387,14 +390,14 @@ test "Routing with Paths" {
         const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
 
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqualStrings("HELLO", captured.captures[0].String);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
         const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
 
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqual(2112.22121, captured.captures[0].Float);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 }
 
@@ -413,24 +416,24 @@ test "Routing with Remaining" {
     {
         const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqualStrings("HELLO", captured.captures[0].Remaining);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
         const captured = s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].Remaining);
+        try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
     {
         const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqual(2112.22121, captured.captures[0].Float);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
     {
         const captured = s.get_route("/item/100/price/283.21", captures[0..]).?;
         try testing.expectEqual(Route.init(), captured.route);
-        try testing.expectEqual(100, captured.captures[0].Signed);
-        try testing.expectEqual(283.21, captured.captures[1].Float);
+        try testing.expectEqual(100, captured.captures[0].signed);
+        try testing.expectEqual(283.21, captured.captures[1].float);
     }
 }
