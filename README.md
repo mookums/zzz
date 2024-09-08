@@ -1,43 +1,43 @@
-# ZZZ
+# zzz
 
-Honestly, this is just me trying out `io_uring`. Maybe this will become something cooler at some point, not 100% sure yet.
+## Notice
+zzz is currently **alpha** software and while it is generally stable, there is still a lot changing at a fairly quick pace and certain places where things are less polished.
 
-It could be pretty cool to have a general single-threaded socket server that can handle various protocols? like maybe raw TCP or HTTP or UDP or etc etc. Could be nice in an embedded context to have a simple way of doing it. Could even have multiple ZZZ instances running at once, each on an individual thread.
+You should currently only use it if you are willing to work around the rough edges.
 
-For HTTP use, since I hope to use this on my personal website, there's a couple things I'd love to have. They don't need to exist here though.
+## zzz?
+zzz is a framework for writing performant and reliable networked services in Zig.
 
-- Memory Allocated at Start Up
-    -> ALL memory should be allocated at start up.
-        - this includes every job and etc etc
-        - we can use a FixedBufferAllocator where we define the size of the buffer at compile time.
+zzz provides a solid core with support for providing your own protocol handlers and your own Async implementation.
 
-- Upper Bounds
-    -> All of our loops should have reasonable upper bounds and should handle fails gracefully.
+It focuses on modularity and portability, allowing you to swap in your own implementations for various things. This allows for use in standard servers as well as embedded/bare metal domains.
 
-- Assert
-    -> We should include various asserts to ensure that we don't have any bugs.
+## Optimization
+zzz is **very** fast. Through a combination of methods, such as allocation at start up and avoiding thread contention, we are able to extract tons of performance.
 
-- Templating Syntax [O(n)]
-    -> I enjoyed Askama so maybe something similar.
-        -> Substituion
-        -> If/Else
-        -> Iterate over Slices
-    -> Probably not in the scope of including it in this project? Maybe?
-    -> Embedding of Templates
-    -> Comptime parsing of Template, just plug in your values, generate tiny snippets, and get a []const u8 back.
+zzz can be configured to utilize minimal memory while remaining performant. The provided `minram` example only uses 392 kB!
 
-- HTTP/1.1 Compatibility
-    -> Needs to have full compatbility, perhaps this can be modularized in a TCP/HTTP module. This can allow for various modules to be included with zzz, such as UDP or HTTP/2 or MQTT or whatever.
-    -> Maybe add keep-alive support?
+## Features
+- Modular Asyncronous Implementation
+    - Allows for passing in your own Async implementation.
+    - Comes with:
+        - io_uring for Linux.
+        - IOCP for Windows (planned).
+        - kqueue for BSD (planned).
+- Modular Protocol Implementation
+    - Allows for defining your own Protocol on top of TCP.
+    - Comes with:
+        - HTTP/1.1
+        - MQTT (planned)
+        - HTTP/2 (planned)
+- TLS using BearSSL
+- (Almost) all memory allocated at startup
+    - Only allocations happen while storing received data for parsing.
 
-- Request Router
-    -> We need to be able to have a longest prefix route matcher. This should also support filtering by methods.
-    -> This will be HTTP module specific.
 
-- Testing Suite
-    -> Things like this should really be tested. Modules should have extensive testing to ensure that they parse correctly, interpret correctly and respond correctly.
+## Platform Support
+zzz currently focuses on Linux as the primary platform.
 
-- openzpi
-    -> An automatic OpenAPI Spec generator for Zig.
-    -> Basically, generate a file that has all of the OpenAPI information for interacting with a API.
-    -> Probably use the stdlib HTTP system? Maybe support custom implementations so anyone can use theirs.
+Due to the modular nature, any platform (that works with Zig) can be supported as long as you define an Async backend.
+
+
