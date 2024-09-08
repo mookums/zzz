@@ -1,4 +1,5 @@
 # zzz
+![zzz logo](./docs/img/zzz.png)
 
 ## Notice
 zzz is currently **alpha** software and while it is generally stable, there is still a lot changing at a fairly quick pace and certain places where things are less polished.
@@ -39,5 +40,4 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
 zzz currently focuses on Linux as the primary platform.
 
 Due to the modular nature, any platform (that works with Zig) can be supported as long as you define an Async backend.
-
 
