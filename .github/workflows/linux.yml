@@ -17,4 +17,4 @@ jobs:
         with:
           version: 0.13.0
       - name: Unit Test
-        run: zig build test
+        run: zig build test --summary all
