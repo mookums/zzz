@@ -35,7 +35,7 @@ pub const Router = struct {
             pub fn handler_fn(request: Request, response: *Response, context: Context) void {
                 _ = request;
 
-                const search_path = context.captures[0].Remaining;
+                const search_path = context.captures[0].remaining;
                 const file_path = std.fmt.allocPrint(context.allocator, "{s}/{s}", .{ dir_path, search_path }) catch {
                     response.set(.{
                         .status = .@"Internal Server Error",
@@ -104,26 +104,26 @@ pub const Router = struct {
                     .body = bytes,
                 });
 
+                if (comptime builtin.mode == .Debug) {
+                    // Don't Cache in Debug.
+                    response.headers.add(
+                        "Cache-Control",
+                        "no-cache",
+                    ) catch unreachable;
+                } else {
+                    // Cache for 30 days.
+                    response.headers.add(
+                        "Cache-Control",
+                        comptime std.fmt.comptimePrint("max-age={d}", .{60 * 60 * 24 * 30}),
+                    ) catch unreachable;
+                }
+
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
                 if (comptime bytes.len > 1024) {
                     @setEvalBranchQuota(1_000_000);
                     const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
                     response.headers.add("ETag", etag[0..]) catch unreachable;
-
-                    if (comptime builtin.mode == .Debug) {
-                        // Don't Cache in Debug.
-                        response.headers.add(
-                            "Cache-Control",
-                            "no-cache",
-                        ) catch unreachable;
-                    } else {
-                        // Cache for 30 days.
-                        response.headers.add(
-                            "Cache-Control",
-                            comptime std.fmt.comptimePrint("max-age={d}", .{60 * 60 * 24 * 30}),
-                        ) catch unreachable;
-                    }
 
                     if (request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
