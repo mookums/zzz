@@ -4,7 +4,7 @@ const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/multithread");
 
 fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) void {
-    const name = context.captures[0].String;
+    const name = context.captures[0].string;
 
     const body = std.fmt.allocPrint(context.allocator,
         \\ <!DOCTYPE html>

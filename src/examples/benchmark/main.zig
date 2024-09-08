@@ -8,7 +8,7 @@ pub const std_options = .{
 };
 
 fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) void {
-    const name = context.captures[0].String;
+    const name = context.captures[0].string;
 
     const body = std.fmt.allocPrint(context.allocator,
         \\ <!DOCTYPE html>

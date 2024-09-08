@@ -130,9 +130,6 @@ pub const CustomAsync = struct {
         return Async{
             .runner = self.inner,
             .completions = self.completions,
-            ._queue_open = undefined,
-            ._queue_read = undefined,
-            ._queue_write = undefined,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,
             ._queue_send = queue_send,
