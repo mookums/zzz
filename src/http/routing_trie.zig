@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/routing_trie");
 
+const CaseStringMap = @import("case_string_map.zig").CaseStringMap;
 const Route = @import("lib.zig").Route;
 
 fn TokenHashMap(comptime V: type) type {
@@ -94,6 +95,13 @@ pub const Token = union(TokenEnum) {
     }
 };
 
+pub const Query = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+pub const QueryMap = CaseStringMap([]const u8);
+
 pub const Capture = union(TokenMatch) {
     unsigned: TokenMatch.unsigned.as_type(),
     signed: TokenMatch.signed.as_type(),
@@ -105,6 +113,7 @@ pub const Capture = union(TokenMatch) {
 pub const FoundRoute = struct {
     route: Route,
     captures: []Capture,
+    queries: *QueryMap,
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
@@ -162,7 +171,10 @@ pub const RoutingTrie = struct {
 
         while (iter.next()) |entry| {
             const node_ptr = entry.value_ptr.*;
-            std.debug.print("Token: {any}\n", .{node_ptr.token});
+            std.io.getStdOut().writer().print(
+                "Token: {any}\n",
+                .{node_ptr.token},
+            ) catch return;
             print_node(entry.value_ptr.*);
         }
     }
@@ -183,11 +195,7 @@ pub const RoutingTrie = struct {
             } else {
                 try current.children.put(
                     token,
-                    try Node.init(
-                        self.allocator,
-                        token,
-                        null,
-                    ),
+                    try Node.init(self.allocator, token, null),
                 );
 
                 current = current.children.get(token).?;
@@ -197,14 +205,21 @@ pub const RoutingTrie = struct {
         current.route = route;
     }
 
-    pub fn get_route(self: RoutingTrie, path: []const u8, captures: []Capture) ?FoundRoute {
-        // We need some way of also returning the capture groups here.
+    pub fn get_route(
+        self: RoutingTrie,
+        path: []const u8,
+        captures: []Capture,
+        queries: *QueryMap,
+    ) ?FoundRoute {
         var capture_idx: usize = 0;
-        var iter = std.mem.tokenizeScalar(u8, path, '/');
 
+        queries.clearRetainingCapacity();
+
+        const query_pos = std.mem.indexOfScalar(u8, path, '?');
+        var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
         var current = self.root;
 
-        while (iter.next()) |chunk| {
+        slash_loop: while (iter.next()) |chunk| {
             const fragment = Token{ .fragment = chunk };
 
             // If it is the fragment, match it here.
@@ -230,13 +245,13 @@ pub const RoutingTrie = struct {
                         } else |_| continue,
                         .string => captures[capture_idx] = Capture{ .string = chunk },
                         // This ends the matching sequence and claims everything.
+                        // Does not match the query statement!
                         .remaining => {
-                            const rest = iter.buffer[iter.index - chunk.len ..];
+                            const rest = iter.buffer[(iter.index - chunk.len)..];
                             captures[capture_idx] = Capture{ .remaining = rest };
-                            return FoundRoute{
-                                .route = child.route.?,
-                                .captures = captures[0 .. capture_idx + 1],
-                            };
+                            current.route = child.route.?;
+                            capture_idx += 1;
+                            break :slash_loop;
                         },
                     }
 
@@ -260,11 +275,35 @@ pub const RoutingTrie = struct {
             }
         }
 
-        if (current.route) |r| {
-            return FoundRoute{ .route = r, .captures = captures[0..capture_idx] };
-        } else {
-            return null;
+        if (query_pos) |pos| {
+            if (path.len > pos + 1) {
+                var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
+
+                while (query_iter.next()) |chunk| {
+                    if (queries.count() >= queries.capacity() / 2) {
+                        return null;
+                    }
+
+                    const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse break;
+                    if (chunk.len < field_idx + 1) break;
+
+                    const key = chunk[0..field_idx];
+                    const value = chunk[(field_idx + 1)..];
+
+                    assert(std.mem.indexOfScalar(u8, key, '=') == null);
+                    assert(std.mem.indexOfScalar(u8, value, '=') == null);
+
+                    queries.putAssumeCapacity(key, value);
+                }
+            }
         }
+
+        const route = current.route orelse return null;
+        return FoundRoute{
+            .route = route,
+            .captures = captures[0..capture_idx],
+            .queries = queries,
+        };
     }
 };
 
@@ -375,6 +414,11 @@ test "Constructing Routing from Path" {
 test "Routing with Paths" {
     var s = try RoutingTrie.init(testing.allocator);
     defer s.deinit();
+
+    var q = QueryMap.init(testing.allocator);
+    try q.ensureTotalCapacity(8);
+    defer q.deinit();
+
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
     try s.add_route("/item", Route.init());
@@ -384,17 +428,17 @@ test "Routing with Paths" {
     try s.add_route("/item/name/%s", Route.init());
     try s.add_route("/item/list", Route.init());
 
-    try testing.expectEqual(null, s.get_route("/item/name", captures[0..]));
+    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
 
     {
-        const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
+        const captured = s.get_route("/item/name/HELLO", captures[0..], &q).?;
 
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
-        const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
+        const captured = s.get_route("/item/2112.22121/price_float", captures[0..], &q).?;
 
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
@@ -404,6 +448,11 @@ test "Routing with Paths" {
 test "Routing with Remaining" {
     var s = try RoutingTrie.init(testing.allocator);
     defer s.deinit();
+
+    var q = QueryMap.init(testing.allocator);
+    try q.ensureTotalCapacity(8);
+    defer q.deinit();
+
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
     try s.add_route("/item", Route.init());
@@ -411,29 +460,79 @@ test "Routing with Remaining" {
     try s.add_route("/item/name/%r", Route.init());
     try s.add_route("/item/%i/price/%f", Route.init());
 
-    try testing.expectEqual(null, s.get_route("/item/name", captures[0..]));
+    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
 
     {
-        const captured = s.get_route("/item/name/HELLO", captures[0..]).?;
+        const captured = s.get_route("/item/name/HELLO", captures[0..], &q).?;
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
-        const captured = s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..]).?;
+        const captured = s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q).?;
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
     {
-        const captured = s.get_route("/item/2112.22121/price_float", captures[0..]).?;
+        const captured = s.get_route("/item/2112.22121/price_float", captures[0..], &q).?;
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
     {
-        const captured = s.get_route("/item/100/price/283.21", captures[0..]).?;
+        const captured = s.get_route("/item/100/price/283.21", captures[0..], &q).?;
         try testing.expectEqual(Route.init(), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
+    }
+}
+
+test "Routing with Queries" {
+    var s = try RoutingTrie.init(testing.allocator);
+    defer s.deinit();
+
+    var q = QueryMap.init(testing.allocator);
+    try q.ensureTotalCapacity(8);
+    defer q.deinit();
+
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%r", Route.init());
+    try s.add_route("/item/%i/price/%f", Route.init());
+
+    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
+
+    {
+        const captured = s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
+        try testing.expectEqual(2, q.count());
+        try testing.expectEqualStrings("muki", q.get("name").?);
+        try testing.expectEqualStrings("waffle", q.get("food").?);
+    }
+
+    {
+        // Purposefully bad format with no keys or values.
+        const captured = s.get_route("/item/2112.22121/price_float?", captures[0..], &q).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
+        try testing.expectEqual(0, q.count());
+    }
+
+    {
+        // Purposefully bad format with incomplete key/value pair.
+        const captured = s.get_route("/item/100/price/283.21?help", captures[0..], &q).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(100, captured.captures[0].signed);
+        try testing.expectEqual(283.21, captured.captures[1].float);
+        try testing.expectEqual(0, q.count());
+    }
+
+    {
+        // Purposefully have too many queries.
+        const captured = s.get_route("/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11", captures[0..], &q);
+        try testing.expectEqual(null, captured);
     }
 }

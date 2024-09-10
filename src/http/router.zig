@@ -11,6 +11,7 @@ const Context = @import("context.zig").Context;
 const log = std.log.scoped(.router);
 
 const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
+const QueryMap = @import("routing_trie.zig").QueryMap;
 
 pub const Router = struct {
     allocator: std.mem.Allocator,
@@ -143,7 +144,7 @@ pub const Router = struct {
         try self.routes.add_route(path, route);
     }
 
-    pub fn get_route_from_host(self: Router, host: []const u8, captures: []Capture) ?FoundRoute {
-        return self.routes.get_route(host, captures);
+    pub fn get_route_from_host(self: Router, host: []const u8, captures: []Capture, queries: *QueryMap) ?FoundRoute {
+        return self.routes.get_route(host, captures, queries);
     }
 };

@@ -48,18 +48,19 @@ fn raw_respond(p: *Provision) !RecvStatus {
 
 fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
     route: {
-        const captured = router.get_route_from_host(p.data.request.uri, p.data.captures);
-        if (captured) |c| {
-            const handler = c.route.get_handler(p.data.request.method);
+        const found = router.get_route_from_host(p.data.request.uri, p.data.captures, &p.data.queries);
+        if (found) |f| {
+            const handler = f.route.get_handler(p.data.request.method);
 
             if (handler) |func| {
                 const context: Context = Context.init(
                     p.arena.allocator(),
                     p.data.request.uri,
-                    c.captures,
+                    f.captures,
+                    f.queries,
                 );
 
-                func(p.data.request, &p.data.response, context);
+                @call(.auto, func, .{ p.data.request, &p.data.response, context });
                 break :route;
             } else {
                 // If we match the route but not the method.
@@ -71,7 +72,7 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
 
                 // We also need to add to Allow header.
                 // This uses the connection's arena to allocate 64 bytes.
-                const allowed = c.route.get_allowed(p.arena.allocator()) catch {
+                const allowed = f.route.get_allowed(p.arena.allocator()) catch {
                     p.data.response.set(.{
                         .status = .@"Internal Server Error",
                         .mime = Mime.HTML,

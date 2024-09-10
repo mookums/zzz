@@ -8,6 +8,7 @@ pub const Router = @import("router.zig").Router;
 pub const RouteHandlerFn = @import("route.zig").RouteHandlerFn;
 pub const Context = @import("context.zig").Context;
 pub const Headers = @import("headers.zig").Headers;
+pub const Protocol = @import("protocol.zig");
 
 pub const Server = @import("server.zig").Server;
 
