@@ -657,14 +657,15 @@ pub fn Server(
 
                     const thread_count = blk: {
                         switch (count) {
-                            .auto => break :blk @max(try std.Thread.getCpuCount() / 2 - 1, 1),
+                            .auto => break :blk @max((std.Thread.getCpuCount() catch break :blk 2) / 2 - 1, 2),
                             .count => |inner| break :blk inner,
                         }
                     };
 
-                    log.info("spawning {d} thread[s] + 1 root thread", .{thread_count});
+                    log.info("spawning {d} thread[s]", .{thread_count});
 
-                    for (0..thread_count) |i| {
+                    // spawn (count-1) new threads.
+                    for (0..thread_count - 1) |i| {
                         try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
                             fn handler_fn(
                                 p_config: ProtocolConfig,
