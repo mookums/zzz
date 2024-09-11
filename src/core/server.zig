@@ -670,6 +670,7 @@ pub fn Server(
                             fn handler_fn(
                                 p_config: ProtocolConfig,
                                 z_config: zzzConfig,
+                                p_backend: Async,
                                 backend_type: AsyncType,
                                 thread_tls_ctx: TLSContextType,
                                 s_socket: Socket,
@@ -678,13 +679,21 @@ pub fn Server(
                                 var thread_backend = blk: {
                                     switch (backend_type) {
                                         .io_uring => {
+                                            const parent_uring: *std.os.linux.IoUring = @ptrCast(@alignCast(p_backend.runner));
+                                            assert(parent_uring.fd >= 0);
+
                                             // Initalize IO Uring
-                                            const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                                            const thread_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER | std.os.linux.IORING_SETUP_ATTACH_WQ;
+
+                                            var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
+                                                .flags = thread_flags,
+                                                .wq_fd = @as(u32, @intCast(parent_uring.fd)),
+                                            });
 
                                             const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
-                                            uring.* = std.os.linux.IoUring.init(
+                                            uring.* = std.os.linux.IoUring.init_params(
                                                 z_config.size_connections_max,
-                                                base_flags,
+                                                &params,
                                             ) catch unreachable;
 
                                             var io_uring = AsyncIoUring.init(uring) catch unreachable;
@@ -709,7 +718,7 @@ pub fn Server(
                                     log.err("thread #{d} failed due to unrecoverable error: {any}", .{ thread_id, e });
                                 };
                             }
-                        }.handler_fn, .{ protocol_config, self.config, self.backend_type, self.tls_ctx, server_socket, i }));
+                        }.handler_fn, .{ protocol_config, self.config, backend, self.backend_type, self.tls_ctx, server_socket, i }));
                     }
 
                     run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch |e| {
