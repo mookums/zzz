@@ -1,4 +1,4 @@
 zig-out/
 .zig-cache/
-perf*
+perf*.data*
 heaptrack*
