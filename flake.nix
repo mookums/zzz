@@ -33,7 +33,7 @@
                 gdb
                 valgrind
                 # Benchmarking
-                linuxPackages_latest.perf
+                linuxPackages.perf
                 wrk
             ];
         };
