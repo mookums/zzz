@@ -510,6 +510,9 @@ pub fn Server(
                                         if (inner.count >= inner.slice.len) {
                                             // All done sending.
                                             log.debug("{d} - queueing a new recv", .{p.index});
+                                            _ = p.arena.reset(.{
+                                                .retain_with_limit = z_config.size_connection_arena_retain,
+                                            });
                                             p.recv_buffer.clearRetainingCapacity();
                                             p.job = .{ .recv = .{ .count = 0 } };
                                             try backend.queue_recv(p, p.socket, p.buffer);
@@ -560,6 +563,9 @@ pub fn Server(
 
                                     if (inner.count >= inner.slice.len) {
                                         log.debug("{d} - queueing a new recv", .{p.index});
+                                        _ = p.arena.reset(.{
+                                            .retain_with_limit = z_config.size_connection_arena_retain,
+                                        });
                                         p.recv_buffer.clearRetainingCapacity();
                                         p.job = .{ .recv = .{ .count = 0 } };
                                         try backend.queue_recv(p, p.socket, p.buffer);
