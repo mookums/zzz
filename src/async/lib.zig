@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");
 const Socket = @import("../core/socket.zig").Socket;
 const Completion = @import("completion.zig").Completion;
@@ -27,7 +28,8 @@ pub const AsyncError = error{
 
 pub const Async = struct {
     runner: *anyopaque,
-    completions: [256]Completion,
+    attached: bool = false,
+    completions: []Completion = undefined,
 
     _queue_accept: *const fn (
         self: *Async,
@@ -58,11 +60,20 @@ pub const Async = struct {
     _reap: *const fn (self: *Async) AsyncError![]Completion,
     _submit: *const fn (self: *Async) AsyncError!void,
 
+    /// This provides the completions that the backend will utilize when
+    /// submitting and reaping. This MUST be called before any other
+    /// methods on this Async instance.
+    pub fn attach(self: *Async, completions: []Completion) void {
+        self.completions = completions;
+        self.attached = true;
+    }
+
     pub fn queue_accept(
         self: *Async,
         context: *anyopaque,
         socket: Socket,
     ) AsyncError!void {
+        assert(self.attached);
         try @call(.auto, self._queue_accept, .{ self, context, socket });
     }
 
@@ -72,6 +83,7 @@ pub const Async = struct {
         socket: Socket,
         buffer: []u8,
     ) AsyncError!void {
+        assert(self.attached);
         try @call(.auto, self._queue_recv, .{ self, context, socket, buffer });
     }
 
@@ -81,6 +93,7 @@ pub const Async = struct {
         socket: Socket,
         buffer: []const u8,
     ) AsyncError!void {
+        assert(self.attached);
         try @call(.auto, self._queue_send, .{ self, context, socket, buffer });
     }
 
@@ -89,14 +102,17 @@ pub const Async = struct {
         context: *anyopaque,
         socket: Socket,
     ) AsyncError!void {
+        assert(self.attached);
         try @call(.auto, self._queue_close, .{ self, context, socket });
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
+        assert(self.attached);
         return try @call(.auto, self._reap, .{self});
     }
 
     pub fn submit(self: *Async) AsyncError!void {
+        assert(self.attached);
         try @call(.auto, self._submit, .{self});
     }
 };

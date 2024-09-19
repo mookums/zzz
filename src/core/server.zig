@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
+const Completion = @import("../async/completion.zig").Completion;
 const Async = @import("../async/lib.zig").Async;
 const AutoAsyncType = @import("../async/lib.zig").AutoAsyncType;
 const AsyncType = @import("../async/lib.zig").AsyncType;
@@ -70,6 +71,11 @@ pub const zzzConfig = struct {
     ///
     /// Default: 1024
     size_connections_max: u16 = 1024,
+    /// Maximum number of completions we can reap
+    /// with a single call of reap().
+    ///
+    /// Default: 256
+    size_completions_reap_max: u16 = 256,
     /// Amount of allocated memory retained
     /// after an arena is cleared.
     ///
@@ -224,7 +230,7 @@ pub fn Server(
         }
 
         /// Cleans up the TLS instance.
-        inline fn clean_tls(tls_ptr: *?TLS) void {
+        fn clean_tls(tls_ptr: *?TLS) void {
             defer tls_ptr.* = null;
 
             assert(tls_ptr.* != null);
@@ -309,7 +315,6 @@ pub fn Server(
                 .data = undefined,
             };
 
-            var accepted = false;
             _ = try backend.queue_accept(&first_provision, server_socket);
             try backend.submit();
 
@@ -323,7 +328,7 @@ pub fn Server(
 
                     switch (p.job) {
                         .accept => {
-                            accepted = true;
+                            _ = try backend.queue_accept(&first_provision, server_socket);
                             const socket: Socket = completion.result;
 
                             if (socket < 0) {
@@ -333,6 +338,8 @@ pub fn Server(
 
                             // Borrow a provision from the pool otherwise close the socket.
                             const borrowed = provision_pool.borrow(@intCast(completion.result)) catch {
+                                log.warn("out of provision pool entries", .{});
+                                std.posix.close(socket);
                                 continue :reap_loop;
                             };
 
@@ -597,11 +604,6 @@ pub fn Server(
                     }
                 }
 
-                if (!provision_pool.full and accepted) {
-                    try backend.queue_accept(&first_provision, server_socket);
-                    accepted = false;
-                }
-
                 try backend.submit();
             }
 
@@ -625,7 +627,8 @@ pub fn Server(
                 switch (self.backend_type) {
                     .io_uring => {
                         // Initalize IO Uring
-                        const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                        var base_flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
+                        base_flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
 
                         const uring = try self.allocator.create(std.os.linux.IoUring);
                         uring.* = try std.os.linux.IoUring.init(
@@ -640,7 +643,18 @@ pub fn Server(
                 }
             };
 
+            {
+                const completions = try self.allocator.alloc(
+                    Completion,
+                    self.config.size_completions_reap_max,
+                );
+
+                backend.attach(completions);
+            }
+
             defer {
+                self.allocator.free(backend.completions);
+
                 switch (self.backend_type) {
                     .io_uring => {
                         const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(backend.runner));
@@ -672,59 +686,84 @@ pub fn Server(
 
                     // spawn (count-1) new threads.
                     for (0..thread_count - 1) |i| {
-                        try threads.append(try std.Thread.spawn(.{ .allocator = allocator }, struct {
-                            fn handler_fn(
-                                p_config: ProtocolConfig,
-                                z_config: zzzConfig,
-                                p_backend: Async,
-                                backend_type: AsyncType,
-                                thread_tls_ctx: TLSContextType,
-                                s_socket: Socket,
-                                thread_id: usize,
-                            ) void {
-                                var thread_backend = blk: {
-                                    switch (backend_type) {
-                                        .io_uring => {
-                                            const parent_uring: *std.os.linux.IoUring = @ptrCast(@alignCast(p_backend.runner));
-                                            assert(parent_uring.fd >= 0);
+                        try threads.append(try std.Thread.spawn(
+                            .{ .allocator = allocator },
+                            struct {
+                                fn handler_fn(
+                                    p_config: ProtocolConfig,
+                                    z_config: zzzConfig,
+                                    p_backend: Async,
+                                    backend_type: AsyncType,
+                                    thread_tls_ctx: TLSContextType,
+                                    s_socket: Socket,
+                                    thread_id: usize,
+                                ) void {
+                                    var thread_backend = blk: {
+                                        switch (backend_type) {
+                                            .io_uring => {
+                                                const parent_uring: *std.os.linux.IoUring = @ptrCast(@alignCast(p_backend.runner));
+                                                assert(parent_uring.fd >= 0);
 
-                                            // Initalize IO Uring
-                                            const thread_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER | std.os.linux.IORING_SETUP_ATTACH_WQ;
+                                                // Initalize IO Uring
+                                                var thread_flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
+                                                thread_flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                                                thread_flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
 
-                                            var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
-                                                .flags = thread_flags,
-                                                .wq_fd = @as(u32, @intCast(parent_uring.fd)),
-                                            });
+                                                var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
+                                                    .flags = thread_flags,
+                                                    .wq_fd = @as(u32, @intCast(parent_uring.fd)),
+                                                });
 
-                                            const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
-                                            uring.* = std.os.linux.IoUring.init_params(
-                                                std.math.ceilPowerOfTwoAssert(u16, z_config.size_connections_max),
-                                                &params,
-                                            ) catch unreachable;
+                                                const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
+                                                uring.* = std.os.linux.IoUring.init_params(
+                                                    std.math.ceilPowerOfTwoAssert(u16, z_config.size_connections_max),
+                                                    &params,
+                                                ) catch unreachable;
 
-                                            var io_uring = AsyncIoUring.init(uring) catch unreachable;
-                                            break :blk io_uring.to_async();
-                                        },
-                                        .custom => |inner| break :blk inner,
+                                                var io_uring = AsyncIoUring.init(uring) catch unreachable;
+                                                break :blk io_uring.to_async();
+                                            },
+                                            .custom => |inner| break :blk inner,
+                                        }
+                                    };
+
+                                    {
+                                        const completions = z_config.allocator.alloc(
+                                            Completion,
+                                            z_config.size_completions_reap_max,
+                                        ) catch unreachable;
+
+                                        thread_backend.attach(completions);
                                     }
-                                };
 
-                                defer {
-                                    switch (backend_type) {
-                                        .io_uring => {
-                                            const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(thread_backend.runner));
-                                            uring.deinit();
-                                            z_config.allocator.destroy(uring);
-                                        },
-                                        else => {},
+                                    defer {
+                                        z_config.allocator.free(thread_backend.completions);
+
+                                        switch (backend_type) {
+                                            .io_uring => {
+                                                const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(thread_backend.runner));
+                                                uring.deinit();
+                                                z_config.allocator.destroy(uring);
+                                            },
+                                            else => {},
+                                        }
                                     }
+
+                                    run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch |e| {
+                                        log.err("thread #{d} failed due to unrecoverable error: {any}", .{ thread_id, e });
+                                    };
                                 }
-
-                                run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch |e| {
-                                    log.err("thread #{d} failed due to unrecoverable error: {any}", .{ thread_id, e });
-                                };
-                            }
-                        }.handler_fn, .{ protocol_config, self.config, backend, self.backend_type, self.tls_ctx, server_socket, i }));
+                            }.handler_fn,
+                            .{
+                                protocol_config,
+                                self.config,
+                                backend,
+                                self.backend_type,
+                                self.tls_ctx,
+                                server_socket,
+                                i,
+                            },
+                        ));
                     }
 
                     run(self.config, protocol_config, &backend, self.tls_ctx, server_socket) catch |e| {

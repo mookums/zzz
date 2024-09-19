@@ -7,13 +7,9 @@ const log = std.log.scoped(.@"async/io_uring");
 
 pub const AsyncIoUring = struct {
     runner: *anyopaque,
-    completions: [256]Completion,
 
     pub fn init(uring: *std.os.linux.IoUring) !AsyncIoUring {
-        return AsyncIoUring{
-            .runner = uring,
-            .completions = [_]Completion{undefined} ** 256,
-        };
+        return AsyncIoUring{ .runner = uring };
     }
 
     pub fn queue_accept(
@@ -76,28 +72,60 @@ pub const AsyncIoUring = struct {
 
     pub fn reap(self: *Async) AsyncError![]Completion {
         const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(self.runner));
+        // NOTE: this can be dynamic and then we would just have to make a single call
+        // which would probably be better.
         var cqes: [256]std.os.linux.io_uring_cqe = [_]std.os.linux.io_uring_cqe{undefined} ** 256;
-        const count = uring.copy_cqes(cqes[0..], 1) catch |e| switch (e) {
-            // TODO: match error states.
-            else => unreachable,
-        };
+        var total_reaped: u64 = 0;
 
-        const min = @min(self.completions.len, count);
-
-        for (0..min) |i| {
-            self.completions[i] = Completion{
-                .result = cqes[i].res,
-                .context = @ptrFromInt(@as(usize, @intCast(cqes[i].user_data))),
+        const min_length = @min(cqes.len, self.completions.len);
+        {
+            // only the first one blocks waiting for an initial set of completions.
+            const count = uring.copy_cqes(cqes[0..min_length], 1) catch |e| switch (e) {
+                // TODO: match error states.
+                else => unreachable,
             };
+
+            total_reaped += count;
+
+            // Copy over the first one.
+            for (0..total_reaped) |i| {
+                self.completions[i] = Completion{
+                    .result = cqes[i].res,
+                    .context = @ptrFromInt(@as(usize, @intCast(cqes[i].user_data))),
+                };
+            }
         }
 
-        return self.completions[0..min];
+        while (total_reaped < self.completions.len) {
+            const start = total_reaped;
+            const remaining = self.completions.len - total_reaped;
+
+            const count = uring.copy_cqes(cqes[0..remaining], 0) catch |e| switch (e) {
+                // TODO: match error states.
+                else => unreachable,
+            };
+
+            if (count == 0) {
+                return self.completions[0..total_reaped];
+            }
+
+            total_reaped += count;
+
+            for (start..total_reaped) |i| {
+                const cqe_index = i - start;
+                self.completions[i] = Completion{
+                    .result = cqes[cqe_index].res,
+                    .context = @ptrFromInt(@as(usize, @intCast(cqes[cqe_index].user_data))),
+                };
+            }
+        }
+
+        return self.completions[0..total_reaped];
     }
 
     pub fn to_async(self: *AsyncIoUring) Async {
         return Async{
             .runner = self.runner,
-            .completions = self.completions,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,
             ._queue_send = queue_send,

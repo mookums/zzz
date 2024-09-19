@@ -15,12 +15,10 @@ const CustomJob = union(enum) {
 
 pub const CustomAsync = struct {
     inner: *std.ArrayList(CustomJob),
-    completions: [256]Completion,
 
     pub fn init(list: *std.ArrayList(CustomJob)) CustomAsync {
         return CustomAsync{
             .inner = list,
-            .completions = [_]Completion{undefined} ** 256,
         };
     }
 
@@ -129,7 +127,6 @@ pub const CustomAsync = struct {
     pub fn to_async(self: *CustomAsync) Async {
         return Async{
             .runner = self.inner,
-            .completions = self.completions,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,
             ._queue_send = queue_send,
