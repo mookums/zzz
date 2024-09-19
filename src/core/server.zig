@@ -59,7 +59,7 @@ pub const zzzConfig = struct {
     threading: ServerThreading = .single_threaded,
     /// Kernel Backlog Value.
     size_backlog: u31 = 512,
-    /// Number of Maximum Concurrnet Connections.
+    /// Number of Maximum Concurrent Connections.
     ///
     /// This is applied PER thread if using multi-threading.
     /// zzz will drop/close any connections greater
