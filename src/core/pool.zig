@@ -15,7 +15,6 @@ pub fn Pool(comptime T: type) type {
         // Buffer for the Pool.
         items: []T,
         dirty: std.DynamicBitSet,
-        full: bool = false,
 
         /// Initalizes our items buffer as undefined.
         pub fn init(
@@ -60,12 +59,24 @@ pub fn Pool(comptime T: type) type {
             return &self.items[index];
         }
 
+        pub fn empty(self: *const Self) bool {
+            return self.dirty.count() == 0;
+        }
+
+        pub fn full(self: *const Self) bool {
+            return self.dirty.count() == self.items.len;
+        }
+
         // The id is supposed to be a unique identification for
         // this element. It gets hashed and used to find an empty element.
         //
         // Returns a tuple of the index into the pool and a pointer to the item.
         // Returns null otherwise.
         pub fn borrow(self: *Self, id: u32) !Borrow(T) {
+            if (self.full()) {
+                return error.Full;
+            }
+
             const bytes = std.mem.toBytes(id)[0..];
             const hash = @mod(std.hash.Wyhash.hash(0, bytes), self.items.len);
 
@@ -85,8 +96,7 @@ pub fn Pool(comptime T: type) type {
                 }
             }
 
-            self.full = true;
-            return error.Full;
+            unreachable;
         }
 
         // Releases the item with the given index back to the Pool.
@@ -94,7 +104,6 @@ pub fn Pool(comptime T: type) type {
         pub fn release(self: *Self, index: usize) void {
             assert(self.dirty.isSet(index));
             self.dirty.unset(index);
-            self.full = false;
         }
     };
 }

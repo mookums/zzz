@@ -245,9 +245,11 @@ pub fn Server(
             defer provision_pool.release(provision.index);
 
             log.info("{d} - closing connection", .{provision.index});
+            std.posix.close(provision.socket);
+            provision.socket = -1;
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
-            std.posix.close(provision.socket);
+            provision.recv_buffer.clearRetainingCapacity();
         }
 
         fn run(
@@ -318,6 +320,8 @@ pub fn Server(
             _ = try backend.queue_accept(&first_provision, server_socket);
             try backend.submit();
 
+            var accept_queued = true;
+
             while (true) {
                 const completions = try backend.reap();
                 const completions_count = completions.len;
@@ -328,7 +332,7 @@ pub fn Server(
 
                     switch (p.job) {
                         .accept => {
-                            _ = try backend.queue_accept(&first_provision, server_socket);
+                            accept_queued = false;
                             const socket: Socket = completion.result;
 
                             if (socket < 0) {
@@ -602,6 +606,10 @@ pub fn Server(
 
                         else => @panic("not implemented yet!"),
                     }
+                }
+
+                if (!accept_queued and !provision_pool.full()) {
+                    _ = try backend.queue_accept(&first_provision, server_socket);
                 }
 
                 try backend.submit();
