@@ -629,7 +629,7 @@ pub fn Server(
 
                         const uring = try self.allocator.create(std.os.linux.IoUring);
                         uring.* = try std.os.linux.IoUring.init(
-                            self.config.size_connections_max,
+                            std.math.ceilPowerOfTwoAssert(u16, self.config.size_connections_max),
                             base_flags,
                         );
 
@@ -698,7 +698,7 @@ pub fn Server(
 
                                             const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
                                             uring.* = std.os.linux.IoUring.init_params(
-                                                z_config.size_connections_max,
+                                                std.math.ceilPowerOfTwoAssert(u16, z_config.size_connections_max),
                                                 &params,
                                             ) catch unreachable;
 
