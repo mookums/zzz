@@ -1,48 +1,53 @@
 const std = @import("std");
-const zzz = @import("zzz");
-const http = zzz.HTTP;
-const log = std.log.scoped(.@"examples/custom");
+const Completion = @import("completion.zig").Completion;
 
-const Async = zzz.Async;
-const AsyncError = zzz.AsyncError;
-const AsyncOptions = zzz.AsyncOptions;
-const Completion = zzz.Completion;
+const Async = @import("lib.zig").Async;
+const AsyncError = @import("lib.zig").AsyncError;
+const AsyncOptions = @import("lib.zig").AsyncOptions;
 
-const CustomJob = union(enum) {
-    Accept: struct { socket: std.posix.socket_t, context: *anyopaque },
-    Recv: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []u8 },
-    Send: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []const u8 },
-};
+const log = std.log.scoped(.@"zzz/async/busy_loop");
 
-pub const CustomAsync = struct {
-    inner: *std.ArrayList(CustomJob),
+pub const AsyncBusyLoop = struct {
+    pub const BusyLoopJob = union(enum) {
+        accept: struct { socket: std.posix.socket_t, context: *anyopaque },
+        recv: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []u8 },
+        send: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []const u8 },
+        close: struct { socket: std.posix.socket_t, context: *anyopaque },
+    };
 
-    pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !CustomAsync {
-        const list = try allocator.create(std.ArrayList(CustomJob));
-        list.* = try std.ArrayList(CustomJob).initCapacity(allocator, options.size_connections_max);
+    inner: *std.ArrayList(BusyLoopJob),
 
-        return CustomAsync{ .inner = list };
+    pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !AsyncBusyLoop {
+        _ = options;
+        const list = try allocator.create(std.ArrayList(BusyLoopJob));
+        list.* = std.ArrayList(BusyLoopJob).init(allocator);
+        return AsyncBusyLoop{ .inner = list };
     }
 
     pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
-        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
         list.deinit();
         allocator.destroy(list);
     }
 
     pub fn queue_accept(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
-        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
-        list.append(CustomJob{ .Accept = .{ .socket = socket, .context = ctx } }) catch unreachable;
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        list.append(BusyLoopJob{ .accept = .{ .socket = socket, .context = ctx } }) catch unreachable;
     }
 
     pub fn queue_recv(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []u8) AsyncError!void {
-        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
-        list.append(CustomJob{ .Recv = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        list.append(BusyLoopJob{ .recv = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
     }
 
     pub fn queue_send(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []const u8) AsyncError!void {
-        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
-        list.append(CustomJob{ .Send = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        list.append(BusyLoopJob{ .send = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+    }
+
+    pub fn queue_close(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        list.append(BusyLoopJob{ .close = .{ .socket = socket, .context = ctx } }) catch unreachable;
     }
 
     pub fn submit(self: *Async) AsyncError!void {
@@ -50,7 +55,7 @@ pub const CustomAsync = struct {
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
-        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
+        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
         var reaped: usize = 0;
 
         while (reaped < 1) {
@@ -59,7 +64,7 @@ pub const CustomAsync = struct {
             while (i < list.items.len and reaped < self.completions.len) : (i += 1) {
                 const item = list.items[i];
                 switch (item) {
-                    .Accept => |inner| {
+                    .accept => |inner| {
                         const com_ptr = &self.completions[reaped];
 
                         const res: i32 = blk: {
@@ -74,7 +79,6 @@ pub const CustomAsync = struct {
                             break :blk @intCast(ad);
                         };
 
-                        log.debug("Reap Accept", .{});
                         com_ptr.result = @intCast(res);
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
@@ -82,7 +86,7 @@ pub const CustomAsync = struct {
                         reaped += 1;
                     },
 
-                    .Recv => |inner| {
+                    .recv => |inner| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
                             const rd = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
@@ -96,7 +100,6 @@ pub const CustomAsync = struct {
                             break :blk @intCast(rd);
                         };
 
-                        log.debug("Reap Recv", .{});
                         com_ptr.result = @intCast(len);
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
@@ -104,7 +107,7 @@ pub const CustomAsync = struct {
                         reaped += 1;
                     },
 
-                    .Send => |inner| {
+                    .send => |inner| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
                             const sd = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
@@ -118,8 +121,17 @@ pub const CustomAsync = struct {
                             break :blk @intCast(sd);
                         };
 
-                        log.debug("Reap Send", .{});
                         com_ptr.result = @intCast(len);
+                        com_ptr.context = inner.context;
+                        _ = list.swapRemove(i);
+                        i -|= 1;
+                        reaped += 1;
+                    },
+
+                    .close => |inner| {
+                        const com_ptr = &self.completions[reaped];
+                        std.posix.close(inner.socket);
+                        com_ptr.result = 0;
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
                         i -|= 1;
@@ -132,7 +144,7 @@ pub const CustomAsync = struct {
         return self.completions[0..reaped];
     }
 
-    pub fn to_async(self: *CustomAsync) Async {
+    pub fn to_async(self: *AsyncBusyLoop) Async {
         return Async{
             .runner = self.inner,
             ._deinit = deinit,
@@ -145,39 +157,3 @@ pub const CustomAsync = struct {
         };
     }
 };
-
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    const host = "0.0.0.0";
-    const port = 9862;
-
-    var router = http.Router.init(allocator);
-    defer router.deinit();
-
-    try router.serve_route("/", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
-            const body =
-                \\ <!DOCTYPE html>
-                \\ <html>
-                \\ <body>
-                \\ <h1>Hello, World!</h1>
-                \\ </body>
-                \\ </html>
-            ;
-
-            response.set(.{
-                .status = .OK,
-                .mime = http.Mime.HTML,
-                .body = body[0..],
-            });
-        }
-    }.handler_fn));
-
-    var server = http.Server(.plain, .{ .custom = CustomAsync }).init(
-        .{ .allocator = allocator },
-    );
-    defer server.deinit();
-
-    try server.bind(host, port);
-    try server.listen(.{ .router = &router });
-}

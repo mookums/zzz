@@ -45,21 +45,24 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.{
-        .tls = .{
-            .cert = .{
-                .file = .{ .path = "src/examples/tls/certs/cert.pem" },
+    var server = http.Server(
+        .{
+            .tls = .{
+                .cert = .{
+                    .file = .{ .path = "src/examples/tls/certs/cert.pem" },
+                },
+                .key = .{
+                    .file = .{ .path = "src/examples/tls/certs/key.pem" },
+                },
+                .cert_name = "CERTIFICATE",
+                .key_name = "EC PRIVATE KEY",
             },
-            .key = .{
-                .file = .{ .path = "src/examples/tls/certs/key.pem" },
-            },
-            .cert_name = "CERTIFICATE",
-            .key_name = "EC PRIVATE KEY",
         },
-    }).init(.{
+        .auto,
+    ).init(.{
         .allocator = allocator,
         .threading = .single_threaded,
-    }, null);
+    });
     defer server.deinit();
 
     try server.bind(host, port);

@@ -6,6 +6,7 @@ const panic = std.debug.panic;
 const log = std.log.scoped(.@"zzz/server/http");
 
 const Async = @import("../async/lib.zig").Async;
+const AsyncType = @import("../async//lib.zig").AsyncType;
 
 const Job = @import("../core/lib.zig").Job;
 const Pool = @import("../core/lib.zig").Pool;
@@ -329,6 +330,6 @@ pub fn recv_fn(
     }
 }
 
-pub fn Server(comptime security: Security) type {
-    return zzzServer(security, ProtocolData, ProtocolConfig, accept_fn, recv_fn);
+pub fn Server(comptime security: Security, comptime async_type: AsyncType) type {
+    return zzzServer(security, async_type, ProtocolData, ProtocolConfig, accept_fn, recv_fn);
 }

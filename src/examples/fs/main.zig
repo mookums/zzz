@@ -33,7 +33,7 @@ pub fn main() !void {
 
     try router.serve_fs_dir("/static", "./src/examples/fs/static");
 
-    var server = http.Server(.plain).init(.{ .allocator = allocator }, null);
+    var server = http.Server(.plain, .auto).init(.{ .allocator = allocator });
     try server.bind(host, port);
     try server.listen(.{ .router = &router });
 }

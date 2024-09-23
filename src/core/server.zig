@@ -1,12 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
 const Completion = @import("../async/completion.zig").Completion;
 const Async = @import("../async/lib.zig").Async;
-const AutoAsyncType = @import("../async/lib.zig").AutoAsyncType;
+const auto_async_match = @import("../async/lib.zig").auto_async_match;
 const AsyncType = @import("../async/lib.zig").AsyncType;
 const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
+const AsyncBusyLoop = @import("../async/busy_loop.zig").AsyncBusyLoop;
 
 const Pseudoslice = @import("pseudoslice.zig").Pseudoslice;
 const Pool = @import("pool.zig").Pool;
@@ -121,6 +123,7 @@ fn RecvFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
 
 pub fn Server(
     comptime security: Security,
+    comptime pre_async_type: AsyncType,
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
     /// This is called after the Accept.
@@ -128,19 +131,25 @@ pub fn Server(
     /// This is called after the Recv.
     comptime recv_fn: RecvFn(ProtocolData, ProtocolConfig),
 ) type {
-    const TLSContextType = if (comptime security == .tls) TLSContext else void;
+    const TLSContextType = comptime if (security == .tls) TLSContext else void;
     const Provision = ZProvision(ProtocolData);
+    const async_type = comptime if (pre_async_type == .auto) auto_async_match() else pre_async_type;
+
+    comptime {
+        if (async_type == .custom) {
+            assert(std.meta.hasMethod(async_type.custom, "init"));
+            assert(std.meta.hasMethod(async_type.custom, "to_async"));
+        }
+    }
+
     return struct {
         const Self = @This();
         allocator: std.mem.Allocator,
         config: zzzConfig,
         socket: ?Socket = null,
         tls_ctx: TLSContextType,
-        backend_type: AsyncType,
 
-        pub fn init(config: zzzConfig, async_type: ?AsyncType) Self {
-            const backend_type = async_type orelse AutoAsyncType;
-
+        pub fn init(config: zzzConfig) Self {
             const tls_ctx = switch (comptime security) {
                 .tls => |inner| TLSContext.init(.{
                     .allocator = config.allocator,
@@ -158,7 +167,6 @@ pub fn Server(
                 .config = config,
                 .socket = null,
                 .tls_ctx = tls_ctx,
-                .backend_type = backend_type,
             };
         }
 
@@ -358,7 +366,10 @@ pub fn Server(
 
                                     // Set this socket as non-blocking.
                                     const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
-                                    var new_flags = @as(std.os.linux.O, @bitCast(@as(u32, @intCast(current_flags))));
+                                    var new_flags = @as(
+                                        std.posix.O,
+                                        @bitCast(@as(u32, @intCast(current_flags))),
+                                    );
                                     new_flags.NONBLOCK = true;
                                     const arg: u32 = @bitCast(new_flags);
                                     _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
@@ -625,6 +636,7 @@ pub fn Server(
             log.info("server listening...", .{});
             log.info("threading mode: {s}", .{@tagName(self.config.threading)});
             log.info("security mode: {s}", .{@tagName(security)});
+            log.info("async backend: {s}", .{@tagName(async_type)});
 
             switch (comptime Socket) {
                 std.posix.socket_t => try std.posix.listen(server_socket, self.config.size_backlog),
@@ -632,22 +644,38 @@ pub fn Server(
             }
 
             var backend = blk: {
-                switch (self.backend_type) {
-                    .io_uring => {
-                        // Initalize IO Uring
-                        var base_flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
-                        base_flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+                const options = .{
+                    .root_async = null,
+                    .in_thread = false,
+                    .size_connections_max = self.config.size_connections_max,
+                };
 
-                        const uring = try self.allocator.create(std.os.linux.IoUring);
-                        uring.* = try std.os.linux.IoUring.init(
-                            std.math.ceilPowerOfTwoAssert(u16, self.config.size_connections_max),
-                            base_flags,
+                switch (comptime async_type) {
+                    .io_uring => {
+                        var uring = try AsyncIoUring.init(
+                            self.allocator,
+                            options,
                         );
 
-                        var io_uring = try AsyncIoUring.init(uring);
-                        break :blk io_uring.to_async();
+                        break :blk uring.to_async();
                     },
-                    .custom => |inner| break :blk inner,
+                    .busy_loop => {
+                        var busy = try AsyncBusyLoop.init(
+                            self.allocator,
+                            options,
+                        );
+
+                        break :blk busy.to_async();
+                    },
+                    .custom => |inner| {
+                        var custom = try inner.init(
+                            self.allocator,
+                            options,
+                        );
+
+                        break :blk custom.to_async();
+                    },
+                    else => unreachable,
                 }
             };
 
@@ -662,15 +690,7 @@ pub fn Server(
 
             defer {
                 self.allocator.free(backend.completions);
-
-                switch (self.backend_type) {
-                    .io_uring => {
-                        const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(backend.runner));
-                        uring.deinit();
-                        self.allocator.destroy(uring);
-                    },
-                    else => {},
-                }
+                backend.deinit(self.allocator);
             }
 
             switch (self.config.threading) {
@@ -701,37 +721,43 @@ pub fn Server(
                                     p_config: ProtocolConfig,
                                     z_config: zzzConfig,
                                     p_backend: Async,
-                                    backend_type: AsyncType,
                                     thread_tls_ctx: TLSContextType,
                                     s_socket: Socket,
                                     thread_id: usize,
                                 ) void {
                                     var thread_backend = blk: {
-                                        switch (backend_type) {
+                                        const options = .{
+                                            .root_async = p_backend,
+                                            .in_thread = true,
+                                            .size_connections_max = z_config.size_connections_max,
+                                        };
+
+                                        switch (comptime async_type) {
                                             .io_uring => {
-                                                const parent_uring: *std.os.linux.IoUring = @ptrCast(@alignCast(p_backend.runner));
-                                                assert(parent_uring.fd >= 0);
-
-                                                // Initalize IO Uring
-                                                var thread_flags: u32 = std.os.linux.IORING_SETUP_COOP_TASKRUN;
-                                                thread_flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
-                                                thread_flags |= std.os.linux.IORING_SETUP_ATTACH_WQ;
-
-                                                var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
-                                                    .flags = thread_flags,
-                                                    .wq_fd = @as(u32, @intCast(parent_uring.fd)),
-                                                });
-
-                                                const uring = z_config.allocator.create(std.os.linux.IoUring) catch unreachable;
-                                                uring.* = std.os.linux.IoUring.init_params(
-                                                    std.math.ceilPowerOfTwoAssert(u16, z_config.size_connections_max),
-                                                    &params,
+                                                var uring = AsyncIoUring.init(
+                                                    z_config.allocator,
+                                                    options,
                                                 ) catch unreachable;
 
-                                                var io_uring = AsyncIoUring.init(uring) catch unreachable;
-                                                break :blk io_uring.to_async();
+                                                break :blk uring.to_async();
                                             },
-                                            .custom => |inner| break :blk inner,
+                                            .busy_loop => {
+                                                var busy = AsyncBusyLoop.init(
+                                                    z_config.allocator,
+                                                    options,
+                                                ) catch unreachable;
+
+                                                break :blk busy.to_async();
+                                            },
+                                            .custom => |AsyncCustom| {
+                                                var custom = AsyncCustom.init(
+                                                    z_config.allocator,
+                                                    options,
+                                                ) catch unreachable;
+
+                                                break :blk custom.to_async();
+                                            },
+                                            else => unreachable,
                                         }
                                     };
 
@@ -746,15 +772,7 @@ pub fn Server(
 
                                     defer {
                                         z_config.allocator.free(thread_backend.completions);
-
-                                        switch (backend_type) {
-                                            .io_uring => {
-                                                const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(thread_backend.runner));
-                                                uring.deinit();
-                                                z_config.allocator.destroy(uring);
-                                            },
-                                            else => {},
-                                        }
+                                        thread_backend.deinit(z_config.allocator);
                                     }
 
                                     run(z_config, p_config, &thread_backend, thread_tls_ctx, s_socket) catch |e| {
@@ -766,7 +784,6 @@ pub fn Server(
                                 protocol_config,
                                 self.config,
                                 backend,
-                                self.backend_type,
                                 self.tls_ctx,
                                 server_socket,
                                 i,
