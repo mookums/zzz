@@ -33,13 +33,13 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{
+    var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
         .size_backlog = 32,
         .size_connections_max = 16,
         .size_connection_arena_retain = 64,
         .size_socket_buffer = 512,
-    }, null);
+    });
 
     try server.bind(host, port);
     try server.listen(.{

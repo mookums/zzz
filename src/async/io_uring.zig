@@ -1,15 +1,58 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const Completion = @import("completion.zig").Completion;
+
 const Async = @import("lib.zig").Async;
 const AsyncError = @import("lib.zig").AsyncError;
+const AsyncOptions = @import("lib.zig").AsyncOptions;
 
-const log = std.log.scoped(.@"async/io_uring");
+const log = std.log.scoped(.@"zzz/async/io_uring");
 
 pub const AsyncIoUring = struct {
+    const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
     runner: *anyopaque,
 
-    pub fn init(uring: *std.os.linux.IoUring) !AsyncIoUring {
+    pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !AsyncIoUring {
+        const uring = blk: {
+            if (options.in_thread) {
+                assert(options.root_async != null);
+                const parent_uring: *std.os.linux.IoUring = @ptrCast(@alignCast(options.root_async.?.runner));
+                assert(parent_uring.fd >= 0);
+
+                // Initialize using the WQ from the parent ring.
+                const flags: u32 = base_flags | std.os.linux.IORING_SETUP_ATTACH_WQ;
+
+                var params = std.mem.zeroInit(std.os.linux.io_uring_params, .{
+                    .flags = flags,
+                    .wq_fd = @as(u32, @intCast(parent_uring.fd)),
+                });
+
+                const uring = try allocator.create(std.os.linux.IoUring);
+                uring.* = try std.os.linux.IoUring.init_params(
+                    std.math.ceilPowerOfTwoAssert(u16, options.size_connections_max),
+                    &params,
+                );
+
+                break :blk uring;
+            } else {
+                // Initalize IO Uring
+                const uring = try allocator.create(std.os.linux.IoUring);
+                uring.* = try std.os.linux.IoUring.init(
+                    std.math.ceilPowerOfTwoAssert(u16, options.size_connections_max),
+                    base_flags,
+                );
+
+                break :blk uring;
+            }
+        };
+
         return AsyncIoUring{ .runner = uring };
+    }
+
+    pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
+        const uring: *std.os.linux.IoUring = @ptrCast(@alignCast(self.runner));
+        uring.deinit();
+        allocator.destroy(uring);
     }
 
     pub fn queue_accept(
@@ -126,6 +169,7 @@ pub const AsyncIoUring = struct {
     pub fn to_async(self: *AsyncIoUring) Async {
         return Async{
             .runner = self.runner,
+            ._deinit = deinit,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,
             ._queue_send = queue_send,
