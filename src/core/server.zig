@@ -4,10 +4,13 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
 const Completion = @import("../async/completion.zig").Completion;
+const CompletionResult = @import("../async/completion.zig").CompletionResult;
 const Async = @import("../async/lib.zig").Async;
+const AsyncOptions = @import("../async/lib.zig").AsyncOptions;
 const auto_async_match = @import("../async/lib.zig").auto_async_match;
 const AsyncType = @import("../async/lib.zig").AsyncType;
 const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
+const AsyncEpoll = @import("../async/epoll.zig").AsyncEpoll;
 const AsyncBusyLoop = @import("../async/busy_loop.zig").AsyncBusyLoop;
 
 const Pseudoslice = @import("pseudoslice.zig").Pseudoslice;
@@ -100,6 +103,13 @@ pub const zzzConfig = struct {
     ///
     /// Default: 2MB.
     size_recv_buffer_max: u32 = 1024 * 1024 * 2,
+    /// Length of the timeout that each operation has
+    /// before it is forcibly closed.
+    ///
+    /// Set to null to disable timeouts.
+    ///
+    /// Default: 5000ms (5 seconds).
+    ms_operation_max: ?u32 = 5000,
 };
 
 fn AcceptFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
@@ -174,8 +184,7 @@ pub fn Server(
             if (self.socket) |socket| {
                 switch (comptime Socket) {
                     std.posix.socket_t => std.posix.close(socket),
-                    std.os.windows.ws2_32.SOCKET => std.os.windows.closesocket(socket),
-                    else => {},
+                    else => unreachable,
                 }
             }
 
@@ -197,7 +206,12 @@ pub fn Server(
             assert(port > 0);
             defer assert(self.socket != null);
 
-            const addr = try std.net.Address.resolveIp(host, port);
+            const addr = blk: {
+                switch (comptime builtin.os.tag) {
+                    .windows => break :blk try std.net.Address.parseIp(host, port),
+                    else => break :blk try std.net.Address.resolveIp(host, port),
+                }
+            };
 
             const socket: std.posix.socket_t = blk: {
                 const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
@@ -254,7 +268,15 @@ pub fn Server(
 
             log.info("{d} - closing connection", .{provision.index});
             std.posix.close(provision.socket);
-            provision.socket = -1;
+            switch (comptime builtin.target.os.tag) {
+                .windows => {
+                    provision.socket = std.os.windows.ws2_32.INVALID_SOCKET;
+                },
+                else => {
+                    provision.socket = -1;
+                },
+            }
+            provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
@@ -317,7 +339,7 @@ pub fn Server(
             // Create and send the first Job.
             var first_provision = Provision{
                 .job = .accept,
-                .index = undefined,
+                .index = std.math.maxInt(usize),
                 .socket = undefined,
                 .buffer = undefined,
                 .recv_buffer = undefined,
@@ -325,7 +347,10 @@ pub fn Server(
                 .data = undefined,
             };
 
-            _ = try backend.queue_accept(&first_provision, server_socket);
+            _ = try backend.queue_accept(
+                &first_provision,
+                server_socket,
+            );
             try backend.submit();
 
             var accept_queued = true;
@@ -334,47 +359,114 @@ pub fn Server(
                 const completions = try backend.reap();
                 const completions_count = completions.len;
                 assert(completions_count > 0);
+                log.debug("Completion Count: {d}", .{completions_count});
 
                 reap_loop: for (completions[0..completions_count]) |completion| {
                     const p: *Provision = @ptrCast(@alignCast(completion.context));
 
+                    // If the timeout has completed before the operation.
+                    // This is the actual SQE.
+                    if (completion.result == .canceled) {
+                        //log.debug("{d} - Canceled: {s}", .{ p.index, @tagName(p.job) });
+                        continue :reap_loop;
+                    }
+
+                    // Timeout finished before operation.
+                    // This is a timeout SQE.
+                    if (completion.result == .timeout) {
+                        log.debug("{d} - Timed Out: {s}", .{ p.index, @tagName(p.job) });
+                        if (p.job == .accept) {
+                            accept_queued = false;
+                        } else {
+                            if (comptime security == .tls) {
+                                const tls_ptr: *?TLS = &tls_pool[p.index];
+                                clean_tls(tls_ptr);
+                            }
+
+                            clean_connection(p, &provision_pool, z_config);
+                        }
+                        continue :reap_loop;
+                    }
+
                     switch (p.job) {
+                        .empty => continue :reap_loop,
+
                         .accept => {
                             accept_queued = false;
-                            const socket: Socket = completion.result;
+                            const socket: Socket = completion.result.socket;
 
-                            if (socket < 0) {
-                                log.err("socket accept failed", .{});
-                                continue :reap_loop;
+                            switch (comptime builtin.target.os.tag) {
+                                .windows => {
+                                    if (socket == std.os.windows.ws2_32.INVALID_SOCKET) {
+                                        log.err("socket accept failed", .{});
+                                        continue :reap_loop;
+                                    }
+                                },
+                                else => {
+                                    if (socket < 0) {
+                                        log.err("socket accept failed", .{});
+                                        continue :reap_loop;
+                                    }
+                                },
                             }
 
                             // Borrow a provision from the pool otherwise close the socket.
-                            const borrowed = provision_pool.borrow(@intCast(completion.result)) catch {
+                            const borrowed = provision_pool.borrow() catch {
                                 log.warn("out of provision pool entries", .{});
                                 std.posix.close(socket);
                                 continue :reap_loop;
                             };
 
+                            log.info("{d} - accepting connection", .{borrowed.index});
+                            log.debug(
+                                "empty provision slots: {d}",
+                                .{provision_pool.items.len - provision_pool.dirty.count()},
+                            );
+                            assert(borrowed.item.job == .empty);
+
                             switch (comptime Socket) {
                                 std.posix.socket_t => {
-                                    try std.posix.setsockopt(
-                                        socket,
-                                        std.posix.IPPROTO.TCP,
-                                        std.posix.TCP.NODELAY,
-                                        &std.mem.toBytes(@as(c_int, 1)),
-                                    );
+                                    // Disable Nagle's
+                                    if (comptime builtin.os.tag.isDarwin()) {
+                                        // system.TCP is weird on MacOS.
+                                        try std.posix.setsockopt(
+                                            socket,
+                                            std.posix.IPPROTO.TCP,
+                                            1,
+                                            &std.mem.toBytes(@as(c_int, 1)),
+                                        );
+                                    } else {
+                                        try std.posix.setsockopt(
+                                            socket,
+                                            std.posix.IPPROTO.TCP,
+                                            std.posix.TCP.NODELAY,
+                                            &std.mem.toBytes(@as(c_int, 1)),
+                                        );
+                                    }
 
-                                    // Set this socket as non-blocking.
-                                    const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
-                                    var new_flags = @as(
-                                        std.posix.O,
-                                        @bitCast(@as(u32, @intCast(current_flags))),
-                                    );
-                                    new_flags.NONBLOCK = true;
-                                    const arg: u32 = @bitCast(new_flags);
-                                    _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
+                                    // Set non-blocking.
+                                    switch (comptime builtin.target.os.tag) {
+                                        .windows => {
+                                            var mode: u32 = 1;
+                                            _ = std.os.windows.ws2_32.ioctlsocket(
+                                                socket,
+                                                std.os.windows.ws2_32.FIONBIO,
+                                                &mode,
+                                            );
+                                        },
+                                        else => {
+                                            const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
+                                            var new_flags = @as(
+                                                std.posix.O,
+                                                @bitCast(@as(u32, @intCast(current_flags))),
+                                            );
+                                            new_flags.NONBLOCK = true;
+                                            const arg: u32 = @bitCast(new_flags);
+                                            _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
+                                        },
+                                    }
                                 },
-                                else => {},
+                                else => unreachable,
                             }
 
                             const provision = borrowed.item;
@@ -382,7 +474,8 @@ pub fn Server(
                             // Store the index of this item.
                             provision.index = @intCast(borrowed.index);
                             provision.socket = socket;
-                            provision.job = .{ .recv = .{ .count = 0 } };
+
+                            var buffer: []u8 = provision.buffer;
 
                             switch (comptime security) {
                                 .tls => |_| {
@@ -390,19 +483,24 @@ pub fn Server(
                                     assert(tls_ptr.* == null);
 
                                     tls_ptr.* = tls_ctx.create(socket) catch |e| {
-                                        log.debug("{d} - tls creation failed={any}", .{ provision.index, e });
+                                        log.err("{d} - tls creation failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
 
-                                    tls_ptr.*.?.accept() catch |e| {
+                                    const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                                         clean_tls(tls_ptr);
-                                        log.debug("{d} - tls handshake failed={any}", .{ provision.index, e });
+                                        log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
+
+                                    provision.job = .{ .handshake = .{ .state = .recv, .count = 0 } };
+                                    buffer = recv_buf;
                                 },
-                                .plain => {},
+                                .plain => {
+                                    provision.job = .{ .recv = .{ .count = 0 } };
+                                },
                             }
 
                             // Call the Accept Hook.
@@ -410,14 +508,119 @@ pub fn Server(
                                 @call(.auto, func, .{ provision, p_config, z_config, backend });
                             }
 
-                            _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
+                            _ = try backend.queue_recv(
+                                provision,
+                                provision.socket,
+                                buffer,
+                            );
+                        },
+
+                        .handshake => |*inner| {
+                            assert(comptime security == .tls);
+                            if (comptime security == .tls) {
+                                const tls_ptr: *?TLS = &tls_pool[p.index];
+                                assert(tls_ptr.* != null);
+                                log.debug("processing handshake", .{});
+                                inner.count += 1;
+
+                                if (completion.result.value < 0 or inner.count >= 50) {
+                                    clean_tls(tls_ptr);
+                                    clean_connection(p, &provision_pool, z_config);
+                                    continue :reap_loop;
+                                }
+
+                                const length: usize = @intCast(completion.result.value);
+
+                                switch (inner.state) {
+                                    .recv => {
+                                        // on recv, we want to read from socket and feed into tls engien
+                                        const hstate = tls_ptr.*.?.continue_handshake(
+                                            .{ .recv = @intCast(length) },
+                                        ) catch |e| {
+                                            clean_tls(tls_ptr);
+                                            log.err("{d} - tls handshake on recv failed={any}", .{ p.index, e });
+                                            clean_connection(p, &provision_pool, z_config);
+                                            continue :reap_loop;
+                                        };
+
+                                        switch (hstate) {
+                                            .recv => |buf| {
+                                                log.debug("requeing recv in handshake", .{});
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
+                                            },
+                                            .send => |buf| {
+                                                log.debug("queueing send in handshake", .{});
+                                                inner.state = .send;
+                                                _ = try backend.queue_send(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
+                                            },
+                                            .complete => {
+                                                log.debug("handshake complete", .{});
+                                                p.job = .{ .recv = .{ .count = 0 } };
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    p.buffer,
+                                                );
+                                            },
+                                        }
+                                    },
+                                    .send => {
+                                        // on recv, we want to read from socket and feed into tls engien
+                                        const hstate = tls_ptr.*.?.continue_handshake(
+                                            .{ .send = @intCast(length) },
+                                        ) catch |e| {
+                                            clean_tls(tls_ptr);
+                                            log.err("{d} - tls handshake on send failed={any}", .{ p.index, e });
+                                            clean_connection(p, &provision_pool, z_config);
+                                            continue :reap_loop;
+                                        };
+
+                                        switch (hstate) {
+                                            .recv => |buf| {
+                                                inner.state = .recv;
+                                                log.debug("queuing recv in handshake", .{});
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
+                                            },
+                                            .send => |buf| {
+                                                log.debug("requeing send in handshake", .{});
+                                                _ = try backend.queue_send(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
+                                            },
+                                            .complete => {
+                                                log.debug("handshake complete", .{});
+                                                p.job = .{ .recv = .{ .count = 0 } };
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    p.buffer,
+                                                );
+                                            },
+                                        }
+                                    },
+                                }
+                            } else unreachable;
                         },
 
                         .recv => |*inner| {
                             log.debug("{d} - recv triggered", .{p.index});
 
                             // If the socket is closed.
-                            if (completion.result <= 0) {
+                            if (completion.result.value <= 0) {
                                 if (comptime security == .tls) {
                                     const tls_ptr: *?TLS = &tls_pool[p.index];
                                     clean_tls(tls_ptr);
@@ -427,7 +630,7 @@ pub fn Server(
                                 continue :reap_loop;
                             }
 
-                            const read_count: u32 = @intCast(completion.result);
+                            const read_count: u32 = @intCast(completion.result.value);
                             inner.count += read_count;
                             const pre_recv_buffer = p.buffer[0..read_count];
 
@@ -438,7 +641,7 @@ pub fn Server(
                                         assert(tls_ptr.* != null);
 
                                         break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
-                                            log.debug("{d} - decrypt failed: {any}", .{ p.index, e });
+                                            log.err("{d} - decrypt failed: {any}", .{ p.index, e });
                                             clean_tls(tls_ptr);
                                             clean_connection(p, &provision_pool, z_config);
                                             continue :reap_loop;
@@ -461,7 +664,11 @@ pub fn Server(
                                     return;
                                 },
                                 .recv => {
-                                    try backend.queue_recv(p, p.socket, p.buffer);
+                                    try backend.queue_recv(
+                                        p,
+                                        p.socket,
+                                        p.buffer,
+                                    );
                                 },
                                 .send => |*pslice| {
                                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
@@ -488,7 +695,11 @@ pub fn Server(
                                                 },
                                             };
 
-                                            try backend.queue_send(p, p.socket, encrypted_buffer);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                encrypted_buffer,
+                                            );
                                         },
                                         .plain => {
                                             p.job = .{
@@ -499,7 +710,11 @@ pub fn Server(
                                                     },
                                                 },
                                             };
-                                            try backend.queue_send(p, p.socket, plain_buffer);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                plain_buffer,
+                                            );
                                         },
                                     }
                                 },
@@ -508,7 +723,8 @@ pub fn Server(
 
                         .send => |*send_type| {
                             log.debug("{d} - send triggered", .{p.index});
-                            const send_count = completion.result;
+                            const send_count = completion.result.value;
+                            log.debug("{d} - send length: {d}", .{ p.index, completion.result.value });
 
                             if (send_count <= 0) {
                                 if (comptime security == .tls) {
@@ -537,7 +753,11 @@ pub fn Server(
                                             });
                                             p.recv_buffer.clearRetainingCapacity();
                                             p.job = .{ .recv = .{ .count = 0 } };
-                                            try backend.queue_recv(p, p.socket, p.buffer);
+                                            try backend.queue_recv(
+                                                p,
+                                                p.socket,
+                                                p.buffer,
+                                            );
                                         } else {
                                             // Queue a new chunk up for sending.
                                             log.debug(
@@ -564,7 +784,11 @@ pub fn Server(
                                             inner.encrypted = encrypted;
                                             inner.encrypted_count = 0;
 
-                                            try backend.queue_send(p, p.socket, inner.encrypted);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                inner.encrypted,
+                                            );
                                         }
                                     } else {
                                         log.debug(
@@ -573,7 +797,11 @@ pub fn Server(
                                         );
 
                                         const remainder = inner.encrypted[inner.encrypted_count..];
-                                        try backend.queue_send(p, p.socket, remainder);
+                                        try backend.queue_send(
+                                            p,
+                                            p.socket,
+                                            remainder,
+                                        );
                                     }
                                 },
                                 .plain => {
@@ -590,7 +818,11 @@ pub fn Server(
                                         });
                                         p.recv_buffer.clearRetainingCapacity();
                                         p.job = .{ .recv = .{ .count = 0 } };
-                                        try backend.queue_recv(p, p.socket, p.buffer);
+                                        try backend.queue_recv(
+                                            p,
+                                            p.socket,
+                                            p.buffer,
+                                        );
                                     } else {
                                         log.debug(
                                             "{d} - sending next chunk starting at index {d}",
@@ -607,7 +839,11 @@ pub fn Server(
                                             plain_buffer.len + inner.count,
                                         });
 
-                                        try backend.queue_send(p, p.socket, plain_buffer);
+                                        try backend.queue_send(
+                                            p,
+                                            p.socket,
+                                            plain_buffer,
+                                        );
                                     }
                                 },
                             }
@@ -621,6 +857,7 @@ pub fn Server(
 
                 if (!accept_queued and !provision_pool.full()) {
                     _ = try backend.queue_accept(&first_provision, server_socket);
+                    accept_queued = true;
                 }
 
                 try backend.submit();
@@ -640,24 +877,35 @@ pub fn Server(
 
             switch (comptime Socket) {
                 std.posix.socket_t => try std.posix.listen(server_socket, self.config.size_backlog),
+                // TODO: Handle freestanding targets that use an u32 here.
                 else => unreachable,
             }
 
             var backend = blk: {
-                const options = .{
+                const options: AsyncOptions = .{
                     .root_async = null,
                     .in_thread = false,
                     .size_connections_max = self.config.size_connections_max,
+                    .ms_operation_max = self.config.ms_operation_max,
+                    .size_completions_reap_max = self.config.size_completions_reap_max,
                 };
 
                 switch (comptime async_type) {
                     .io_uring => {
-                        var uring = try AsyncIoUring.init(
+                        var uring = try AsyncIoUring(Provision).init(
                             self.allocator,
                             options,
                         );
 
                         break :blk uring.to_async();
+                    },
+                    .epoll => {
+                        var epoll = try AsyncEpoll.init(
+                            self.allocator,
+                            options,
+                        );
+
+                        break :blk epoll.to_async();
                     },
                     .busy_loop => {
                         var busy = try AsyncBusyLoop.init(
@@ -675,7 +923,7 @@ pub fn Server(
 
                         break :blk custom.to_async();
                     },
-                    else => unreachable,
+                    .auto => unreachable,
                 }
             };
 
@@ -726,20 +974,30 @@ pub fn Server(
                                     thread_id: usize,
                                 ) void {
                                     var thread_backend = blk: {
-                                        const options = .{
+                                        const options: AsyncOptions = .{
                                             .root_async = p_backend,
                                             .in_thread = true,
                                             .size_connections_max = z_config.size_connections_max,
+                                            .ms_operation_max = z_config.ms_operation_max,
+                                            .size_completions_reap_max = z_config.size_completions_reap_max,
                                         };
 
                                         switch (comptime async_type) {
                                             .io_uring => {
-                                                var uring = AsyncIoUring.init(
+                                                var uring = AsyncIoUring(Provision).init(
                                                     z_config.allocator,
                                                     options,
                                                 ) catch unreachable;
 
                                                 break :blk uring.to_async();
+                                            },
+                                            .epoll => {
+                                                var epoll = AsyncEpoll.init(
+                                                    z_config.allocator,
+                                                    options,
+                                                ) catch unreachable;
+
+                                                break :blk epoll.to_async();
                                             },
                                             .busy_loop => {
                                                 var busy = AsyncBusyLoop.init(
@@ -757,7 +1015,7 @@ pub fn Server(
 
                                                 break :blk custom.to_async();
                                             },
-                                            else => unreachable,
+                                            .auto => unreachable,
                                         }
                                     };
 

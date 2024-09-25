@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const log = std.log.scoped(.@"zzz/http/router");
 const assert = std.debug.assert;
 const Route = @import("route.zig").Route;
 const Capture = @import("routing_trie.zig").Capture;
@@ -8,7 +9,6 @@ const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Mime = @import("mime.zig").Mime;
 const Context = @import("context.zig").Context;
-const log = std.log.scoped(.router);
 
 const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
 const QueryMap = @import("routing_trie.zig").QueryMap;

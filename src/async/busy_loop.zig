@@ -1,4 +1,6 @@
 const std = @import("std");
+const assert = std.debug.assert;
+const builtin = @import("builtin");
 const Completion = @import("completion.zig").Completion;
 
 const Async = @import("lib.zig").Async;
@@ -8,132 +10,211 @@ const AsyncOptions = @import("lib.zig").AsyncOptions;
 const log = std.log.scoped(.@"zzz/async/busy_loop");
 
 pub const AsyncBusyLoop = struct {
-    pub const BusyLoopJob = union(enum) {
-        accept: struct { socket: std.posix.socket_t, context: *anyopaque },
-        recv: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []u8 },
-        send: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []const u8 },
-        close: struct { socket: std.posix.socket_t, context: *anyopaque },
+    pub const Job = struct {
+        type: union(enum) {
+            accept,
+            recv: []u8,
+            send: []const u8,
+            close,
+        },
+        socket: std.posix.socket_t,
+        context: *anyopaque,
+        time: ?i64,
     };
 
-    inner: *std.ArrayList(BusyLoopJob),
+    inner: std.ArrayListUnmanaged(Job),
+    timeout: ?u32,
 
     pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !AsyncBusyLoop {
-        _ = options;
-        const list = try allocator.create(std.ArrayList(BusyLoopJob));
-        list.* = std.ArrayList(BusyLoopJob).init(allocator);
-        return AsyncBusyLoop{ .inner = list };
+        const list = try std.ArrayListUnmanaged(Job).initCapacity(allocator, options.size_connections_max);
+        return AsyncBusyLoop{ .inner = list, .timeout = options.ms_operation_max };
     }
 
     pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.deinit();
-        allocator.destroy(list);
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        loop.inner.deinit(allocator);
     }
 
-    pub fn queue_accept(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .accept = .{ .socket = socket, .context = ctx } }) catch unreachable;
+    pub fn queue_accept(
+        self: *Async,
+        ctx: *anyopaque,
+        socket: std.posix.socket_t,
+    ) AsyncError!void {
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        loop.inner.appendAssumeCapacity(.{
+            .type = .accept,
+            .socket = socket,
+            .context = ctx,
+            .time = null,
+        });
     }
 
-    pub fn queue_recv(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []u8) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .recv = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+    pub fn queue_recv(
+        self: *Async,
+        ctx: *anyopaque,
+        socket: std.posix.socket_t,
+        buffer: []u8,
+    ) AsyncError!void {
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        loop.inner.appendAssumeCapacity(.{
+            .type = .{ .recv = buffer },
+            .socket = socket,
+            .context = ctx,
+            .time = null,
+        });
     }
 
-    pub fn queue_send(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []const u8) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .send = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+    pub fn queue_send(
+        self: *Async,
+        ctx: *anyopaque,
+        socket: std.posix.socket_t,
+        buffer: []const u8,
+    ) AsyncError!void {
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        loop.inner.appendAssumeCapacity(.{
+            .type = .{ .send = buffer },
+            .socket = socket,
+            .context = ctx,
+            .time = null,
+        });
     }
 
-    pub fn queue_close(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .close = .{ .socket = socket, .context = ctx } }) catch unreachable;
+    pub fn queue_close(
+        self: *Async,
+        ctx: *anyopaque,
+        socket: std.posix.socket_t,
+    ) AsyncError!void {
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        loop.inner.appendAssumeCapacity(.{
+            .type = .close,
+            .socket = socket,
+            .context = ctx,
+            .time = null,
+        });
     }
 
     pub fn submit(self: *Async) AsyncError!void {
-        _ = self;
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
+        if (loop.timeout) |_| {
+            const ms = std.time.milliTimestamp();
+            for (loop.inner.items) |*job| {
+                if (job.time == null) job.time = ms;
+            }
+        }
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
         var reaped: usize = 0;
 
         while (reaped < 1) {
             var i: usize = 0;
 
-            while (i < list.items.len and reaped < self.completions.len) : (i += 1) {
-                const item = list.items[i];
-                switch (item) {
-                    .accept => |inner| {
+            const time = std.time.milliTimestamp();
+            while (i < loop.inner.items.len and reaped < self.completions.len) : (i += 1) {
+                const job = loop.inner.items[i];
+
+                // Handle timeouts first.
+                if (loop.timeout) |timeout_ms| {
+                    assert(job.time != null);
+
+                    if (time >= job.time.? + timeout_ms) {
+                        const com_ptr = &self.completions[reaped];
+                        com_ptr.result = .timeout;
+                        com_ptr.context = job.context;
+                        _ = loop.inner.swapRemove(i);
+                        i -|= 1;
+                        reaped += 1;
+                        continue;
+                    }
+                }
+
+                switch (job.type) {
+                    .accept => {
                         const com_ptr = &self.completions[reaped];
 
-                        const res: i32 = blk: {
-                            const ad = std.posix.accept(inner.socket, null, null, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    break :blk -1;
+                        const res: std.posix.socket_t = blk: {
+                            const accept_result = std.posix.accept(job.socket, null, null, 0) catch |e| {
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => switch (comptime builtin.target.os.tag) {
+                                        .windows => break :blk std.os.windows.ws2_32.INVALID_SOCKET,
+                                        else => break :blk 0,
+                                    },
+                                    else => {
+                                        log.debug("accept failed: {}", .{e});
+                                        switch (comptime builtin.target.os.tag) {
+                                            .windows => break :blk std.os.windows.ws2_32.INVALID_SOCKET,
+                                            else => break :blk -1,
+                                        }
+                                    },
                                 }
                             };
 
-                            break :blk @intCast(ad);
+                            break :blk accept_result;
                         };
 
-                        com_ptr.result = @intCast(res);
-                        com_ptr.context = inner.context;
-                        _ = list.swapRemove(i);
+                        com_ptr.result = .{ .socket = res };
+                        com_ptr.context = job.context;
+                        _ = loop.inner.swapRemove(i);
                         i -|= 1;
                         reaped += 1;
                     },
 
-                    .recv => |inner| {
+                    .recv => |buffer| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
-                            const rd = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    break :blk -1;
+                            const read_len = std.posix.recv(job.socket, buffer, 0) catch |e| {
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => break :blk 0,
+                                    else => {
+                                        log.debug("recv failed: {}", .{e});
+                                        break :blk -1;
+                                    },
                                 }
                             };
 
-                            break :blk @intCast(rd);
+                            break :blk @intCast(read_len);
                         };
 
-                        com_ptr.result = @intCast(len);
-                        com_ptr.context = inner.context;
-                        _ = list.swapRemove(i);
+                        com_ptr.result = .{ .value = @intCast(len) };
+                        com_ptr.context = job.context;
+                        _ = loop.inner.swapRemove(i);
                         i -|= 1;
                         reaped += 1;
                     },
 
-                    .send => |inner| {
+                    .send => |buffer| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
-                            const sd = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    break :blk -1;
+                            const send_len = std.posix.send(job.socket, buffer, 0) catch |e| {
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => break :blk 0,
+                                    else => {
+                                        log.debug("send failed: {}", .{e});
+                                        break :blk -1;
+                                    },
                                 }
                             };
 
-                            break :blk @intCast(sd);
+                            break :blk @intCast(send_len);
                         };
 
-                        com_ptr.result = @intCast(len);
-                        com_ptr.context = inner.context;
-                        _ = list.swapRemove(i);
+                        com_ptr.result = .{ .value = @intCast(len) };
+                        com_ptr.context = job.context;
+                        _ = loop.inner.swapRemove(i);
                         i -|= 1;
                         reaped += 1;
                     },
 
-                    .close => |inner| {
+                    .close => {
                         const com_ptr = &self.completions[reaped];
-                        std.posix.close(inner.socket);
-                        com_ptr.result = 0;
-                        com_ptr.context = inner.context;
-                        _ = list.swapRemove(i);
+                        std.posix.close(job.socket);
+                        com_ptr.result = .{ .value = 0 };
+                        com_ptr.context = job.context;
+                        _ = loop.inner.swapRemove(i);
                         i -|= 1;
                         reaped += 1;
                     },
@@ -146,7 +227,7 @@ pub const AsyncBusyLoop = struct {
 
     pub fn to_async(self: *AsyncBusyLoop) Async {
         return Async{
-            .runner = self.inner,
+            .runner = self,
             ._deinit = deinit,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,

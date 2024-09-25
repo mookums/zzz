@@ -50,9 +50,9 @@ pub fn main() !void {
             .cert_name = "CERTIFICATE",
             .key_name = "EC PRIVATE KEY",
         },
-    }).init(.{
+    }, .auto).init(.{
         .allocator = allocator,
-    }, null);
+    });
     defer server.deinit();
 
     try server.bind(host, port);

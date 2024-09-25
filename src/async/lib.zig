@@ -7,35 +7,55 @@ const Completion = @import("completion.zig").Completion;
 pub const AsyncType = union(enum) {
     /// Attempts to automatically match
     /// the best backend.
+    ///
+    /// `Linux: io_uring -> epoll -> busy_loop
+    /// Windows: busy_loop
+    /// Darwin & BSD: busy_loop
+    /// Solaris: busy_loop`
     auto,
     /// Only available on Linux >= 5.1
     ///
     /// Utilizes the io_uring interface for handling I/O.
     /// `https://kernel.dk/io_uring.pdf`
     io_uring,
+    /// Only available on Linux >= 2.5.45
+    ///
+    /// Utilizes the epoll interface for handling I/O.
+    epoll,
     /// Available on most targets.
-    /// Slowest by far.
     /// Relies on non-blocking sockets and busy loop polling.
     busy_loop,
     /// Available on all targets.
-    /// You have to provide all of the methods.
     custom: type,
 };
 
 pub fn auto_async_match() AsyncType {
-    switch (builtin.os.tag) {
+    switch (comptime builtin.target.os.tag) {
         .linux => {
-            if (builtin.os.isAtLeast(.linux, .{ .major = 5, .minor = 1, .patch = 0 })) |geq| {
-                if (geq) {
-                    return AsyncType.io_uring;
-                } else {
-                    return AsyncType.busy_loop;
-                }
-            } else {
-                @compileError("Can't determine Linux version. Use .io_uring if >= 5.1 and .busy_loop otherwise");
+            const version = comptime builtin.target.os.getVersionRange().linux;
+
+            if (version.isAtLeast(.{
+                .major = 5,
+                .minor = 1,
+                .patch = 0,
+            }) orelse @compileError("Unable to determine kernel version. Specify an Async Backend.")) {
+                return AsyncType.io_uring;
             }
+
+            if (version.isAtLeast(.{
+                .major = 2,
+                .minor = 5,
+                .patch = 45,
+            }) orelse @compileError("Unable to determine kernel version. Specify an Async Backend.")) {
+                return AsyncType.epoll;
+            }
+
+            return AsyncType.busy_loop;
         },
         .windows => return AsyncType.busy_loop,
+        .ios, .macos, .watchos, .tvos, .visionos => return AsyncType.busy_loop,
+        .kfreebsd, .freebsd, .openbsd, .netbsd, .dragonfly => return AsyncType.busy_loop,
+        .solaris, .illumos => return AsyncType.busy_loop,
         else => @compileError("Unsupported platform! Provide a custom Async backend."),
     }
 }
@@ -45,9 +65,18 @@ pub const AsyncError = error{
 };
 
 pub const AsyncOptions = struct {
+    /// The root Async that this should inherit
+    /// parameters from. This is useful for io_uring.
     root_async: ?Async = null,
+    /// Is this Async instance spawning within a thread?
     in_thread: bool = false,
+    /// Maximum number of connections for this backend.
     size_connections_max: u16,
+    /// Maximum number of completions reaped.
+    size_completions_reap_max: u16,
+    /// Maximum length of time before operation is timed out.
+    /// null if no timeout
+    ms_operation_max: ?u32,
 };
 
 pub const Async = struct {

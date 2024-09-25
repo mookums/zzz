@@ -3,7 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const panic = std.debug.panic;
-const log = std.log.scoped(.@"zzz/server/http");
+const log = std.log.scoped(.@"zzz/http/server");
 
 const Async = @import("../async/lib.zig").Async;
 const AsyncType = @import("../async//lib.zig").AsyncType;
@@ -148,8 +148,9 @@ pub fn recv_fn(
 
     switch (stage) {
         .header => {
+            const start = provision.recv_buffer.items.len -| 3;
             provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
-            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items, "\r\n\r\n");
+            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
