@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Completion = @import("completion.zig").Completion;
 
 const Async = @import("lib.zig").Async;
@@ -67,19 +68,22 @@ pub const AsyncBusyLoop = struct {
                     .accept => |inner| {
                         const com_ptr = &self.completions[reaped];
 
-                        const res: i32 = blk: {
+                        const res: std.posix.socket_t = blk: {
                             const ad = std.posix.accept(inner.socket, null, null, 0) catch |e| {
                                 if (e == error.WouldBlock) {
                                     continue;
                                 } else {
-                                    break :blk -1;
+                                    switch (comptime builtin.target.os.tag) {
+                                        .windows => break :blk std.os.windows.ws2_32.INVALID_SOCKET,
+                                        else => break :blk -1,
+                                    }
                                 }
                             };
 
-                            break :blk @intCast(ad);
+                            break :blk ad;
                         };
 
-                        com_ptr.result = @intCast(res);
+                        com_ptr.result = .{ .socket = res };
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
                         i -|= 1;
@@ -100,7 +104,7 @@ pub const AsyncBusyLoop = struct {
                             break :blk @intCast(rd);
                         };
 
-                        com_ptr.result = @intCast(len);
+                        com_ptr.result = .{ .value = @intCast(len) };
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
                         i -|= 1;
@@ -121,7 +125,7 @@ pub const AsyncBusyLoop = struct {
                             break :blk @intCast(sd);
                         };
 
-                        com_ptr.result = @intCast(len);
+                        com_ptr.result = .{ .value = @intCast(len) };
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
                         i -|= 1;
@@ -131,7 +135,7 @@ pub const AsyncBusyLoop = struct {
                     .close => |inner| {
                         const com_ptr = &self.completions[reaped];
                         std.posix.close(inner.socket);
-                        com_ptr.result = 0;
+                        com_ptr.result = .{ .value = 0 };
                         com_ptr.context = inner.context;
                         _ = list.swapRemove(i);
                         i -|= 1;

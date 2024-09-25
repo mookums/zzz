@@ -4,6 +4,7 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
 const Completion = @import("../async/completion.zig").Completion;
+const CompletionResult = @import("../async/completion.zig").CompletionResult;
 const Async = @import("../async/lib.zig").Async;
 const auto_async_match = @import("../async/lib.zig").auto_async_match;
 const AsyncType = @import("../async/lib.zig").AsyncType;
@@ -174,8 +175,7 @@ pub fn Server(
             if (self.socket) |socket| {
                 switch (comptime Socket) {
                     std.posix.socket_t => std.posix.close(socket),
-                    std.os.windows.ws2_32.SOCKET => std.os.windows.closesocket(socket),
-                    else => {},
+                    else => unreachable,
                 }
             }
 
@@ -197,7 +197,12 @@ pub fn Server(
             assert(port > 0);
             defer assert(self.socket != null);
 
-            const addr = try std.net.Address.resolveIp(host, port);
+            const addr = blk: {
+                switch (comptime builtin.os.tag) {
+                    .windows => break :blk try std.net.Address.parseIp(host, port),
+                    else => break :blk try std.net.Address.resolveIp(host, port),
+                }
+            };
 
             const socket: std.posix.socket_t = blk: {
                 const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
@@ -254,7 +259,10 @@ pub fn Server(
 
             log.info("{d} - closing connection", .{provision.index});
             std.posix.close(provision.socket);
-            provision.socket = -1;
+            switch (comptime builtin.target.os.tag) {
+                .windows => provision.socket = std.os.windows.ws2_32.INVALID_SOCKET,
+                else => provision.socket = -1,
+            }
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
@@ -341,15 +349,31 @@ pub fn Server(
                     switch (p.job) {
                         .accept => {
                             accept_queued = false;
-                            const socket: Socket = completion.result;
+                            const socket: Socket = completion.result.socket;
 
-                            if (socket < 0) {
-                                log.err("socket accept failed", .{});
-                                continue :reap_loop;
-                            }
+                            const index = blk: {
+                                switch (comptime builtin.target.os.tag) {
+                                    .windows => {
+                                        if (socket == std.os.windows.ws2_32.INVALID_SOCKET) {
+                                            log.err("socket accept failed", .{});
+                                            continue :reap_loop;
+                                        }
+
+                                        break :blk 0;
+                                    },
+                                    else => {
+                                        if (socket < 0) {
+                                            log.err("socket accept failed", .{});
+                                            continue :reap_loop;
+                                        }
+
+                                        break :blk socket;
+                                    },
+                                }
+                            };
 
                             // Borrow a provision from the pool otherwise close the socket.
-                            const borrowed = provision_pool.borrow(@intCast(completion.result)) catch {
+                            const borrowed = provision_pool.borrow(@intCast(index)) catch {
                                 log.warn("out of provision pool entries", .{});
                                 std.posix.close(socket);
                                 continue :reap_loop;
@@ -357,6 +381,7 @@ pub fn Server(
 
                             switch (comptime Socket) {
                                 std.posix.socket_t => {
+                                    // Disable Nagle's.
                                     try std.posix.setsockopt(
                                         socket,
                                         std.posix.IPPROTO.TCP,
@@ -364,17 +389,29 @@ pub fn Server(
                                         &std.mem.toBytes(@as(c_int, 1)),
                                     );
 
-                                    // Set this socket as non-blocking.
-                                    const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
-                                    var new_flags = @as(
-                                        std.posix.O,
-                                        @bitCast(@as(u32, @intCast(current_flags))),
-                                    );
-                                    new_flags.NONBLOCK = true;
-                                    const arg: u32 = @bitCast(new_flags);
-                                    _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
+                                    // Set non-blocking.
+                                    switch (comptime builtin.target.os.tag) {
+                                        .windows => {
+                                            var mode: u32 = 1;
+                                            _ = std.os.windows.ws2_32.ioctlsocket(
+                                                socket,
+                                                std.os.windows.ws2_32.FIONBIO,
+                                                &mode,
+                                            );
+                                        },
+                                        else => {
+                                            const current_flags = try std.posix.fcntl(socket, std.posix.F.GETFL, 0);
+                                            var new_flags = @as(
+                                                std.posix.O,
+                                                @bitCast(@as(u32, @intCast(current_flags))),
+                                            );
+                                            new_flags.NONBLOCK = true;
+                                            const arg: u32 = @bitCast(new_flags);
+                                            _ = try std.posix.fcntl(socket, std.posix.F.SETFL, arg);
+                                        },
+                                    }
                                 },
-                                else => {},
+                                else => unreachable,
                             }
 
                             const provision = borrowed.item;
@@ -417,7 +454,7 @@ pub fn Server(
                             log.debug("{d} - recv triggered", .{p.index});
 
                             // If the socket is closed.
-                            if (completion.result <= 0) {
+                            if (completion.result.value <= 0) {
                                 if (comptime security == .tls) {
                                     const tls_ptr: *?TLS = &tls_pool[p.index];
                                     clean_tls(tls_ptr);
@@ -427,7 +464,7 @@ pub fn Server(
                                 continue :reap_loop;
                             }
 
-                            const read_count: u32 = @intCast(completion.result);
+                            const read_count: u32 = @intCast(completion.result.value);
                             inner.count += read_count;
                             const pre_recv_buffer = p.buffer[0..read_count];
 
@@ -508,7 +545,7 @@ pub fn Server(
 
                         .send => |*send_type| {
                             log.debug("{d} - send triggered", .{p.index});
-                            const send_count = completion.result;
+                            const send_count = completion.result.value;
 
                             if (send_count <= 0) {
                                 if (comptime security == .tls) {
@@ -640,6 +677,7 @@ pub fn Server(
 
             switch (comptime Socket) {
                 std.posix.socket_t => try std.posix.listen(server_socket, self.config.size_backlog),
+                // TODO: Handle freestanding targets that use an u32 here.
                 else => unreachable,
             }
 
@@ -652,7 +690,7 @@ pub fn Server(
 
                 switch (comptime async_type) {
                     .io_uring => {
-                        var uring = try AsyncIoUring.init(
+                        var uring = try AsyncIoUring(Provision).init(
                             self.allocator,
                             options,
                         );
@@ -734,7 +772,7 @@ pub fn Server(
 
                                         switch (comptime async_type) {
                                             .io_uring => {
-                                                var uring = AsyncIoUring.init(
+                                                var uring = AsyncIoUring(Provision).init(
                                                     z_config.allocator,
                                                     options,
                                                 ) catch unreachable;

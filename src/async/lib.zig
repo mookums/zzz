@@ -14,18 +14,18 @@ pub const AsyncType = union(enum) {
     /// `https://kernel.dk/io_uring.pdf`
     io_uring,
     /// Available on most targets.
-    /// Slowest by far.
+    /// Slowest. Workable for development.
+    /// Should rely on one of the faster backends for production.
     /// Relies on non-blocking sockets and busy loop polling.
     busy_loop,
     /// Available on all targets.
-    /// You have to provide all of the methods.
     custom: type,
 };
 
 pub fn auto_async_match() AsyncType {
-    switch (builtin.os.tag) {
+    switch (comptime builtin.target.os.tag) {
         .linux => {
-            if (builtin.os.isAtLeast(.linux, .{ .major = 5, .minor = 1, .patch = 0 })) |geq| {
+            if (comptime builtin.target.os.isAtLeast(.linux, .{ .major = 5, .minor = 1, .patch = 0 })) |geq| {
                 if (geq) {
                     return AsyncType.io_uring;
                 } else {
@@ -36,6 +36,9 @@ pub fn auto_async_match() AsyncType {
             }
         },
         .windows => return AsyncType.busy_loop,
+        .ios, .macos, .watchos, .tvos, .visionos => return AsyncType.busy_loop,
+        .kfreebsd, .freebsd, .openbsd, .netbsd, .dragonfly => return AsyncType.busy_loop,
+        .solaris, .illumos => return AsyncType.busy_loop,
         else => @compileError("Unsupported platform! Provide a custom Async backend."),
     }
 }
@@ -45,8 +48,12 @@ pub const AsyncError = error{
 };
 
 pub const AsyncOptions = struct {
+    /// The root Async that this should inherit
+    /// parameters from. This is useful for io_uring.
     root_async: ?Async = null,
+    /// Is this Async instance spawning within a thread?
     in_thread: bool = false,
+    /// Maximum number of connections for this backend.
     size_connections_max: u16,
 };
 

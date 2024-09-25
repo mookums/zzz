@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const CompletionResult = union {
-    socket: std.posix.socket_t,
-    result: i32,
-};
-
 pub const Completion = struct {
+    pub const Result = union {
+        socket: std.posix.socket_t,
+        value: i32,
+    };
+
     context: *anyopaque,
-    result: i32,
+    result: Result,
 };
