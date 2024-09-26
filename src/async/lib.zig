@@ -7,6 +7,11 @@ const Completion = @import("completion.zig").Completion;
 pub const AsyncType = union(enum) {
     /// Attempts to automatically match
     /// the best backend.
+    ///
+    /// `Linux: io_uring -> epoll -> busy_loop
+    /// Windows: busy_loop
+    /// Darwin & BSD: busy_loop
+    /// Solaris: busy_loop`
     auto,
     /// Only available on Linux >= 5.1
     ///
@@ -14,13 +19,10 @@ pub const AsyncType = union(enum) {
     /// `https://kernel.dk/io_uring.pdf`
     io_uring,
     /// Only available on Linux >= 2.5.45
-    /// Fallback if io_uring is not available.
     ///
     /// Utilizes the epoll interface for handling I/O.
     epoll,
     /// Available on most targets.
-    /// Slowest. Workable for development.
-    /// Should rely on one of the faster backends for production.
     /// Relies on non-blocking sockets and busy loop polling.
     busy_loop,
     /// Available on all targets.

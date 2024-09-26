@@ -52,7 +52,9 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
 - [Modular Asynchronous Implementation](https://muki.gg/post/modular-async)
     - Allows for passing in your own Async implementation.
     - Comes with:
-        - io_uring for Linux.
+        - io_uring for Linux (>= 5.1.0).
+        - epoll for Linux (>= 2.5.45).
+        - busy_loop for most targets.
         - IOCP for Windows (planned).
         - kqueue for BSD (planned).
 - Modular Protocol Implementation [#](#supported-protocols)

@@ -1,4 +1,4 @@
-name: linux
+name: unit-test
 on:
   push:
   pull_request:
