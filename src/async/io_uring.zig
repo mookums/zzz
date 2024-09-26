@@ -10,7 +10,12 @@ const log = std.log.scoped(.@"zzz/async/io_uring");
 pub fn AsyncIoUring(comptime Provision: type) type {
     return struct {
         const Self = @This();
-        const base_flags = std.os.linux.IORING_SETUP_COOP_TASKRUN | std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+        const base_flags = blk: {
+            var flags = std.os.linux.IORING_SETUP_COOP_TASKRUN;
+            flags |= std.os.linux.IORING_SETUP_DEFER_TASKRUN;
+            flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
+            break :blk flags;
+        };
         runner: *anyopaque,
 
         pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !Self {
