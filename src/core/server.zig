@@ -9,6 +9,7 @@ const Async = @import("../async/lib.zig").Async;
 const auto_async_match = @import("../async/lib.zig").auto_async_match;
 const AsyncType = @import("../async/lib.zig").AsyncType;
 const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
+const AsyncEpoll = @import("../async/epoll.zig").AsyncEpoll;
 const AsyncBusyLoop = @import("../async/busy_loop.zig").AsyncBusyLoop;
 
 const Pseudoslice = @import("pseudoslice.zig").Pseudoslice;
@@ -698,6 +699,14 @@ pub fn Server(
 
                         break :blk uring.to_async();
                     },
+                    .epoll => {
+                        var epoll = try AsyncEpoll.init(
+                            self.allocator,
+                            options,
+                        );
+
+                        break :blk epoll.to_async();
+                    },
                     .busy_loop => {
                         var busy = try AsyncBusyLoop.init(
                             self.allocator,
@@ -714,7 +723,7 @@ pub fn Server(
 
                         break :blk custom.to_async();
                     },
-                    else => unreachable,
+                    .auto => unreachable,
                 }
             };
 
@@ -780,6 +789,14 @@ pub fn Server(
 
                                                 break :blk uring.to_async();
                                             },
+                                            .epoll => {
+                                                var epoll = AsyncEpoll.init(
+                                                    z_config.allocator,
+                                                    options,
+                                                ) catch unreachable;
+
+                                                break :blk epoll.to_async();
+                                            },
                                             .busy_loop => {
                                                 var busy = AsyncBusyLoop.init(
                                                     z_config.allocator,
@@ -796,7 +813,7 @@ pub fn Server(
 
                                                 break :blk custom.to_async();
                                             },
-                                            else => unreachable,
+                                            .auto => unreachable,
                                         }
                                     };
 

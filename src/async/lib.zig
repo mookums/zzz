@@ -13,6 +13,11 @@ pub const AsyncType = union(enum) {
     /// Utilizes the io_uring interface for handling I/O.
     /// `https://kernel.dk/io_uring.pdf`
     io_uring,
+    /// Only available on Linux >= 2.5.45
+    /// Fallback if io_uring is not available.
+    ///
+    /// Utilizes the epoll interface for handling I/O.
+    epoll,
     /// Available on most targets.
     /// Slowest. Workable for development.
     /// Should rely on one of the faster backends for production.
@@ -25,15 +30,25 @@ pub const AsyncType = union(enum) {
 pub fn auto_async_match() AsyncType {
     switch (comptime builtin.target.os.tag) {
         .linux => {
-            if (comptime builtin.target.os.isAtLeast(.linux, .{ .major = 5, .minor = 1, .patch = 0 })) |geq| {
-                if (geq) {
-                    return AsyncType.io_uring;
-                } else {
-                    return AsyncType.busy_loop;
-                }
-            } else {
-                @compileError("Can't determine Linux version. Use .io_uring if >= 5.1 and .busy_loop otherwise");
+            const version = comptime builtin.target.os.getVersionRange().linux;
+
+            if (version.isAtLeast(.{
+                .major = 5,
+                .minor = 1,
+                .patch = 0,
+            }) orelse @compileError("Unable to determine kernel version. Specify an Async Backend.")) {
+                return AsyncType.io_uring;
             }
+
+            if (version.isAtLeast(.{
+                .major = 2,
+                .minor = 5,
+                .patch = 45,
+            }) orelse @compileError("Unable to determine kernel version. Specify an Async Backend.")) {
+                return AsyncType.epoll;
+            }
+
+            return AsyncType.busy_loop;
         },
         .windows => return AsyncType.busy_loop,
         .ios, .macos, .watchos, .tvos, .visionos => return AsyncType.busy_loop,
