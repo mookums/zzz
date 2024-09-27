@@ -108,6 +108,18 @@ pub const AsyncEpoll = struct {
         };
     }
 
+    fn remove_fd(self: *Self, fd: std.posix.fd_t) !void {
+        std.posix.epoll_ctl(
+            self.epoll_fd,
+            std.os.linux.EPOLL.CTL_DEL,
+            fd,
+            null,
+        ) catch |err| {
+            log.warn("Failed to remove fd from epoll: {}", .{err});
+            return err;
+        };
+    }
+
     pub fn submit(self: *Async) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
         for (epoll.queued_jobs.items) |job| {
@@ -195,9 +207,15 @@ pub const AsyncEpoll = struct {
                                         epoll.queued_jobs.appendAssumeCapacity(job);
                                         continue :epoll_loop;
                                     },
+                                    error.ConnectionResetByPeer => {
+                                        result = .{ .value = 0 };
+                                        epoll.remove_fd(recv_job.socket) catch unreachable;
+                                        break;
+                                    },
                                     else => {
                                         log.debug("recv failed: {}", .{e});
                                         result = .{ .value = -1 };
+                                        epoll.remove_fd(recv_job.socket) catch unreachable;
                                         break;
                                     },
                                 }
@@ -213,9 +231,15 @@ pub const AsyncEpoll = struct {
                                         epoll.queued_jobs.appendAssumeCapacity(job);
                                         continue :epoll_loop;
                                     },
+                                    error.ConnectionResetByPeer => {
+                                        result = .{ .value = 0 };
+                                        epoll.remove_fd(send_job.socket) catch unreachable;
+                                        break;
+                                    },
                                     else => {
                                         log.debug("send failed: {}", .{e});
                                         result = .{ .value = -1 };
+                                        epoll.remove_fd(send_job.socket) catch unreachable;
                                         break;
                                     },
                                 }
@@ -226,6 +250,7 @@ pub const AsyncEpoll = struct {
                     .close => |close_job| {
                         std.posix.close(close_job.socket);
                         result = .{ .value = 0 };
+                        epoll.remove_fd(close_job.socket) catch unreachable;
                     },
                 }
 
