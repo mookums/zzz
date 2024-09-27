@@ -69,13 +69,19 @@ pub const AsyncBusyLoop = struct {
 
                         const res: std.posix.socket_t = blk: {
                             const accept_result = std.posix.accept(inner.socket, null, null, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    switch (comptime builtin.target.os.tag) {
-                                        .windows => break :blk std.os.windows.ws2_32.INVALID_SOCKET,
-                                        else => break :blk -1,
-                                    }
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => if (comptime builtin.target.os.tag == .windows) {
+                                        break :blk std.os.windows.ws2_32.INVALID_SOCKET;
+                                    } else {
+                                        break :blk 0;
+                                    },
+                                    else => if (comptime builtin.target.os.tag == .windows) {
+                                        break :blk std.os.windows.ws2_32.INVALID_SOCKET;
+                                    } else {
+                                        log.debug("accept failed: {}", .{e});
+                                        break :blk -1;
+                                    },
                                 }
                             };
 
@@ -93,10 +99,13 @@ pub const AsyncBusyLoop = struct {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
                             const read_len = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    break :blk -1;
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => break :blk 0,
+                                    else => {
+                                        log.debug("recv failed: {}", .{e});
+                                        break :blk -1;
+                                    },
                                 }
                             };
 
@@ -114,10 +123,13 @@ pub const AsyncBusyLoop = struct {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
                             const send_len = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
-                                if (e == error.WouldBlock) {
-                                    continue;
-                                } else {
-                                    break :blk -1;
+                                switch (e) {
+                                    error.WouldBlock => continue,
+                                    error.ConnectionResetByPeer => break :blk 0,
+                                    else => {
+                                        log.debug("send failed: {}", .{e});
+                                        break :blk -1;
+                                    },
                                 }
                             };
 
