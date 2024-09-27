@@ -3,6 +3,7 @@ pub const Method = @import("method.zig").Method;
 pub const Request = @import("request.zig").Request;
 pub const Response = @import("response.zig").Response;
 pub const Mime = @import("mime.zig").Mime;
+pub const Date = @import("date.zig").Date;
 pub const Route = @import("route.zig").Route;
 pub const Router = @import("router.zig").Router;
 pub const RouteHandlerFn = @import("route.zig").RouteHandlerFn;
