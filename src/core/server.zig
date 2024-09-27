@@ -658,6 +658,7 @@ pub fn Server(
 
                 if (!accept_queued and !provision_pool.full()) {
                     _ = try backend.queue_accept(&first_provision, server_socket);
+                    accept_queued = true;
                 }
 
                 try backend.submit();
