@@ -9,46 +9,45 @@ const AsyncOptions = @import("lib.zig").AsyncOptions;
 const log = std.log.scoped(.@"zzz/async/busy_loop");
 
 pub const AsyncBusyLoop = struct {
-    pub const BusyLoopJob = union(enum) {
+    pub const Job = union(enum) {
         accept: struct { socket: std.posix.socket_t, context: *anyopaque },
         recv: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []u8 },
         send: struct { socket: std.posix.socket_t, context: *anyopaque, buffer: []const u8 },
         close: struct { socket: std.posix.socket_t, context: *anyopaque },
     };
 
-    inner: *std.ArrayList(BusyLoopJob),
+    inner: *std.ArrayList(Job),
 
     pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !AsyncBusyLoop {
-        _ = options;
-        const list = try allocator.create(std.ArrayList(BusyLoopJob));
-        list.* = std.ArrayList(BusyLoopJob).init(allocator);
+        const list = try allocator.create(std.ArrayList(Job));
+        list.* = try std.ArrayList(Job).initCapacity(allocator, options.size_connections_max);
         return AsyncBusyLoop{ .inner = list };
     }
 
     pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
         list.deinit();
         allocator.destroy(list);
     }
 
     pub fn queue_accept(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .accept = .{ .socket = socket, .context = ctx } }) catch unreachable;
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
+        list.appendAssumeCapacity(Job{ .accept = .{ .socket = socket, .context = ctx } });
     }
 
     pub fn queue_recv(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []u8) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .recv = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
+        list.appendAssumeCapacity(Job{ .recv = .{ .socket = socket, .context = ctx, .buffer = buffer } });
     }
 
     pub fn queue_send(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t, buffer: []const u8) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .send = .{ .socket = socket, .context = ctx, .buffer = buffer } }) catch unreachable;
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
+        list.appendAssumeCapacity(Job{ .send = .{ .socket = socket, .context = ctx, .buffer = buffer } });
     }
 
     pub fn queue_close(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
-        list.append(BusyLoopJob{ .close = .{ .socket = socket, .context = ctx } }) catch unreachable;
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
+        list.appendAssumeCapacity(Job{ .close = .{ .socket = socket, .context = ctx } });
     }
 
     pub fn submit(self: *Async) AsyncError!void {
@@ -56,7 +55,7 @@ pub const AsyncBusyLoop = struct {
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
-        const list: *std.ArrayList(BusyLoopJob) = @ptrCast(@alignCast(self.runner));
+        const list: *std.ArrayList(Job) = @ptrCast(@alignCast(self.runner));
         var reaped: usize = 0;
 
         while (reaped < 1) {
@@ -69,7 +68,7 @@ pub const AsyncBusyLoop = struct {
                         const com_ptr = &self.completions[reaped];
 
                         const res: std.posix.socket_t = blk: {
-                            const ad = std.posix.accept(inner.socket, null, null, 0) catch |e| {
+                            const accept_result = std.posix.accept(inner.socket, null, null, 0) catch |e| {
                                 if (e == error.WouldBlock) {
                                     continue;
                                 } else {
@@ -80,7 +79,7 @@ pub const AsyncBusyLoop = struct {
                                 }
                             };
 
-                            break :blk ad;
+                            break :blk accept_result;
                         };
 
                         com_ptr.result = .{ .socket = res };
@@ -93,7 +92,7 @@ pub const AsyncBusyLoop = struct {
                     .recv => |inner| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
-                            const rd = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
+                            const read_len = std.posix.recv(inner.socket, inner.buffer, 0) catch |e| {
                                 if (e == error.WouldBlock) {
                                     continue;
                                 } else {
@@ -101,7 +100,7 @@ pub const AsyncBusyLoop = struct {
                                 }
                             };
 
-                            break :blk @intCast(rd);
+                            break :blk @intCast(read_len);
                         };
 
                         com_ptr.result = .{ .value = @intCast(len) };
@@ -114,7 +113,7 @@ pub const AsyncBusyLoop = struct {
                     .send => |inner| {
                         const com_ptr = &self.completions[reaped];
                         const len: i32 = blk: {
-                            const sd = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
+                            const send_len = std.posix.send(inner.socket, inner.buffer, 0) catch |e| {
                                 if (e == error.WouldBlock) {
                                     continue;
                                 } else {
@@ -122,7 +121,7 @@ pub const AsyncBusyLoop = struct {
                                 }
                             };
 
-                            break :blk @intCast(sd);
+                            break :blk @intCast(send_len);
                         };
 
                         com_ptr.result = .{ .value = @intCast(len) };
