@@ -125,7 +125,8 @@ pub const AsyncEpoll = struct {
         for (epoll.queued_jobs.items) |job| {
             var event = std.os.linux.epoll_event{
                 .events = switch (job) {
-                    .accept, .recv => std.os.linux.EPOLL.IN,
+                    .accept => std.os.linux.EPOLL.IN | std.os.linux.EPOLL.EXCLUSIVE,
+                    .recv => std.os.linux.EPOLL.IN,
                     .send => std.os.linux.EPOLL.OUT,
                     .close => unreachable,
                 },
@@ -197,6 +198,7 @@ pub const AsyncEpoll = struct {
                                 }
                             };
                             result = .{ .socket = accepted_socket };
+                            epoll.remove_fd(accept_job.socket) catch unreachable;
                         } else continue :epoll_loop;
                     },
                     .recv => |recv_job| {
@@ -221,6 +223,7 @@ pub const AsyncEpoll = struct {
                                 }
                             };
                             result = .{ .value = @intCast(bytes_read) };
+                            epoll.remove_fd(recv_job.socket) catch unreachable;
                         } else continue :epoll_loop;
                     },
                     .send => |send_job| {
@@ -245,6 +248,7 @@ pub const AsyncEpoll = struct {
                                 }
                             };
                             result = .{ .value = @intCast(bytes_sent) };
+                            epoll.remove_fd(send_job.socket) catch unreachable;
                         } else continue :epoll_loop;
                     },
                     .close => |close_job| {
