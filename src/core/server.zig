@@ -382,13 +382,23 @@ pub fn Server(
 
                             switch (comptime Socket) {
                                 std.posix.socket_t => {
-                                    // Disable Nagle's.
-                                    try std.posix.setsockopt(
-                                        socket,
-                                        std.posix.IPPROTO.TCP,
-                                        std.posix.TCP.NODELAY,
-                                        &std.mem.toBytes(@as(c_int, 1)),
-                                    );
+                                    // Disable Nagle's
+                                    if (comptime builtin.os.tag.isDarwin()) {
+                                        // system.TCP is weird on MacOS.
+                                        try std.posix.setsockopt(
+                                            socket,
+                                            std.posix.IPPROTO.TCP,
+                                            1,
+                                            &std.mem.toBytes(@as(c_int, 1)),
+                                        );
+                                    } else {
+                                        try std.posix.setsockopt(
+                                            socket,
+                                            std.posix.IPPROTO.TCP,
+                                            std.posix.TCP.NODELAY,
+                                            &std.mem.toBytes(@as(c_int, 1)),
+                                        );
+                                    }
 
                                     // Set non-blocking.
                                     switch (comptime builtin.target.os.tag) {
