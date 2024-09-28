@@ -4,9 +4,15 @@ const assert = std.debug.assert;
 const Headers = @import("lib.zig").Headers;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
+const Date = @import("lib.zig").Date;
 
 const ResponseOptions = struct {
     num_headers_max: u32,
+};
+
+const CachedDate = struct {
+    buffer: []u8,
+    ts: i64,
 };
 
 pub const Response = struct {
@@ -15,16 +21,22 @@ pub const Response = struct {
     mime: ?Mime = null,
     body: ?[]const u8 = null,
     headers: Headers,
+    cached_date: CachedDate,
 
     pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
         return Response{
             .allocator = allocator,
             .headers = try Headers.init(allocator, options.num_headers_max),
+            .cached_date = CachedDate{
+                .buffer = try allocator.alloc(u8, 32),
+                .ts = 0,
+            },
         };
     }
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
+        self.allocator.free(self.cached_date.buffer);
     }
 
     pub fn set_status(self: *Response, status: Status) void {
@@ -65,13 +77,13 @@ pub const Response = struct {
         }
     }
 
-    pub fn headers_into_buffer(self: Response, buffer: []u8, content_length: u32) ![]u8 {
+    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: u32) ![]u8 {
         var stream = std.io.fixedBufferStream(buffer);
         try self.write_headers(stream.writer(), content_length);
         return stream.getWritten();
     }
 
-    fn write_headers(self: Response, writer: anytype, content_length: u32) !void {
+    fn write_headers(self: *Response, writer: anytype, content_length: u32) !void {
         // Status Line
         try writer.writeAll("HTTP/1.1 ");
 
@@ -86,7 +98,22 @@ pub const Response = struct {
         try writer.writeAll("\r\n");
 
         // Standard Headers.
-        try writer.writeAll("Server: zzz (z3)\r\n");
+
+        // Cache the Date.
+        // Omits the Date header on any platform that doesn't support timestamp().
+        const ts = std.time.timestamp();
+        if (ts != 0) {
+            if (self.cached_date.ts != ts) {
+                const date = Date.init(ts).to_http_date();
+                const buf = try date.into_buf(self.cached_date.buffer);
+                self.cached_date = .{ .ts = ts, .buffer = buf };
+            }
+            try writer.writeAll("Date: ");
+            try writer.writeAll(self.cached_date.buffer);
+            try writer.writeAll("\r\n");
+        }
+
+        try writer.writeAll("Server: zzz\r\n");
         try writer.writeAll("Connection: keep-alive\r\n");
 
         // Headers
