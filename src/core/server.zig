@@ -473,6 +473,13 @@ pub fn Server(
                                 const tls_ptr: *?TLS = &tls_pool[p.index];
                                 assert(tls_ptr.* != null);
                                 log.debug("processing handshake", .{});
+
+                                if (completion.result.value < 0) {
+                                    clean_tls(tls_ptr);
+                                    clean_connection(p, &provision_pool, z_config);
+                                    continue :reap_loop;
+                                }
+
                                 const length: usize = @intCast(completion.result.value);
 
                                 switch (inner) {
