@@ -1,16 +1,6 @@
 const std = @import("std");
 const Pseudoslice = @import("lib.zig").Pseudoslice;
 
-const JobType = enum {
-    open,
-    read,
-    write,
-    accept,
-    recv,
-    send,
-    close,
-};
-
 pub const SendType = union(enum) {
     plain: struct {
         slice: Pseudoslice,
@@ -24,11 +14,12 @@ pub const SendType = union(enum) {
     },
 };
 
-pub const Job = union(JobType) {
+pub const Job = union(enum) {
     open,
     read: struct { fd: std.posix.fd_t, count: u32 },
     write: struct { fd: std.posix.fd_t, count: u32 },
     accept,
+    handshake: enum { recv, send },
     recv: struct { count: u32 },
     send: SendType,
     close,

@@ -430,7 +430,8 @@ pub fn Server(
                             // Store the index of this item.
                             provision.index = @intCast(borrowed.index);
                             provision.socket = socket;
-                            provision.job = .{ .recv = .{ .count = 0 } };
+
+                            var buffer: []u8 = provision.buffer;
 
                             switch (comptime security) {
                                 .tls => |_| {
@@ -443,14 +444,19 @@ pub fn Server(
                                         continue :reap_loop;
                                     };
 
-                                    tls_ptr.*.?.accept() catch |e| {
+                                    const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                                         clean_tls(tls_ptr);
-                                        log.debug("{d} - tls handshake failed={any}", .{ provision.index, e });
+                                        log.debug("{d} - tls reset failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
+
+                                    provision.job = .{ .handshake = .recv };
+                                    buffer = recv_buf;
                                 },
-                                .plain => {},
+                                .plain => {
+                                    provision.job = .{ .recv = .{ .count = 0 } };
+                                },
                             }
 
                             // Call the Accept Hook.
@@ -458,7 +464,76 @@ pub fn Server(
                                 @call(.auto, func, .{ provision, p_config, z_config, backend });
                             }
 
-                            _ = try backend.queue_recv(provision, provision.socket, provision.buffer);
+                            _ = try backend.queue_recv(provision, provision.socket, buffer);
+                        },
+
+                        .handshake => |inner| {
+                            assert(comptime security == .tls);
+                            if (comptime security == .tls) {
+                                const tls_ptr: *?TLS = &tls_pool[p.index];
+                                assert(tls_ptr.* != null);
+                                log.debug("processing handshake", .{});
+                                const length: usize = @intCast(completion.result.value);
+
+                                switch (inner) {
+                                    .recv => {
+                                        // on recv, we want to read from socket and feed into tls engien
+                                        const hstate = tls_ptr.*.?.continue_handshake(
+                                            .{ .recv = @intCast(length) },
+                                        ) catch |e| {
+                                            clean_tls(tls_ptr);
+                                            log.debug("{d} - tls handshake on recv failed={any}", .{ p.index, e });
+                                            clean_connection(p, &provision_pool, z_config);
+                                            continue :reap_loop;
+                                        };
+
+                                        switch (hstate) {
+                                            .recv => |buf| {
+                                                log.debug("requeing recv in handshake", .{});
+                                                _ = try backend.queue_recv(p, p.socket, buf);
+                                            },
+                                            .send => |buf| {
+                                                log.debug("queueing send in handshake", .{});
+                                                p.job = .{ .handshake = .send };
+                                                _ = try backend.queue_send(p, p.socket, buf);
+                                            },
+                                            .complete => {
+                                                log.debug("handshake complete", .{});
+                                                p.job = .{ .recv = .{ .count = 0 } };
+                                                _ = try backend.queue_recv(p, p.socket, p.buffer);
+                                            },
+                                        }
+                                    },
+                                    .send => {
+                                        // on recv, we want to read from socket and feed into tls engien
+                                        const hstate = tls_ptr.*.?.continue_handshake(
+                                            .{ .send = @intCast(length) },
+                                        ) catch |e| {
+                                            clean_tls(tls_ptr);
+                                            log.debug("{d} - tls handshake on send failed={any}", .{ p.index, e });
+                                            clean_connection(p, &provision_pool, z_config);
+                                            continue :reap_loop;
+                                        };
+
+                                        switch (hstate) {
+                                            .recv => |buf| {
+                                                p.job = .{ .handshake = .recv };
+                                                log.debug("queuing recv in handshake", .{});
+                                                _ = try backend.queue_recv(p, p.socket, buf);
+                                            },
+                                            .send => |buf| {
+                                                log.debug("requeing send in handshake", .{});
+                                                _ = try backend.queue_send(p, p.socket, buf);
+                                            },
+                                            .complete => {
+                                                log.debug("handshake complete", .{});
+                                                p.job = .{ .recv = .{ .count = 0 } };
+                                                _ = try backend.queue_recv(p, p.socket, p.buffer);
+                                            },
+                                        }
+                                    },
+                                }
+                            } else unreachable;
                         },
 
                         .recv => |*inner| {
