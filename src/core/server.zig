@@ -6,6 +6,7 @@ const log = std.log.scoped(.@"zzz/server");
 const Completion = @import("../async/completion.zig").Completion;
 const CompletionResult = @import("../async/completion.zig").CompletionResult;
 const Async = @import("../async/lib.zig").Async;
+const AsyncOptions = @import("../async/lib.zig").AsyncOptions;
 const auto_async_match = @import("../async/lib.zig").auto_async_match;
 const AsyncType = @import("../async/lib.zig").AsyncType;
 const AsyncIoUring = @import("../async/io_uring.zig").AsyncIoUring;
@@ -102,6 +103,13 @@ pub const zzzConfig = struct {
     ///
     /// Default: 2MB.
     size_recv_buffer_max: u32 = 1024 * 1024 * 2,
+    /// Length of the timeout that each operation has
+    /// before it is forcibly closed.
+    ///
+    /// Set to null to disable timeouts.
+    ///
+    /// Default: 5000ms (5 seconds).
+    ms_operation_max: ?u32 = 5000,
 };
 
 fn AcceptFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
@@ -264,6 +272,7 @@ pub fn Server(
                 .windows => provision.socket = std.os.windows.ws2_32.INVALID_SOCKET,
                 else => provision.socket = -1,
             }
+            provision.job = .accept;
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
@@ -334,7 +343,10 @@ pub fn Server(
                 .data = undefined,
             };
 
-            _ = try backend.queue_accept(&first_provision, server_socket);
+            _ = try backend.queue_accept(
+                &first_provision,
+                server_socket,
+            );
             try backend.submit();
 
             var accept_queued = true;
@@ -343,12 +355,45 @@ pub fn Server(
                 const completions = try backend.reap();
                 const completions_count = completions.len;
                 assert(completions_count > 0);
+                log.debug("Completion Count: {d}", .{completions_count});
 
                 reap_loop: for (completions[0..completions_count]) |completion| {
                     const p: *Provision = @ptrCast(@alignCast(completion.context));
 
+                    // If the operation has completed before the timeout.
+                    // This is the timeout SQE.
+                    if (completion.result == .already) {
+                        log.debug("Already: {s}", .{@tagName(p.job)});
+                        continue :reap_loop;
+                    }
+
+                    // If the timeout has completed before the operation.
+                    // This is the acutal SQE.
+                    if (completion.result == .canceled) {
+                        log.debug("Canceled: {s}", .{@tagName(p.job)});
+                        continue :reap_loop;
+                    }
+
+                    // Timeout finished before operation.
+                    // This is a timeout SQE.
+                    if (completion.result == .timeout) {
+                        log.debug("Timed Out: {s}", .{@tagName(p.job)});
+                        if (p.job == .accept) {
+                            accept_queued = false;
+                        } else {
+                            if (comptime security == .tls) {
+                                const tls_ptr: *?TLS = &tls_pool[p.index];
+                                clean_tls(tls_ptr);
+                            }
+
+                            clean_connection(p, &provision_pool, z_config);
+                        }
+                        continue :reap_loop;
+                    }
+
                     switch (p.job) {
                         .accept => {
+                            log.info("connection accepted!", .{});
                             accept_queued = false;
                             const socket: Socket = completion.result.socket;
 
@@ -464,7 +509,11 @@ pub fn Server(
                                 @call(.auto, func, .{ provision, p_config, z_config, backend });
                             }
 
-                            _ = try backend.queue_recv(provision, provision.socket, buffer);
+                            _ = try backend.queue_recv(
+                                provision,
+                                provision.socket,
+                                buffer,
+                            );
                         },
 
                         .handshake => |inner| {
@@ -497,17 +546,29 @@ pub fn Server(
                                         switch (hstate) {
                                             .recv => |buf| {
                                                 log.debug("requeing recv in handshake", .{});
-                                                _ = try backend.queue_recv(p, p.socket, buf);
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
                                             },
                                             .send => |buf| {
                                                 log.debug("queueing send in handshake", .{});
                                                 p.job = .{ .handshake = .send };
-                                                _ = try backend.queue_send(p, p.socket, buf);
+                                                _ = try backend.queue_send(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
                                             },
                                             .complete => {
                                                 log.debug("handshake complete", .{});
                                                 p.job = .{ .recv = .{ .count = 0 } };
-                                                _ = try backend.queue_recv(p, p.socket, p.buffer);
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    p.buffer,
+                                                );
                                             },
                                         }
                                     },
@@ -526,16 +587,28 @@ pub fn Server(
                                             .recv => |buf| {
                                                 p.job = .{ .handshake = .recv };
                                                 log.debug("queuing recv in handshake", .{});
-                                                _ = try backend.queue_recv(p, p.socket, buf);
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
                                             },
                                             .send => |buf| {
                                                 log.debug("requeing send in handshake", .{});
-                                                _ = try backend.queue_send(p, p.socket, buf);
+                                                _ = try backend.queue_send(
+                                                    p,
+                                                    p.socket,
+                                                    buf,
+                                                );
                                             },
                                             .complete => {
                                                 log.debug("handshake complete", .{});
                                                 p.job = .{ .recv = .{ .count = 0 } };
-                                                _ = try backend.queue_recv(p, p.socket, p.buffer);
+                                                _ = try backend.queue_recv(
+                                                    p,
+                                                    p.socket,
+                                                    p.buffer,
+                                                );
                                             },
                                         }
                                     },
@@ -591,7 +664,11 @@ pub fn Server(
                                     return;
                                 },
                                 .recv => {
-                                    try backend.queue_recv(p, p.socket, p.buffer);
+                                    try backend.queue_recv(
+                                        p,
+                                        p.socket,
+                                        p.buffer,
+                                    );
                                 },
                                 .send => |*pslice| {
                                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
@@ -618,7 +695,11 @@ pub fn Server(
                                                 },
                                             };
 
-                                            try backend.queue_send(p, p.socket, encrypted_buffer);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                encrypted_buffer,
+                                            );
                                         },
                                         .plain => {
                                             p.job = .{
@@ -629,7 +710,11 @@ pub fn Server(
                                                     },
                                                 },
                                             };
-                                            try backend.queue_send(p, p.socket, plain_buffer);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                plain_buffer,
+                                            );
                                         },
                                     }
                                 },
@@ -667,7 +752,11 @@ pub fn Server(
                                             });
                                             p.recv_buffer.clearRetainingCapacity();
                                             p.job = .{ .recv = .{ .count = 0 } };
-                                            try backend.queue_recv(p, p.socket, p.buffer);
+                                            try backend.queue_recv(
+                                                p,
+                                                p.socket,
+                                                p.buffer,
+                                            );
                                         } else {
                                             // Queue a new chunk up for sending.
                                             log.debug(
@@ -694,7 +783,11 @@ pub fn Server(
                                             inner.encrypted = encrypted;
                                             inner.encrypted_count = 0;
 
-                                            try backend.queue_send(p, p.socket, inner.encrypted);
+                                            try backend.queue_send(
+                                                p,
+                                                p.socket,
+                                                inner.encrypted,
+                                            );
                                         }
                                     } else {
                                         log.debug(
@@ -703,7 +796,11 @@ pub fn Server(
                                         );
 
                                         const remainder = inner.encrypted[inner.encrypted_count..];
-                                        try backend.queue_send(p, p.socket, remainder);
+                                        try backend.queue_send(
+                                            p,
+                                            p.socket,
+                                            remainder,
+                                        );
                                     }
                                 },
                                 .plain => {
@@ -720,7 +817,11 @@ pub fn Server(
                                         });
                                         p.recv_buffer.clearRetainingCapacity();
                                         p.job = .{ .recv = .{ .count = 0 } };
-                                        try backend.queue_recv(p, p.socket, p.buffer);
+                                        try backend.queue_recv(
+                                            p,
+                                            p.socket,
+                                            p.buffer,
+                                        );
                                     } else {
                                         log.debug(
                                             "{d} - sending next chunk starting at index {d}",
@@ -737,7 +838,11 @@ pub fn Server(
                                             plain_buffer.len + inner.count,
                                         });
 
-                                        try backend.queue_send(p, p.socket, plain_buffer);
+                                        try backend.queue_send(
+                                            p,
+                                            p.socket,
+                                            plain_buffer,
+                                        );
                                     }
                                 },
                             }
@@ -776,10 +881,11 @@ pub fn Server(
             }
 
             var backend = blk: {
-                const options = .{
+                const options: AsyncOptions = .{
                     .root_async = null,
                     .in_thread = false,
                     .size_connections_max = self.config.size_connections_max,
+                    .ms_operation_max = 3000,
                 };
 
                 switch (comptime async_type) {
@@ -866,10 +972,11 @@ pub fn Server(
                                     thread_id: usize,
                                 ) void {
                                     var thread_backend = blk: {
-                                        const options = .{
+                                        const options: AsyncOptions = .{
                                             .root_async = p_backend,
                                             .in_thread = true,
                                             .size_connections_max = z_config.size_connections_max,
+                                            .ms_operation_max = 3000,
                                         };
 
                                         switch (comptime async_type) {

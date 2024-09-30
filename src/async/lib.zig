@@ -72,6 +72,9 @@ pub const AsyncOptions = struct {
     in_thread: bool = false,
     /// Maximum number of connections for this backend.
     size_connections_max: u16,
+    /// Maximum length of time before operation is timed out.
+    /// null if no timeout
+    ms_operation_max: ?u32,
 };
 
 pub const Async = struct {
