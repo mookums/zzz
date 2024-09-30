@@ -496,7 +496,7 @@ pub fn Server(
                                         continue :reap_loop;
                                     };
 
-                                    provision.job = .{ .handshake = .recv };
+                                    provision.job = .{ .handshake = .{ .state = .recv, .count = 0 } };
                                     buffer = recv_buf;
                                 },
                                 .plain => {
@@ -516,14 +516,15 @@ pub fn Server(
                             );
                         },
 
-                        .handshake => |inner| {
+                        .handshake => |*inner| {
                             assert(comptime security == .tls);
                             if (comptime security == .tls) {
                                 const tls_ptr: *?TLS = &tls_pool[p.index];
                                 assert(tls_ptr.* != null);
                                 log.debug("processing handshake", .{});
+                                inner.count += 1;
 
-                                if (completion.result.value < 0) {
+                                if (completion.result.value < 0 or inner.count >= 50) {
                                     clean_tls(tls_ptr);
                                     clean_connection(p, &provision_pool, z_config);
                                     continue :reap_loop;
@@ -531,7 +532,7 @@ pub fn Server(
 
                                 const length: usize = @intCast(completion.result.value);
 
-                                switch (inner) {
+                                switch (inner.state) {
                                     .recv => {
                                         // on recv, we want to read from socket and feed into tls engien
                                         const hstate = tls_ptr.*.?.continue_handshake(
@@ -554,7 +555,7 @@ pub fn Server(
                                             },
                                             .send => |buf| {
                                                 log.debug("queueing send in handshake", .{});
-                                                p.job = .{ .handshake = .send };
+                                                inner.state = .send;
                                                 _ = try backend.queue_send(
                                                     p,
                                                     p.socket,
@@ -585,7 +586,7 @@ pub fn Server(
 
                                         switch (hstate) {
                                             .recv => |buf| {
-                                                p.job = .{ .handshake = .recv };
+                                                inner.state = .recv;
                                                 log.debug("queuing recv in handshake", .{});
                                                 _ = try backend.queue_recv(
                                                     p,

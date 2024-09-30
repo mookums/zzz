@@ -19,7 +19,7 @@ pub const Job = union(enum) {
     read: struct { fd: std.posix.fd_t, count: u32 },
     write: struct { fd: std.posix.fd_t, count: u32 },
     accept,
-    handshake: enum { recv, send },
+    handshake: struct { state: enum { recv, send }, count: u32 },
     recv: struct { count: u32 },
     send: SendType,
     close,
