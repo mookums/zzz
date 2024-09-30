@@ -363,21 +363,21 @@ pub fn Server(
                     // If the operation has completed before the timeout.
                     // This is the timeout SQE.
                     if (completion.result == .already) {
-                        log.debug("Already: {s}", .{@tagName(p.job)});
+                        log.debug("{d} - Already: {s}", .{ p.index, @tagName(p.job) });
                         continue :reap_loop;
                     }
 
                     // If the timeout has completed before the operation.
                     // This is the acutal SQE.
                     if (completion.result == .canceled) {
-                        log.debug("Canceled: {s}", .{@tagName(p.job)});
+                        log.debug("{d} - Canceled: {s}", .{ p.index, @tagName(p.job) });
                         continue :reap_loop;
                     }
 
                     // Timeout finished before operation.
                     // This is a timeout SQE.
                     if (completion.result == .timeout) {
-                        log.debug("Timed Out: {s}", .{@tagName(p.job)});
+                        log.debug("{d} - Timed Out: {s}", .{ p.index, @tagName(p.job) });
                         if (p.job == .accept) {
                             accept_queued = false;
                         } else {
