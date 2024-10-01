@@ -6,8 +6,6 @@ pub const Completion = struct {
         canceled,
         /// If the request has timed out.
         timeout,
-        /// If the request finished before timeout.
-        already,
         /// If we have returned a socket.
         socket: std.posix.socket_t,
         /// If we have returned a value.

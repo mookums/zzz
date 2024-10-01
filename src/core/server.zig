@@ -269,10 +269,14 @@ pub fn Server(
             log.info("{d} - closing connection", .{provision.index});
             std.posix.close(provision.socket);
             switch (comptime builtin.target.os.tag) {
-                .windows => provision.socket = std.os.windows.ws2_32.INVALID_SOCKET,
-                else => provision.socket = -1,
+                .windows => {
+                    provision.socket = std.os.windows.ws2_32.INVALID_SOCKET;
+                },
+                else => {
+                    provision.socket = -1;
+                },
             }
-            provision.job = .accept;
+            provision.job = .closed;
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
@@ -335,7 +339,7 @@ pub fn Server(
             // Create and send the first Job.
             var first_provision = Provision{
                 .job = .accept,
-                .index = undefined,
+                .index = std.math.maxInt(usize),
                 .socket = undefined,
                 .buffer = undefined,
                 .recv_buffer = undefined,
@@ -360,17 +364,10 @@ pub fn Server(
                 reap_loop: for (completions[0..completions_count]) |completion| {
                     const p: *Provision = @ptrCast(@alignCast(completion.context));
 
-                    // If the operation has completed before the timeout.
-                    // This is the timeout SQE.
-                    if (completion.result == .already) {
-                        log.debug("{d} - Already: {s}", .{ p.index, @tagName(p.job) });
-                        continue :reap_loop;
-                    }
-
                     // If the timeout has completed before the operation.
-                    // This is the acutal SQE.
+                    // This is the actual SQE.
                     if (completion.result == .canceled) {
-                        log.debug("{d} - Canceled: {s}", .{ p.index, @tagName(p.job) });
+                        //log.debug("{d} - Canceled: {s}", .{ p.index, @tagName(p.job) });
                         continue :reap_loop;
                     }
 
@@ -392,8 +389,9 @@ pub fn Server(
                     }
 
                     switch (p.job) {
+                        .closed => continue :reap_loop,
+
                         .accept => {
-                            log.info("connection accepted!", .{});
                             accept_queued = false;
                             const socket: Socket = completion.result.socket;
 
@@ -424,6 +422,12 @@ pub fn Server(
                                 std.posix.close(socket);
                                 continue :reap_loop;
                             };
+
+                            log.info("connection accepted - {d}", .{borrowed.index});
+                            log.info(
+                                "empty provision slots: {d}",
+                                .{provision_pool.items.len - provision_pool.dirty.count()},
+                            );
 
                             switch (comptime Socket) {
                                 std.posix.socket_t => {
@@ -725,6 +729,7 @@ pub fn Server(
                         .send => |*send_type| {
                             log.debug("{d} - send triggered", .{p.index});
                             const send_count = completion.result.value;
+                            log.debug("{d} - send length: {d}", .{ p.index, completion.result.value });
 
                             if (send_count <= 0) {
                                 if (comptime security == .tls) {
@@ -886,7 +891,7 @@ pub fn Server(
                     .root_async = null,
                     .in_thread = false,
                     .size_connections_max = self.config.size_connections_max,
-                    .ms_operation_max = 3000,
+                    .ms_operation_max = self.config.ms_operation_max,
                 };
 
                 switch (comptime async_type) {
@@ -977,7 +982,7 @@ pub fn Server(
                                             .root_async = p_backend,
                                             .in_thread = true,
                                             .size_connections_max = z_config.size_connections_max,
-                                            .ms_operation_max = 3000,
+                                            .ms_operation_max = z_config.ms_operation_max,
                                         };
 
                                         switch (comptime async_type) {

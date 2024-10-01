@@ -15,6 +15,7 @@ pub const SendType = union(enum) {
 };
 
 pub const Job = union(enum) {
+    closed,
     open,
     read: struct { fd: std.posix.fd_t, count: u32 },
     write: struct { fd: std.posix.fd_t, count: u32 },

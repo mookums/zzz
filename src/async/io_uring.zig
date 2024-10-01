@@ -194,15 +194,27 @@ pub fn AsyncIoUring(comptime Provision: type) type {
                     const provision: *Provision = @ptrFromInt(@as(usize, cqes[i].user_data));
 
                     const result: Completion.Result = blk: {
-                        switch (-cqes[i].res) {
-                            @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
-                            @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
-                            @intFromEnum(std.os.linux.E.ALREADY) => break :blk .already,
-                            else => if (provision.job == .accept) {
+                        if (cqes[i].res >= 0) {
+                            if (provision.job == .accept) {
                                 break :blk .{ .socket = cqes[i].res };
                             } else {
                                 break :blk .{ .value = cqes[i].res };
-                            },
+                            }
+                        } else {
+                            switch (-cqes[i].res) {
+                                @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
+                                @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
+                                else => {
+                                    const err: std.os.linux.E = @enumFromInt(-cqes[i].res);
+                                    log.debug("{d} - other status on SQE: {s}", .{ provision.index, @tagName(err) });
+
+                                    if (provision.job == .accept) {
+                                        break :blk .{ .socket = cqes[i].res };
+                                    } else {
+                                        break :blk .{ .value = cqes[i].res };
+                                    }
+                                },
+                            }
                         }
                     };
 
@@ -233,15 +245,28 @@ pub fn AsyncIoUring(comptime Provision: type) type {
                     const provision: *Provision = @ptrFromInt(@as(usize, cqes[cqe_index].user_data));
 
                     const result: Completion.Result = blk: {
-                        switch (-cqes[cqe_index].res) {
-                            @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
-                            @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
-                            @intFromEnum(std.os.linux.E.ALREADY) => break :blk .already,
-                            else => if (provision.job == .accept) {
+                        if (cqes[cqe_index].res >= 0) {
+                            if (provision.job == .accept) {
                                 break :blk .{ .socket = cqes[cqe_index].res };
                             } else {
                                 break :blk .{ .value = cqes[cqe_index].res };
-                            },
+                            }
+                        } else {
+                            switch (-cqes[cqe_index].res) {
+                                @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
+                                @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
+                                else => {
+                                    // NOTE, why are we getting enoent here??
+                                    const err: std.os.linux.E = @enumFromInt(-cqes[cqe_index].res);
+                                    log.debug("{d} - other error on SQE: {s}", .{ provision.index, @tagName(err) });
+
+                                    if (provision.job == .accept) {
+                                        break :blk .{ .socket = cqes[cqe_index].res };
+                                    } else {
+                                        break :blk .{ .value = cqes[cqe_index].res };
+                                    }
+                                },
+                            }
                         }
                     };
 
