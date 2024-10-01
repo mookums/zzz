@@ -18,6 +18,7 @@ pub fn AsyncIoUring(comptime Provision: type) type {
         };
 
         inner: *std.os.linux.IoUring,
+        cqes: []std.os.linux.io_uring_cqe,
         timespec: ?std.os.linux.kernel_timespec = null,
 
         pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !Self {
@@ -75,12 +76,14 @@ pub fn AsyncIoUring(comptime Provision: type) type {
             return Self{
                 .inner = uring,
                 .timespec = timespec,
+                .cqes = try allocator.alloc(std.os.linux.io_uring_cqe, options.size_completions_reap_max),
             };
         }
 
         pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
             const uring: *Self = @ptrCast(@alignCast(self.runner));
             uring.inner.deinit();
+            allocator.free(uring.cqes);
             allocator.destroy(uring);
         }
 
@@ -174,110 +177,50 @@ pub fn AsyncIoUring(comptime Provision: type) type {
 
         pub fn reap(self: *Async) AsyncError![]Completion {
             const uring: *Self = @ptrCast(@alignCast(self.runner));
-            // NOTE: this can be dynamic and then we would just have to make a single call
-            // which would probably be better.
-            var cqes: [256]std.os.linux.io_uring_cqe = [_]std.os.linux.io_uring_cqe{undefined} ** 256;
-            var total_reaped: u64 = 0;
 
-            const min_length = @min(cqes.len, self.completions.len);
-            {
-                // only the first one blocks waiting for an initial set of completions.
-                const count = uring.inner.copy_cqes(cqes[0..min_length], 1) catch |e| switch (e) {
-                    // TODO: match error states.
-                    else => unreachable,
+            const min_length = @min(uring.cqes.len, self.completions.len);
+            const count = uring.inner.copy_cqes(uring.cqes[0..min_length], 1) catch |e| switch (e) {
+                // TODO: match error states.
+                else => unreachable,
+            };
+
+            for (uring.cqes[0..count], 0..) |cqe, i| {
+                const provision: *Provision = @ptrFromInt(@as(usize, cqe.user_data));
+
+                const result: Completion.Result = blk: {
+                    if (cqe.res >= 0) {
+                        if (provision.job == .accept) {
+                            break :blk .{ .socket = cqe.res };
+                        } else {
+                            break :blk .{ .value = cqe.res };
+                        }
+                    } else {
+                        switch (-cqe.res) {
+                            @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
+                            @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
+                            else => {
+                                log.debug("{d} - other status on SQE: {s}", .{
+                                    provision.index,
+                                    @tagName(@as(std.os.linux.E, @enumFromInt(-cqe.res))),
+                                });
+
+                                if (provision.job == .accept) {
+                                    break :blk .{ .socket = cqe.res };
+                                } else {
+                                    break :blk .{ .value = cqe.res };
+                                }
+                            },
+                        }
+                    }
                 };
 
-                total_reaped += count;
-
-                // Copy over the first one.
-                for (0..total_reaped) |i| {
-                    const provision: *Provision = @ptrFromInt(@as(usize, cqes[i].user_data));
-
-                    const result: Completion.Result = blk: {
-                        if (cqes[i].res >= 0) {
-                            if (provision.job == .accept) {
-                                break :blk .{ .socket = cqes[i].res };
-                            } else {
-                                break :blk .{ .value = cqes[i].res };
-                            }
-                        } else {
-                            switch (-cqes[i].res) {
-                                @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
-                                @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
-                                else => {
-                                    const err: std.os.linux.E = @enumFromInt(-cqes[i].res);
-                                    log.debug("{d} - other status on SQE: {s}", .{ provision.index, @tagName(err) });
-
-                                    if (provision.job == .accept) {
-                                        break :blk .{ .socket = cqes[i].res };
-                                    } else {
-                                        break :blk .{ .value = cqes[i].res };
-                                    }
-                                },
-                            }
-                        }
-                    };
-
-                    self.completions[i] = Completion{
-                        .result = result,
-                        .context = @ptrFromInt(@as(usize, @intCast(cqes[i].user_data))),
-                    };
-                }
-            }
-
-            while (total_reaped < self.completions.len) {
-                const start = total_reaped;
-                const remaining = self.completions.len - total_reaped;
-
-                const count = uring.inner.copy_cqes(cqes[0..remaining], 0) catch |e| switch (e) {
-                    // TODO: match error states.
-                    else => unreachable,
+                self.completions[i] = Completion{
+                    .result = result,
+                    .context = @ptrFromInt(@as(usize, @intCast(cqe.user_data))),
                 };
-
-                if (count == 0) {
-                    return self.completions[0..total_reaped];
-                }
-
-                total_reaped += count;
-
-                for (start..total_reaped) |i| {
-                    const cqe_index = i - start;
-                    const provision: *Provision = @ptrFromInt(@as(usize, cqes[cqe_index].user_data));
-
-                    const result: Completion.Result = blk: {
-                        if (cqes[cqe_index].res >= 0) {
-                            if (provision.job == .accept) {
-                                break :blk .{ .socket = cqes[cqe_index].res };
-                            } else {
-                                break :blk .{ .value = cqes[cqe_index].res };
-                            }
-                        } else {
-                            switch (-cqes[cqe_index].res) {
-                                @intFromEnum(std.os.linux.E.TIME) => break :blk .timeout,
-                                @intFromEnum(std.os.linux.E.CANCELED) => break :blk .canceled,
-                                else => {
-                                    // NOTE, why are we getting enoent here??
-                                    const err: std.os.linux.E = @enumFromInt(-cqes[cqe_index].res);
-                                    log.debug("{d} - other error on SQE: {s}", .{ provision.index, @tagName(err) });
-
-                                    if (provision.job == .accept) {
-                                        break :blk .{ .socket = cqes[cqe_index].res };
-                                    } else {
-                                        break :blk .{ .value = cqes[cqe_index].res };
-                                    }
-                                },
-                            }
-                        }
-                    };
-
-                    self.completions[i] = Completion{
-                        .result = result,
-                        .context = @ptrFromInt(@as(usize, @intCast(cqes[cqe_index].user_data))),
-                    };
-                }
             }
 
-            return self.completions[0..total_reaped];
+            return self.completions[0..count];
         }
 
         pub fn to_async(self: *Self) Async {

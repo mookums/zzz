@@ -893,6 +893,7 @@ pub fn Server(
                     .in_thread = false,
                     .size_connections_max = self.config.size_connections_max,
                     .ms_operation_max = self.config.ms_operation_max,
+                    .size_completions_reap_max = self.config.size_completions_reap_max,
                 };
 
                 switch (comptime async_type) {
@@ -984,6 +985,7 @@ pub fn Server(
                                             .in_thread = true,
                                             .size_connections_max = z_config.size_connections_max,
                                             .ms_operation_max = z_config.ms_operation_max,
+                                            .size_completions_reap_max = z_config.size_completions_reap_max,
                                         };
 
                                         switch (comptime async_type) {
