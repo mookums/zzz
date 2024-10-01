@@ -13,6 +13,7 @@ const ResponseOptions = struct {
 const CachedDate = struct {
     buffer: []u8,
     ts: i64,
+    index: usize,
 };
 
 pub const Response = struct {
@@ -29,6 +30,7 @@ pub const Response = struct {
             .headers = try Headers.init(allocator, options.num_headers_max),
             .cached_date = CachedDate{
                 .buffer = try allocator.alloc(u8, 32),
+                .index = 0,
                 .ts = 0,
             },
         };
@@ -106,10 +108,16 @@ pub const Response = struct {
             if (self.cached_date.ts != ts) {
                 const date = Date.init(ts).to_http_date();
                 const buf = try date.into_buf(self.cached_date.buffer);
-                self.cached_date = .{ .ts = ts, .buffer = buf };
+                self.cached_date = .{
+                    .ts = ts,
+                    .buffer = self.cached_date.buffer,
+                    .index = buf.len,
+                };
             }
+
+            assert(self.cached_date.index < self.cached_date.buffer.len);
             try writer.writeAll("Date: ");
-            try writer.writeAll(self.cached_date.buffer);
+            try writer.writeAll(self.cached_date.buffer[0..self.cached_date.index]);
             try writer.writeAll("\r\n");
         }
 

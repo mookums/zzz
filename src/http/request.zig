@@ -48,6 +48,10 @@ pub const Request = struct {
         var total_size: u32 = 0;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
 
+        if (lines.peek() == null) {
+            return HTTPError.MalformedRequest;
+        }
+
         var parsing_first_line = true;
         while (lines.next()) |line| {
             total_size += @intCast(line.len);
