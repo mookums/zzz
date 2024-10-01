@@ -423,8 +423,8 @@ pub fn Server(
                                 continue :reap_loop;
                             };
 
-                            log.info("connection accepted - {d}", .{borrowed.index});
-                            log.info(
+                            log.info("{d} - accepting connection", .{borrowed.index});
+                            log.debug(
                                 "empty provision slots: {d}",
                                 .{provision_pool.items.len - provision_pool.dirty.count()},
                             );
@@ -489,14 +489,14 @@ pub fn Server(
                                     assert(tls_ptr.* == null);
 
                                     tls_ptr.* = tls_ctx.create(socket) catch |e| {
-                                        log.debug("{d} - tls creation failed={any}", .{ provision.index, e });
+                                        log.err("{d} - tls creation failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
 
                                     const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                                         clean_tls(tls_ptr);
-                                        log.debug("{d} - tls reset failed={any}", .{ provision.index, e });
+                                        log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
                                         clean_connection(provision, &provision_pool, z_config);
                                         continue :reap_loop;
                                     };
@@ -544,7 +544,7 @@ pub fn Server(
                                             .{ .recv = @intCast(length) },
                                         ) catch |e| {
                                             clean_tls(tls_ptr);
-                                            log.debug("{d} - tls handshake on recv failed={any}", .{ p.index, e });
+                                            log.err("{d} - tls handshake on recv failed={any}", .{ p.index, e });
                                             clean_connection(p, &provision_pool, z_config);
                                             continue :reap_loop;
                                         };
@@ -584,7 +584,7 @@ pub fn Server(
                                             .{ .send = @intCast(length) },
                                         ) catch |e| {
                                             clean_tls(tls_ptr);
-                                            log.debug("{d} - tls handshake on send failed={any}", .{ p.index, e });
+                                            log.err("{d} - tls handshake on send failed={any}", .{ p.index, e });
                                             clean_connection(p, &provision_pool, z_config);
                                             continue :reap_loop;
                                         };
@@ -647,7 +647,7 @@ pub fn Server(
                                         assert(tls_ptr.* != null);
 
                                         break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
-                                            log.debug("{d} - decrypt failed: {any}", .{ p.index, e });
+                                            log.err("{d} - decrypt failed: {any}", .{ p.index, e });
                                             clean_tls(tls_ptr);
                                             clean_connection(p, &provision_pool, z_config);
                                             continue :reap_loop;
