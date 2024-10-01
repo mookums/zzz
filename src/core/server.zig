@@ -276,7 +276,7 @@ pub fn Server(
                     provision.socket = -1;
                 },
             }
-            provision.job = .closed;
+            provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
@@ -389,7 +389,7 @@ pub fn Server(
                     }
 
                     switch (p.job) {
-                        .closed => continue :reap_loop,
+                        .empty => continue :reap_loop,
 
                         .accept => {
                             accept_queued = false;
@@ -428,6 +428,7 @@ pub fn Server(
                                 "empty provision slots: {d}",
                                 .{provision_pool.items.len - provision_pool.dirty.count()},
                             );
+                            assert(borrowed.item.job == .empty);
 
                             switch (comptime Socket) {
                                 std.posix.socket_t => {

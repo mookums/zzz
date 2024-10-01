@@ -15,7 +15,10 @@ pub const SendType = union(enum) {
 };
 
 pub const Job = union(enum) {
-    closed,
+    /// This is the status for all jobs
+    /// that are empty. They do nothing and are
+    /// ready to be utilized.
+    empty,
     open,
     read: struct { fd: std.posix.fd_t, count: u32 },
     write: struct { fd: std.posix.fd_t, count: u32 },
