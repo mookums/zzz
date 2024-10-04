@@ -33,10 +33,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain, .epoll).init(.{
-        .allocator = allocator,
-        .ms_operation_max = 1000,
-    });
+    var server = http.Server(.plain, .auto).init(.{ .allocator = allocator });
     defer server.deinit();
 
     try server.bind(host, port);

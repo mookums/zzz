@@ -22,8 +22,7 @@ pub const AsyncEpoll = struct {
             recv: []u8,
             send: []const u8,
             close,
-            timer: struct { timer_fd: i32, index: usize },
-            cancel,
+            timer: struct { fd: i32, index: usize },
         },
         timer_index: ?usize = null,
         index: usize,
@@ -112,7 +111,7 @@ pub const AsyncEpoll = struct {
                 .index = timer_borrowed.index,
                 .fd = fd,
                 .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
             };
 
             var timer_event: std.os.linux.epoll_event = .{
@@ -163,7 +162,7 @@ pub const AsyncEpoll = struct {
                 .index = timer_borrowed.index,
                 .fd = fd,
                 .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
             };
 
             var timer_event: std.os.linux.epoll_event = .{
@@ -210,7 +209,7 @@ pub const AsyncEpoll = struct {
                 .index = timer_borrowed.index,
                 .fd = fd,
                 .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
             };
 
             var timer_event: std.os.linux.epoll_event = .{
@@ -252,23 +251,9 @@ pub const AsyncEpoll = struct {
         try std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_DEL, fd, null);
     }
 
-    fn is_fd_in_epoll(self: *Self, fd: std.posix.fd_t) bool {
-        var dummy_event = std.os.linux.epoll_event{
-            .events = 0,
-            .data = .{ .ptr = 0 },
-        };
-        std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_MOD, fd, &dummy_event) catch |err| {
-            return err != error.FileDescriptorNotRegistered;
-        };
-
-        return true;
-    }
-
     pub fn submit(self: *Async) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
         _ = epoll;
-
-        // If we have a timeout set, we need to add the job for all.
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
@@ -280,6 +265,7 @@ pub const AsyncEpoll = struct {
         while (reaped < 1) {
             const num_events = std.posix.epoll_wait(epoll.epoll_fd, epoll.events[0..max_events], timeout);
             log.debug("Number of Events: {d}", .{num_events});
+            log.debug("Number of slots in Pool: {d}", .{epoll.jobs.items.len - epoll.jobs.dirty.count()});
 
             for (epoll.events[0..num_events]) |event| {
                 const job_index = event.data.u64;
@@ -289,36 +275,37 @@ pub const AsyncEpoll = struct {
 
             epoll_loop: for (epoll.events[0..num_events]) |event| {
                 const job_index = event.data.u64;
-                var release_job = true;
-                defer if (release_job) epoll.jobs.release(job_index);
+                var job_complete = true;
                 assert(epoll.jobs.dirty.isSet(job_index));
-
                 const job = epoll.jobs.items[job_index];
 
-                if (epoll.timespec) |_| {
-                    if (job.type != .timer and job.type != .cancel) {
-                        assert(job.timer_index != null);
-                        const timer_job = &epoll.jobs.items[job.timer_index.?];
-                        assert(timer_job.type == .timer);
-                        const info = timer_job.type.timer;
-                        timer_job.fd = info.timer_fd;
-                        timer_job.type = .cancel;
+                defer if (job_complete) {
+                    epoll.jobs.release(job_index);
+
+                    if (epoll.timespec != null) {
+                        if (job.type != .timer) {
+                            assert(job.timer_index != null);
+                            const timer_job = &epoll.jobs.items[job.timer_index.?];
+                            assert(timer_job.type == .timer);
+                            const info = timer_job.type.timer;
+                            timer_job.fd = info.fd;
+
+                            // cancel the timeout.
+                            epoll.remove_fd(timer_job.fd) catch unreachable;
+                            std.posix.close(timer_job.fd);
+                            epoll.jobs.release(timer_job.index);
+                        }
                     }
-                }
+                };
 
                 const result: Completion.Result = blk: {
                     switch (job.type) {
-                        .cancel => {
-                            epoll.remove_fd(job.fd) catch unreachable;
-                            std.posix.close(job.fd);
-                            break :blk .canceled;
-                        },
                         .timer => |inner| {
                             assert(event.events & std.os.linux.EPOLL.IN != 0);
 
                             {
                                 var timer_buf = [_]u8{undefined} ** 8;
-                                _ = std.posix.read(inner.timer_fd, timer_buf[0..]) catch |e| {
+                                _ = std.posix.read(inner.fd, timer_buf[0..]) catch |e| {
                                     switch (e) {
                                         error.WouldBlock => unreachable,
                                         else => {},
@@ -329,11 +316,13 @@ pub const AsyncEpoll = struct {
                             const linked_job = &epoll.jobs.items[inner.index];
 
                             // remove and close timer.
-                            epoll.remove_fd(inner.timer_fd) catch unreachable;
-                            std.posix.close(inner.timer_fd);
+                            epoll.remove_fd(inner.fd) catch unreachable;
+                            std.posix.close(inner.fd);
 
+                            // cancel linked job
                             epoll.remove_fd(linked_job.fd) catch unreachable;
                             epoll.jobs.release(linked_job.index);
+
                             break :blk .timeout;
                         },
                         .accept => {
@@ -344,7 +333,7 @@ pub const AsyncEpoll = struct {
                                     // multiple threads are sitting on accept.
                                     // Any other case is unreachable.
                                     error.WouldBlock => {
-                                        release_job = false;
+                                        job_complete = false;
                                         continue :epoll_loop;
                                     },
                                     else => {
