@@ -22,8 +22,12 @@ pub const AsyncEpoll = struct {
             recv: []u8,
             send: []const u8,
             close,
+            timer: struct { timer_fd: i32, index: usize },
+            cancel,
         },
-        socket: std.posix.socket_t,
+        timer_index: ?usize = null,
+        index: usize,
+        fd: std.posix.fd_t,
         context: *anyopaque,
     };
 
@@ -32,10 +36,18 @@ pub const AsyncEpoll = struct {
         assert(epoll_fd > -1);
         errdefer std.posix.close(epoll_fd);
 
-        const events = try allocator.alloc(std.os.linux.epoll_event, options.size_connections_max);
+        const size = blk: {
+            if (options.ms_operation_max) |_| {
+                break :blk options.size_connections_max * 2;
+            } else {
+                break :blk options.size_connections_max;
+            }
+        };
+
+        const events = try allocator.alloc(std.os.linux.epoll_event, size);
         errdefer allocator.free(events);
 
-        const jobs = try Pool(Job).init(allocator, options.size_connections_max, null, null);
+        const jobs = try Pool(Job).init(allocator, size, null, null);
         errdefer jobs.deinit();
 
         const timespec: ?std.os.linux.itimerspec = blk: {
@@ -70,12 +82,13 @@ pub const AsyncEpoll = struct {
     pub fn queue_accept(
         self: *Async,
         context: *anyopaque,
-        socket: std.posix.socket_t,
+        fd: std.posix.fd_t,
     ) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
-        const borrowed = epoll.jobs.borrow(@intCast(socket)) catch return error.QueueFull;
+        const borrowed = epoll.jobs.borrow(@intCast(fd)) catch return error.QueueFull;
         borrowed.item.* = .{
-            .socket = socket,
+            .index = borrowed.index,
+            .fd = fd,
             .context = context,
             .type = .accept,
         };
@@ -85,19 +98,44 @@ pub const AsyncEpoll = struct {
             .data = .{ .u64 = borrowed.index },
         };
 
-        epoll.add_fd(socket, &event) catch unreachable;
+        epoll.add_fd(fd, &event) catch unreachable;
+
+        if (epoll.timespec) |*ts| {
+            const timer: i32 = @intCast(std.os.linux.timerfd_create(
+                std.os.linux.CLOCK.BOOTTIME,
+                .{ .NONBLOCK = true },
+            ));
+            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
+
+            const timer_borrowed = epoll.jobs.borrow(@intCast(timer)) catch return error.QueueFull;
+            timer_borrowed.item.* = .{
+                .index = timer_borrowed.index,
+                .fd = fd,
+                .context = context,
+                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+            };
+
+            var timer_event: std.os.linux.epoll_event = .{
+                .events = std.os.linux.EPOLL.IN,
+                .data = .{ .u64 = timer_borrowed.index },
+            };
+
+            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
+            epoll.add_fd(timer, &timer_event) catch unreachable;
+        }
     }
 
     pub fn queue_recv(
         self: *Async,
         context: *anyopaque,
-        socket: std.posix.socket_t,
+        fd: std.posix.fd_t,
         buffer: []u8,
     ) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
-        const borrowed = epoll.jobs.borrow(@intCast(socket)) catch return error.QueueFull;
+        const borrowed = epoll.jobs.borrow(@intCast(fd)) catch return error.QueueFull;
         borrowed.item.* = .{
-            .socket = socket,
+            .index = borrowed.index,
+            .fd = fd,
             .context = context,
             .type = .{ .recv = buffer },
         };
@@ -107,23 +145,48 @@ pub const AsyncEpoll = struct {
             .data = .{ .u64 = borrowed.index },
         };
 
-        epoll.add_fd(socket, &event) catch |e| {
+        epoll.add_fd(fd, &event) catch |e| {
             if (e == error.FileDescriptorAlreadyPresentInSet) {
-                epoll.mod_fd(socket, &event) catch unreachable;
+                epoll.mod_fd(fd, &event) catch unreachable;
             } else unreachable;
         };
+
+        if (epoll.timespec) |*ts| {
+            const timer: i32 = @intCast(std.os.linux.timerfd_create(
+                std.os.linux.CLOCK.BOOTTIME,
+                .{ .NONBLOCK = true },
+            ));
+            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
+
+            const timer_borrowed = epoll.jobs.borrow(@intCast(timer)) catch return error.QueueFull;
+            timer_borrowed.item.* = .{
+                .index = timer_borrowed.index,
+                .fd = fd,
+                .context = context,
+                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+            };
+
+            var timer_event: std.os.linux.epoll_event = .{
+                .events = std.os.linux.EPOLL.IN,
+                .data = .{ .u64 = timer_borrowed.index },
+            };
+
+            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
+            epoll.add_fd(timer, &timer_event) catch unreachable;
+        }
     }
 
     pub fn queue_send(
         self: *Async,
         context: *anyopaque,
-        socket: std.posix.socket_t,
+        fd: std.posix.fd_t,
         buffer: []const u8,
     ) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
-        const borrowed = epoll.jobs.borrow(@intCast(socket)) catch return error.QueueFull;
+        const borrowed = epoll.jobs.borrow(@intCast(fd)) catch return error.QueueFull;
         borrowed.item.* = .{
-            .socket = socket,
+            .index = borrowed.index,
+            .fd = fd,
             .context = context,
             .type = .{ .send = buffer },
         };
@@ -133,23 +196,48 @@ pub const AsyncEpoll = struct {
             .data = .{ .u64 = borrowed.index },
         };
 
-        epoll.mod_fd(socket, &event) catch unreachable;
+        epoll.mod_fd(fd, &event) catch unreachable;
+
+        if (epoll.timespec) |*ts| {
+            const timer: i32 = @intCast(std.os.linux.timerfd_create(
+                std.os.linux.CLOCK.BOOTTIME,
+                .{ .NONBLOCK = true },
+            ));
+            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
+
+            const timer_borrowed = epoll.jobs.borrow(@intCast(timer)) catch return error.QueueFull;
+            timer_borrowed.item.* = .{
+                .index = timer_borrowed.index,
+                .fd = fd,
+                .context = context,
+                .type = .{ .timer = .{ .index = borrowed.index, .timer_fd = timer } },
+            };
+
+            var timer_event: std.os.linux.epoll_event = .{
+                .events = std.os.linux.EPOLL.IN,
+                .data = .{ .u64 = timer_borrowed.index },
+            };
+
+            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
+            epoll.add_fd(timer, &timer_event) catch unreachable;
+        }
     }
 
     pub fn queue_close(
         self: *Async,
         context: *anyopaque,
-        socket: std.posix.socket_t,
+        fd: std.posix.fd_t,
     ) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
-        const borrowed = epoll.jobs.borrow(@intCast(socket)) catch return error.QueueFull;
+        const borrowed = epoll.jobs.borrow(@intCast(fd)) catch return error.QueueFull;
         borrowed.item.* = .{
-            .socket = socket,
+            .index = borrowed.index,
+            .fd = fd,
             .context = context,
             .type = .close,
         };
 
-        epoll.remove_fd(socket) catch unreachable;
+        epoll.remove_fd(fd) catch unreachable;
     }
 
     fn add_fd(self: *Self, fd: std.posix.fd_t, event: *std.os.linux.epoll_event) !void {
@@ -179,6 +267,8 @@ pub const AsyncEpoll = struct {
     pub fn submit(self: *Async) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
         _ = epoll;
+
+        // If we have a timeout set, we need to add the job for all.
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
@@ -191,6 +281,12 @@ pub const AsyncEpoll = struct {
             const num_events = std.posix.epoll_wait(epoll.epoll_fd, epoll.events[0..max_events], timeout);
             log.debug("Number of Events: {d}", .{num_events});
 
+            for (epoll.events[0..num_events]) |event| {
+                const job_index = event.data.u64;
+                const job = epoll.jobs.items[job_index];
+                log.debug("Event Job: {s}", .{@tagName(job.type)});
+            }
+
             epoll_loop: for (epoll.events[0..num_events]) |event| {
                 const job_index = event.data.u64;
                 var release_job = true;
@@ -199,11 +295,50 @@ pub const AsyncEpoll = struct {
 
                 const job = epoll.jobs.items[job_index];
 
+                if (epoll.timespec) |_| {
+                    if (job.type != .timer and job.type != .cancel) {
+                        assert(job.timer_index != null);
+                        const timer_job = &epoll.jobs.items[job.timer_index.?];
+                        assert(timer_job.type == .timer);
+                        const info = timer_job.type.timer;
+                        timer_job.fd = info.timer_fd;
+                        timer_job.type = .cancel;
+                    }
+                }
+
                 const result: Completion.Result = blk: {
                     switch (job.type) {
+                        .cancel => {
+                            epoll.remove_fd(job.fd) catch unreachable;
+                            std.posix.close(job.fd);
+                            break :blk .canceled;
+                        },
+                        .timer => |inner| {
+                            assert(event.events & std.os.linux.EPOLL.IN != 0);
+
+                            {
+                                var timer_buf = [_]u8{undefined} ** 8;
+                                _ = std.posix.read(inner.timer_fd, timer_buf[0..]) catch |e| {
+                                    switch (e) {
+                                        error.WouldBlock => unreachable,
+                                        else => {},
+                                    }
+                                };
+                            }
+
+                            const linked_job = &epoll.jobs.items[inner.index];
+
+                            // remove and close timer.
+                            epoll.remove_fd(inner.timer_fd) catch unreachable;
+                            std.posix.close(inner.timer_fd);
+
+                            epoll.remove_fd(linked_job.fd) catch unreachable;
+                            epoll.jobs.release(linked_job.index);
+                            break :blk .timeout;
+                        },
                         .accept => {
                             assert(event.events & std.os.linux.EPOLL.IN != 0);
-                            const accepted_socket = std.posix.accept(job.socket, null, null, 0) catch |e| {
+                            const accepted_fd = std.posix.accept(job.fd, null, null, 0) catch |e| {
                                 switch (e) {
                                     // This is only allowed here because
                                     // multiple threads are sitting on accept.
@@ -214,27 +349,27 @@ pub const AsyncEpoll = struct {
                                     },
                                     else => {
                                         log.debug("accept failed: {}", .{e});
-                                        epoll.remove_fd(job.socket) catch unreachable;
+                                        epoll.remove_fd(job.fd) catch unreachable;
                                         break :blk .{ .socket = -1 };
                                     },
                                 }
                             };
 
-                            epoll.remove_fd(job.socket) catch unreachable;
-                            break :blk .{ .socket = accepted_socket };
+                            epoll.remove_fd(job.fd) catch unreachable;
+                            break :blk .{ .socket = accepted_fd };
                         },
                         .recv => |buffer| {
                             assert(event.events & std.os.linux.EPOLL.IN != 0);
-                            const bytes_read = std.posix.recv(job.socket, buffer, 0) catch |e| {
+                            const bytes_read = std.posix.recv(job.fd, buffer, 0) catch |e| {
                                 switch (e) {
                                     error.WouldBlock => unreachable,
                                     error.ConnectionResetByPeer => {
-                                        epoll.remove_fd(job.socket) catch unreachable;
+                                        epoll.remove_fd(job.fd) catch unreachable;
                                         break :blk .{ .value = 0 };
                                     },
                                     else => {
                                         log.debug("recv failed: {}", .{e});
-                                        epoll.remove_fd(job.socket) catch unreachable;
+                                        epoll.remove_fd(job.fd) catch unreachable;
                                         break :blk .{ .value = -1 };
                                     },
                                 }
@@ -244,16 +379,16 @@ pub const AsyncEpoll = struct {
                         },
                         .send => |buffer| {
                             assert(event.events & std.os.linux.EPOLL.OUT != 0);
-                            const bytes_sent = std.posix.send(job.socket, buffer, 0) catch |e| {
+                            const bytes_sent = std.posix.send(job.fd, buffer, 0) catch |e| {
                                 switch (e) {
                                     error.WouldBlock => unreachable,
                                     error.ConnectionResetByPeer => {
-                                        epoll.remove_fd(job.socket) catch unreachable;
+                                        epoll.remove_fd(job.fd) catch unreachable;
                                         break :blk .{ .value = 0 };
                                     },
                                     else => {
                                         log.debug("send failed: {}", .{e});
-                                        epoll.remove_fd(job.socket) catch unreachable;
+                                        epoll.remove_fd(job.fd) catch unreachable;
                                         break :blk .{ .value = -1 };
                                     },
                                 }
@@ -262,7 +397,7 @@ pub const AsyncEpoll = struct {
                             break :blk .{ .value = @intCast(bytes_sent) };
                         },
                         .close => {
-                            std.posix.close(job.socket);
+                            std.posix.close(job.fd);
                             break :blk .{ .value = 0 };
                         },
                     }
