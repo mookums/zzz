@@ -395,29 +395,23 @@ pub fn Server(
                             accept_queued = false;
                             const socket: Socket = completion.result.socket;
 
-                            const index = blk: {
-                                switch (comptime builtin.target.os.tag) {
-                                    .windows => {
-                                        if (socket == std.os.windows.ws2_32.INVALID_SOCKET) {
-                                            log.err("socket accept failed", .{});
-                                            continue :reap_loop;
-                                        }
-
-                                        break :blk 0;
-                                    },
-                                    else => {
-                                        if (socket < 0) {
-                                            log.err("socket accept failed", .{});
-                                            continue :reap_loop;
-                                        }
-
-                                        break :blk socket;
-                                    },
-                                }
-                            };
+                            switch (comptime builtin.target.os.tag) {
+                                .windows => {
+                                    if (socket == std.os.windows.ws2_32.INVALID_SOCKET) {
+                                        log.err("socket accept failed", .{});
+                                        continue :reap_loop;
+                                    }
+                                },
+                                else => {
+                                    if (socket < 0) {
+                                        log.err("socket accept failed", .{});
+                                        continue :reap_loop;
+                                    }
+                                },
+                            }
 
                             // Borrow a provision from the pool otherwise close the socket.
-                            const borrowed = provision_pool.borrow(@intCast(index)) catch {
+                            const borrowed = provision_pool.borrow() catch {
                                 log.warn("out of provision pool entries", .{});
                                 std.posix.close(socket);
                                 continue :reap_loop;
