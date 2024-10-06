@@ -66,7 +66,7 @@ pub const AsyncEpoll = struct {
                 break :blk null;
             }
 
-            break :blk try Pool(std.posix.fd_t).init(allocator, size, struct {
+            break :blk try Pool(std.posix.fd_t).init(allocator, options.size_connections_max, struct {
                 fn init(items: []std.posix.fd_t, ctx: anytype) void {
                     _ = ctx;
                     for (items) |*item| {
