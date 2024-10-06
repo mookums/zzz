@@ -14,8 +14,7 @@ pub const AsyncEpoll = struct {
     epoll_fd: std.posix.fd_t,
     events: []std.os.linux.epoll_event,
     jobs: Pool(Job),
-    timers: ?Pool(std.posix.fd_t),
-    timespec: ?std.os.linux.itimerspec,
+    timeout: ?u32,
 
     const Job = struct {
         type: union(enum) {
@@ -23,9 +22,9 @@ pub const AsyncEpoll = struct {
             recv: []u8,
             send: []const u8,
             close,
-            timer: struct { fd: i32, index: usize },
         },
-        timer_index: ?usize = null,
+
+        time: i64,
         index: usize,
         fd: std.posix.fd_t,
         context: *anyopaque,
@@ -35,56 +34,14 @@ pub const AsyncEpoll = struct {
         const epoll_fd = try std.posix.epoll_create1(0);
         assert(epoll_fd > -1);
 
-        const size = blk: {
-            if (options.ms_operation_max) |_| {
-                break :blk options.size_connections_max * 2;
-            } else {
-                break :blk options.size_connections_max;
-            }
-        };
-
-        const events = try allocator.alloc(std.os.linux.epoll_event, size);
-
-        const jobs = try Pool(Job).init(allocator, size, null, null);
-
-        const timespec: ?std.os.linux.itimerspec = blk: {
-            if (options.ms_operation_max) |ms| {
-                break :blk std.os.linux.itimerspec{
-                    .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
-                    .it_value = .{
-                        .tv_sec = @divFloor(ms, std.time.ms_per_s),
-                        .tv_nsec = @rem(ms, std.time.ms_per_s) * std.time.ns_per_ms,
-                    },
-                };
-            } else {
-                break :blk null;
-            }
-        };
-
-        const timers: ?Pool(std.posix.fd_t) = blk: {
-            if (timespec == null) {
-                break :blk null;
-            }
-
-            break :blk try Pool(std.posix.fd_t).init(allocator, options.size_connections_max, struct {
-                fn init(items: []std.posix.fd_t, ctx: anytype) void {
-                    _ = ctx;
-                    for (items) |*item| {
-                        item.* = @intCast(std.os.linux.timerfd_create(
-                            std.os.linux.CLOCK.BOOTTIME,
-                            .{ .NONBLOCK = true },
-                        ));
-                    }
-                }
-            }.init, null);
-        };
+        const events = try allocator.alloc(std.os.linux.epoll_event, options.size_connections_max);
+        const jobs = try Pool(Job).init(allocator, options.size_connections_max, null, null);
 
         return Self{
             .epoll_fd = epoll_fd,
             .events = events,
             .jobs = jobs,
-            .timers = timers,
-            .timespec = timespec,
+            .timeout = options.ms_operation_max,
         };
     }
 
@@ -93,17 +50,6 @@ pub const AsyncEpoll = struct {
         std.posix.close(epoll.epoll_fd);
         allocator.free(epoll.events);
         epoll.jobs.deinit(null, null);
-
-        if (epoll.timers) |*timers| {
-            timers.deinit(struct {
-                fn deinit(items: []std.posix.fd_t, ctx: anytype) void {
-                    _ = ctx;
-                    for (items) |item| {
-                        std.posix.close(item);
-                    }
-                }
-            }.deinit, null);
-        }
     }
 
     pub fn queue_accept(
@@ -118,6 +64,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .accept,
+            .time = std.time.milliTimestamp(),
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -126,28 +73,6 @@ pub const AsyncEpoll = struct {
         };
 
         epoll.add_fd(fd, &event) catch unreachable;
-
-        if (epoll.timespec) |*ts| {
-            assert(epoll.timers != null);
-            const timer = epoll.timers.?.borrow_assume_unset(borrowed.index).item.*;
-            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
-
-            const timer_borrowed = epoll.jobs.borrow() catch return error.QueueFull;
-            timer_borrowed.item.* = .{
-                .index = timer_borrowed.index,
-                .fd = fd,
-                .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
-            };
-
-            var timer_event: std.os.linux.epoll_event = .{
-                .events = std.os.linux.EPOLL.IN,
-                .data = .{ .u64 = timer_borrowed.index },
-            };
-
-            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
-            epoll.add_fd(timer, &timer_event) catch unreachable;
-        }
     }
 
     pub fn queue_recv(
@@ -163,6 +88,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .{ .recv = buffer },
+            .time = std.time.milliTimestamp(),
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -175,28 +101,6 @@ pub const AsyncEpoll = struct {
                 epoll.mod_fd(fd, &event) catch unreachable;
             } else unreachable;
         };
-
-        if (epoll.timespec) |*ts| {
-            assert(epoll.timers != null);
-            const timer = epoll.timers.?.borrow_assume_unset(borrowed.index).item.*;
-            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
-
-            const timer_borrowed = epoll.jobs.borrow() catch return error.QueueFull;
-            timer_borrowed.item.* = .{
-                .index = timer_borrowed.index,
-                .fd = fd,
-                .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
-            };
-
-            var timer_event: std.os.linux.epoll_event = .{
-                .events = std.os.linux.EPOLL.IN,
-                .data = .{ .u64 = timer_borrowed.index },
-            };
-
-            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
-            epoll.add_fd(timer, &timer_event) catch unreachable;
-        }
     }
 
     pub fn queue_send(
@@ -212,6 +116,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .{ .send = buffer },
+            .time = std.time.milliTimestamp(),
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -220,28 +125,6 @@ pub const AsyncEpoll = struct {
         };
 
         epoll.mod_fd(fd, &event) catch unreachable;
-
-        if (epoll.timespec) |*ts| {
-            assert(epoll.timers != null);
-            const timer = epoll.timers.?.borrow_assume_unset(borrowed.index).item.*;
-            _ = std.os.linux.timerfd_settime(timer, .{}, ts, null);
-
-            const timer_borrowed = epoll.jobs.borrow() catch return error.QueueFull;
-            timer_borrowed.item.* = .{
-                .index = timer_borrowed.index,
-                .fd = fd,
-                .context = context,
-                .type = .{ .timer = .{ .index = borrowed.index, .fd = timer } },
-            };
-
-            var timer_event: std.os.linux.epoll_event = .{
-                .events = std.os.linux.EPOLL.IN,
-                .data = .{ .u64 = timer_borrowed.index },
-            };
-
-            epoll.jobs.items[borrowed.index].timer_index = timer_borrowed.index;
-            epoll.add_fd(timer, &timer_event) catch unreachable;
-        }
     }
 
     pub fn queue_close(
@@ -256,6 +139,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .close,
+            .time = std.time.milliTimestamp(),
         };
 
         epoll.remove_fd(fd) catch unreachable;
@@ -281,19 +165,13 @@ pub const AsyncEpoll = struct {
     pub fn reap(self: *Async) AsyncError![]Completion {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
         const max_events = @min(epoll.events.len, self.completions.len);
-        const timeout: i32 = -1;
+        //const timeout: i32 = if (epoll.timeout) |ms| @intCast(ms) else -1;
+        const timeout: i32 = 1;
         var reaped: usize = 0;
 
         while (reaped < 1) {
             const num_events = std.posix.epoll_wait(epoll.epoll_fd, epoll.events[0..max_events], timeout);
-            log.debug("Number of Events: {d}", .{num_events});
-            log.debug("Number of slots in Pool: {d}", .{epoll.jobs.items.len - epoll.jobs.dirty.count()});
-
-            for (epoll.events[0..num_events]) |event| {
-                const job_index = event.data.u64;
-                const job = epoll.jobs.items[job_index];
-                log.debug("Event Job: {s}", .{@tagName(job.type)});
-            }
+            const time = std.time.milliTimestamp();
 
             epoll_loop: for (epoll.events[0..num_events]) |event| {
                 const job_index = event.data.u64;
@@ -301,60 +179,10 @@ pub const AsyncEpoll = struct {
                 assert(epoll.jobs.dirty.isSet(job_index));
                 const job = epoll.jobs.items[job_index];
 
-                defer if (job_complete) {
-                    epoll.jobs.release(job_index);
-
-                    if (epoll.timespec != null) {
-                        if (job.type != .timer) {
-                            assert(job.timer_index != null);
-                            const timer_job = &epoll.jobs.items[job.timer_index.?];
-                            assert(timer_job.type == .timer);
-                            const info = timer_job.type.timer;
-                            timer_job.fd = info.fd;
-
-                            // cancel the timeout.
-                            epoll.remove_fd(timer_job.fd) catch unreachable;
-                            epoll.jobs.release(timer_job.index);
-
-                            const disarm_timespec: std.os.linux.itimerspec = .{
-                                .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
-                                .it_value = .{ .tv_sec = 0, .tv_nsec = 0 },
-                            };
-                            _ = std.os.linux.timerfd_settime(timer_job.fd, .{}, &disarm_timespec, null);
-
-                            assert(epoll.timers != null);
-                            epoll.timers.?.release(job_index);
-                        }
-                    }
-                };
+                defer if (job_complete) epoll.jobs.release(job_index);
 
                 const result: Completion.Result = blk: {
                     switch (job.type) {
-                        .timer => |timer_job| {
-                            assert(event.events & std.os.linux.EPOLL.IN != 0);
-
-                            {
-                                var timer_buf = [_]u8{undefined} ** 8;
-                                _ = std.posix.read(timer_job.fd, timer_buf[0..]) catch |e| {
-                                    switch (e) {
-                                        error.WouldBlock => unreachable,
-                                        else => {},
-                                    }
-                                };
-                            }
-
-                            // remove timer.
-                            epoll.remove_fd(timer_job.fd) catch unreachable;
-
-                            // cancel linked job
-                            const linked_job = &epoll.jobs.items[timer_job.index];
-                            epoll.remove_fd(linked_job.fd) catch unreachable;
-                            epoll.jobs.release(linked_job.index);
-                            assert(epoll.timers != null);
-                            epoll.timers.?.release(linked_job.index);
-
-                            break :blk .timeout;
-                        },
                         .accept => {
                             assert(event.events & std.os.linux.EPOLL.IN != 0);
                             const accepted_fd = std.posix.accept(job.fd, null, null, 0) catch |e| {
@@ -426,7 +254,27 @@ pub const AsyncEpoll = struct {
                     .result = result,
                     .context = job.context,
                 };
+
                 reaped += 1;
+            }
+
+            if (epoll.timeout) |timeout_ms| {
+                var iter = epoll.jobs.iterator();
+                while (iter.next()) |job| {
+                    if (reaped >= self.completions.len) break;
+
+                    if (time >= job.time + timeout_ms) {
+                        epoll.remove_fd(job.fd) catch unreachable;
+                        epoll.jobs.release(job.index);
+
+                        self.completions[reaped] = .{
+                            .result = .timeout,
+                            .context = job.context,
+                        };
+
+                        reaped += 1;
+                    }
+                }
             }
         }
 
