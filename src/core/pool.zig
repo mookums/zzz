@@ -206,8 +206,8 @@ test "Pool Iterator" {
 
     var iter = int_pool.iterator();
     while (iter.next()) |item| {
-        try testing.expect(int_pool.dirty.isSet(item));
-        int_pool.release(item);
+        try testing.expect(int_pool.dirty.isSet(item.*));
+        int_pool.release(item.*);
     }
 
     try testing.expect(int_pool.empty());
