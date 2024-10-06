@@ -14,9 +14,9 @@ pub fn Pool(comptime T: type) type {
             items: []T,
             inner: std.DynamicBitSet.Iterator(.{}),
 
-            pub fn next(self: *Iterator) ?T {
+            pub fn next(self: *Iterator) ?*T {
                 const index = self.inner.next() orelse return null;
-                return self.items[index];
+                return &self.items[index];
             }
         };
 

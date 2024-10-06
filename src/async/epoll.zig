@@ -64,7 +64,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .accept,
-            .time = std.time.milliTimestamp(),
+            .time = 0,
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -88,7 +88,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .{ .recv = buffer },
-            .time = std.time.milliTimestamp(),
+            .time = 0,
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -116,7 +116,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .{ .send = buffer },
-            .time = std.time.milliTimestamp(),
+            .time = 0,
         };
 
         var event: std.os.linux.epoll_event = .{
@@ -139,7 +139,7 @@ pub const AsyncEpoll = struct {
             .fd = fd,
             .context = context,
             .type = .close,
-            .time = std.time.milliTimestamp(),
+            .time = 0,
         };
 
         epoll.remove_fd(fd) catch unreachable;
@@ -159,19 +159,24 @@ pub const AsyncEpoll = struct {
 
     pub fn submit(self: *Async) AsyncError!void {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
-        _ = epoll;
+
+        if (epoll.timeout) |_| {
+            const ms = std.time.milliTimestamp();
+            var iter = epoll.jobs.iterator();
+            while (iter.next()) |job| {
+                job.time = ms;
+            }
+        }
     }
 
     pub fn reap(self: *Async) AsyncError![]Completion {
         const epoll: *Self = @ptrCast(@alignCast(self.runner));
         const max_events = @min(epoll.events.len, self.completions.len);
-        //const timeout: i32 = if (epoll.timeout) |ms| @intCast(ms) else -1;
-        const timeout: i32 = 1;
+        const timeout: i32 = if (epoll.timeout) |_| 1 else -1;
         var reaped: usize = 0;
 
         while (reaped < 1) {
             const num_events = std.posix.epoll_wait(epoll.epoll_fd, epoll.events[0..max_events], timeout);
-            const time = std.time.milliTimestamp();
 
             epoll_loop: for (epoll.events[0..num_events]) |event| {
                 const job_index = event.data.u64;
@@ -259,6 +264,8 @@ pub const AsyncEpoll = struct {
             }
 
             if (epoll.timeout) |timeout_ms| {
+                const time = std.time.milliTimestamp();
+
                 var iter = epoll.jobs.iterator();
                 while (iter.next()) |job| {
                     if (reaped >= self.completions.len) break;
