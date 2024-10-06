@@ -85,16 +85,11 @@ pub fn Pool(comptime T: type) type {
             if (self.full()) {
                 return error.Full;
             }
-            // Linear probing if the first fails.
-            // This ensures we end up using the whole Pool.
-            for (0..self.items.len) |i| {
-                if (!self.dirty.isSet(i)) {
-                    self.dirty.set(i);
-                    return .{ .index = i, .item = self.get_ptr(i) };
-                }
-            }
 
-            unreachable;
+            var iter = self.dirty.iterator(.{ .kind = .unset });
+            const index = iter.next() orelse unreachable;
+            self.dirty.set(index);
+            return .{ .index = index, .item = self.get_ptr(index) };
         }
 
         /// Attempts to borrow at the given index.

@@ -33,9 +33,11 @@ pub const Pseudoslice = struct {
                 // Across both buffers
                 const first_len = self.first.len - start;
                 const second_len = clamped_end - self.first.len;
-                std.mem.copyForwards(u8, self.shared[0..first_len], self.first[start..]);
-                std.mem.copyForwards(u8, self.shared[first_len..], self.second[0..second_len]);
-                return self.shared[0..(first_len + second_len)];
+                const total_len = first_len + second_len;
+
+                // isn't first already in this buffer?
+                @memcpy(self.shared[first_len..total_len], self.second[0..second_len]);
+                return self.shared[0..total_len];
             }
         }
 

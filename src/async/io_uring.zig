@@ -84,7 +84,7 @@ pub fn AsyncIoUring(comptime Provision: type) type {
             const uring: *Self = @ptrCast(@alignCast(self.runner));
             uring.inner.deinit();
             allocator.free(uring.cqes);
-            allocator.destroy(uring);
+            allocator.destroy(uring.inner);
         }
 
         pub fn queue_accept(
