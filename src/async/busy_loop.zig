@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");
 const Completion = @import("completion.zig").Completion;
 
@@ -18,21 +19,20 @@ pub const AsyncBusyLoop = struct {
         },
         socket: std.posix.socket_t,
         context: *anyopaque,
-        time: i64,
+        time: ?i64,
     };
 
-    inner: std.ArrayList(Job),
+    inner: std.ArrayListUnmanaged(Job),
     timeout: ?u32,
 
     pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !AsyncBusyLoop {
-        const list = try std.ArrayList(Job).initCapacity(allocator, options.size_connections_max);
+        const list = try std.ArrayListUnmanaged(Job).initCapacity(allocator, options.size_connections_max);
         return AsyncBusyLoop{ .inner = list, .timeout = options.ms_operation_max };
     }
 
     pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
-        _ = allocator;
         const loop: *AsyncBusyLoop = @ptrCast(@alignCast(self.runner));
-        loop.inner.deinit();
+        loop.inner.deinit(allocator);
     }
 
     pub fn queue_accept(
@@ -45,7 +45,7 @@ pub const AsyncBusyLoop = struct {
             .type = .accept,
             .socket = socket,
             .context = ctx,
-            .time = 0,
+            .time = null,
         });
     }
 
@@ -60,7 +60,7 @@ pub const AsyncBusyLoop = struct {
             .type = .{ .recv = buffer },
             .socket = socket,
             .context = ctx,
-            .time = 0,
+            .time = null,
         });
     }
 
@@ -75,7 +75,7 @@ pub const AsyncBusyLoop = struct {
             .type = .{ .send = buffer },
             .socket = socket,
             .context = ctx,
-            .time = 0,
+            .time = null,
         });
     }
 
@@ -89,7 +89,7 @@ pub const AsyncBusyLoop = struct {
             .type = .close,
             .socket = socket,
             .context = ctx,
-            .time = 0,
+            .time = null,
         });
     }
 
@@ -98,7 +98,7 @@ pub const AsyncBusyLoop = struct {
         if (loop.timeout) |_| {
             const ms = std.time.milliTimestamp();
             for (loop.inner.items) |*job| {
-                job.time = ms;
+                if (job.time == null) job.time = ms;
             }
         }
     }
@@ -110,13 +110,15 @@ pub const AsyncBusyLoop = struct {
         while (reaped < 1) {
             var i: usize = 0;
 
-            const ms = std.time.milliTimestamp();
+            const time = std.time.milliTimestamp();
             while (i < loop.inner.items.len and reaped < self.completions.len) : (i += 1) {
                 const job = loop.inner.items[i];
 
                 // Handle timeouts first.
-                if (loop.timeout) |timeout| {
-                    if (ms - job.time > timeout) {
+                if (loop.timeout) |timeout_ms| {
+                    assert(job.time != null);
+
+                    if (time >= job.time.? + timeout_ms) {
                         const com_ptr = &self.completions[reaped];
                         com_ptr.result = .timeout;
                         com_ptr.context = job.context;
