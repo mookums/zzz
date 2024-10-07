@@ -3,7 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const panic = std.debug.panic;
-const log = std.log.scoped(.@"zzz/server/http");
+const log = std.log.scoped(.@"zzz/http/server");
 
 const Async = @import("../async/lib.zig").Async;
 const AsyncType = @import("../async//lib.zig").AsyncType;

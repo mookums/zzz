@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log.scoped(.@"zzz/request");
+const log = std.log.scoped(.@"zzz/http/request");
 const assert = std.debug.assert;
 
 const Headers = @import("lib.zig").Headers;

@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const log = std.log.scoped(.pseudoslice);
+const log = std.log.scoped(.@"zzz/core/pseudoslice");
 
 // The Pseudoslice will basically stitch together two different buffers, using
 // a third provided buffer as the output.
