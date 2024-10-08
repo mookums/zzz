@@ -517,7 +517,8 @@ pub const TLS = struct {
         self.buffer.deinit();
     }
 
-    pub fn accept(self: *TLS) !void {
+    // This will initalize the handshake and returns the first buffer to queue a recv into.
+    pub fn start_handshake(self: *TLS) ![]u8 {
         const engine = &self.context.eng;
         bearssl.br_ssl_engine_set_buffer(engine, self.iobuf.ptr, self.iobuf.len, 1);
 
@@ -532,84 +533,110 @@ pub const TLS = struct {
         if (reset_status <= 0) {
             return error.ServerResetFailed;
         }
-
-        var cycle_count: u32 = 0;
-        while (cycle_count < 50) : (cycle_count += 1) {
-            const last_error = bearssl.br_ssl_engine_last_error(engine);
-            log.debug("cycle {d} - last error | {d}", .{ cycle_count, last_error });
-            if (last_error != 0) {
-                log.debug("cycle {d} - handshake failed | {s}", .{
-                    cycle_count,
-                    fmt_bearssl_error(last_error),
-                });
-                return error.HandshakeFailed;
-            }
-
-            const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("cycle {d} - engine state | {any}", .{ cycle_count, state });
-
-            if ((state & bearssl.BR_SSL_CLOSED) != 0) {
-                return error.HandshakeFailed;
-            }
-
-            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
-                log.debug("cycle {d} - handshake complete!", .{cycle_count});
-                return;
-            }
-
-            if ((state & bearssl.BR_SSL_SENDREC) != 0) {
-                var length: usize = undefined;
-                const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
-                log.debug("cycle {d} - send buffer: address={*}, length={d}", .{ cycle_count, buf, length });
-                if (length == 0) {
-                    continue;
-                }
-
-                const sent = blk: while (true) {
-                    break :blk std.posix.send(self.socket, buf[0..length], 0) catch |e| {
-                        switch (e) {
-                            error.WouldBlock => continue,
-                            else => return error.HandshakeFailed,
-                        }
-                    };
-                };
-
-                log.debug("cycle {d} - total sent: {d}", .{ cycle_count, sent });
-
-                bearssl.br_ssl_engine_sendrec_ack(engine, sent);
-                bearssl.br_ssl_engine_flush(engine, 0);
-                continue;
-            }
-
-            if ((state & bearssl.BR_SSL_RECVREC) != 0) {
-                var length: usize = undefined;
-                const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
-                log.debug("cycle {d} - recv buffer: address={*}, length={d}", .{ cycle_count, buf, length });
-                if (length == 0) {
-                    continue;
-                }
-
-                const read = blk: while (true) {
-                    break :blk std.posix.recv(self.socket, buf[0..length], 0) catch |e| {
-                        switch (e) {
-                            error.WouldBlock => continue,
-                            else => return error.HandshakeFailed,
-                        }
-                    };
-                };
-
-                log.debug("cycle {d} - total read: {d}", .{ cycle_count, read });
-
-                bearssl.br_ssl_engine_recvrec_ack(engine, read);
-                continue;
-            }
-
-            if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
-                return error.UnexpectedState;
-            }
+        const last_error = bearssl.br_ssl_engine_last_error(engine);
+        if (last_error != 0) {
+            log.debug("handshake failed | {s}", .{
+                fmt_bearssl_error(last_error),
+            });
+            return error.HandshakeFailed;
         }
 
-        return error.HandshakeTimeout;
+        const state = bearssl.br_ssl_engine_current_state(engine);
+
+        if ((state & bearssl.BR_SSL_CLOSED) != 0) {
+            return error.HandshakeFailed;
+        }
+
+        if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
+            return error.UnexpectedState;
+        }
+
+        if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
+            return error.UnexpectedState;
+        }
+
+        if ((state & bearssl.BR_SSL_SENDREC) != 0) {
+            return error.UnexpectedState;
+        }
+
+        var length: usize = undefined;
+        const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
+        return buf[0..length];
+    }
+
+    pub const HandshakeInput = union(enum) {
+        // this is the length of the recv to ack.
+        recv: u32,
+        // this is the length of the send to ack.
+        send: u32,
+    };
+
+    const HandshakeState = union(enum) {
+        // this is the buffer we want to queue_recv into.
+        recv: []u8,
+        // this is the buffer we want to queue_send from.
+        send: []u8,
+        // this is when we get to escape.
+        complete,
+    };
+
+    // each step of the handshake goes through this func
+    pub fn continue_handshake(self: *TLS, input: HandshakeInput) !HandshakeState {
+        const engine = &self.context.eng;
+        const last_error = bearssl.br_ssl_engine_last_error(engine);
+        if (last_error != 0) {
+            log.debug("handshake failed | {s}", .{
+                fmt_bearssl_error(last_error),
+            });
+            return error.HandshakeFailed;
+        }
+
+        const state = bearssl.br_ssl_engine_current_state(engine);
+
+        if ((state & bearssl.BR_SSL_CLOSED) != 0) {
+            return error.HandshakeFailed;
+        }
+
+        if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
+            return error.UnexpectedState;
+        }
+
+        if ((state & bearssl.BR_SSL_RECVAPP) != 0) {
+            return error.UnexpectedState;
+        }
+
+        switch (input) {
+            .recv => |inner| {
+                bearssl.br_ssl_engine_recvrec_ack(engine, inner);
+            },
+            .send => |inner| {
+                bearssl.br_ssl_engine_sendrec_ack(engine, inner);
+            },
+        }
+
+        const after_state = bearssl.br_ssl_engine_current_state(engine);
+        const action: HandshakeState = blk: {
+            if ((after_state & bearssl.BR_SSL_SENDAPP) != 0) break :blk .complete;
+
+            if ((after_state & bearssl.BR_SSL_SENDREC) != 0) {
+                var length: usize = 0;
+                const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
+                log.debug("send rec buffer: address={*}, length={d}", .{ buf, length });
+                break :blk .{ .send = buf[0..length] };
+            }
+
+            if ((after_state & bearssl.BR_SSL_RECVREC) != 0) {
+                var length: usize = 0;
+                const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
+                log.debug("recv rec buffer: address={*}, length={d}", .{ buf, length });
+                break :blk .{ .recv = buf[0..length] };
+            }
+
+            return error.UnexpectedState;
+        };
+
+        log.debug("next action: {s}", .{@tagName(action)});
+        return action;
     }
 
     pub fn decrypt(self: *TLS, encrypted: []const u8) ![]const u8 {

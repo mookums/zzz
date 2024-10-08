@@ -5,6 +5,7 @@ const log = std.log.scoped(.@"examples/custom");
 
 const Async = zzz.Async;
 const AsyncError = zzz.AsyncError;
+const AsyncOptions = zzz.AsyncOptions;
 const Completion = zzz.Completion;
 
 const CustomJob = union(enum) {
@@ -16,10 +17,17 @@ const CustomJob = union(enum) {
 pub const CustomAsync = struct {
     inner: *std.ArrayList(CustomJob),
 
-    pub fn init(list: *std.ArrayList(CustomJob)) CustomAsync {
-        return CustomAsync{
-            .inner = list,
-        };
+    pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !CustomAsync {
+        const list = try allocator.create(std.ArrayList(CustomJob));
+        list.* = try std.ArrayList(CustomJob).initCapacity(allocator, options.size_connections_max);
+
+        return CustomAsync{ .inner = list };
+    }
+
+    pub fn deinit(self: *Async, allocator: std.mem.Allocator) void {
+        const list: *std.ArrayList(CustomJob) = @ptrCast(@alignCast(self.runner));
+        list.deinit();
+        allocator.destroy(list);
     }
 
     pub fn queue_accept(self: *Async, ctx: *anyopaque, socket: std.posix.socket_t) AsyncError!void {
@@ -127,6 +135,7 @@ pub const CustomAsync = struct {
     pub fn to_async(self: *CustomAsync) Async {
         return Async{
             .runner = self.inner,
+            ._deinit = deinit,
             ._queue_accept = queue_accept,
             ._queue_recv = queue_recv,
             ._queue_send = queue_send,
@@ -164,14 +173,8 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var list = std.ArrayList(CustomJob).initCapacity(allocator, 256) catch unreachable;
-    defer list.deinit();
-
-    var backend = CustomAsync.init(&list);
-
-    var server = http.Server(.plain).init(
+    var server = http.Server(.plain, .{ .custom = CustomAsync }).init(
         .{ .allocator = allocator },
-        .{ .custom = backend.to_async() },
     );
     defer server.deinit();
 

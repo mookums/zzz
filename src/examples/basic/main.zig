@@ -33,7 +33,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{ .allocator = allocator }, null);
+    var server = http.Server(.plain, .auto).init(.{ .allocator = allocator });
     defer server.deinit();
 
     try server.bind(host, port);

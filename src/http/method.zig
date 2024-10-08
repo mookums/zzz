@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log.scoped(.@"zzz/method");
+const log = std.log.scoped(.@"zzz/http/method");
 
 pub const Method = enum {
     GET,

@@ -53,10 +53,10 @@ pub fn main() !void {
     try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
     try router.serve_route("/hi/%s", http.Route.init().get(hi_handler));
 
-    var server = http.Server(.plain).init(.{
+    var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
         .threading = .{ .multi_threaded = .auto },
-    }, null);
+    });
     defer server.deinit();
 
     try server.bind(host, port);

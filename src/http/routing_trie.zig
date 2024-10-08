@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const log = std.log.scoped(.@"zzz/routing_trie");
+const log = std.log.scoped(.@"zzz/http/routing_trie");
 
 const CaseStringMap = @import("case_string_map.zig").CaseStringMap;
 const Route = @import("lib.zig").Route;

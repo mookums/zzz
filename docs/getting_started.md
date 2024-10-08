@@ -3,7 +3,7 @@ zzz is a networking framework that allows for modularity and flexibility in desi
 
 For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP.
 
-`zig fetch --save https://github.com/mookums/zzz/archive/main.tar.gz`
+`zig fetch --save git+https://github.com/mookums/zzz#main`
 
 ## Hello, World!
 We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `src/examples/basic` directory.
@@ -42,9 +42,9 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{
+    var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
-    }, null);
+    });
     defer server.deinit();
 
     try server.bind(host, port);

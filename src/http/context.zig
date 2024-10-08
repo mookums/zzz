@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log.scoped(.@"zzz/context");
+const log = std.log.scoped(.@"zzz/http/context");
 
 const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
