@@ -12,7 +12,6 @@ pub fn AsyncIoUring(comptime Provision: type) type {
         const Self = @This();
         const base_flags = blk: {
             var flags = std.os.linux.IORING_SETUP_COOP_TASKRUN;
-            flags |= std.os.linux.IORING_SETUP_DEFER_TASKRUN;
             flags |= std.os.linux.IORING_SETUP_SINGLE_ISSUER;
             break :blk flags;
         };
