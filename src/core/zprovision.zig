@@ -17,6 +17,7 @@ pub fn ZProvision(comptime ProtocolData: type) type {
 
         pub fn init_hook(provisions: []Self, ctx: anytype) void {
             for (provisions) |*provision| {
+                provision.job = .empty;
                 provision.socket = undefined;
                 provision.data = undefined;
                 // Create Buffer

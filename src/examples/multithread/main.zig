@@ -83,10 +83,10 @@ pub fn main() !void {
     try router.serve_route("/redirect", http.Route.init().get(redir_handler));
     try router.serve_route("/post", http.Route.init().post(post_handler));
 
-    var server = http.Server(.plain).init(.{
+    var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
         .threading = .{ .multi_threaded = .auto },
-    }, null);
+    });
     defer server.deinit();
 
     try server.bind(host, port);

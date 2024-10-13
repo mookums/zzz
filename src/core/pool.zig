@@ -3,13 +3,23 @@ const assert = std.debug.assert;
 
 fn Borrow(comptime T: type) type {
     return struct {
-        index: u64,
+        index: usize,
         item: *T,
     };
 }
 
 pub fn Pool(comptime T: type) type {
     return struct {
+        const Iterator = struct {
+            items: []T,
+            inner: std.DynamicBitSet.Iterator(.{}),
+
+            pub fn next(self: *Iterator) ?*T {
+                const index = self.inner.next() orelse return null;
+                return &self.items[index];
+            }
+        };
+
         const Self = @This();
         allocator: std.mem.Allocator,
         // Buffer for the Pool.
@@ -67,43 +77,43 @@ pub fn Pool(comptime T: type) type {
             return self.dirty.count() == self.items.len;
         }
 
-        // The id is supposed to be a unique identification for
-        // this element. It gets hashed and used to find an empty element.
-        //
-        // Returns a tuple of the index into the pool and a pointer to the item.
-        // Returns null otherwise.
-        pub fn borrow(self: *Self, id: u32) !Borrow(T) {
+        /// Linearly probes for an available slot in the pool.
+        ///
+        /// Returns a tuple of the index into the pool and a pointer to the item.
+        /// Returns null otherwise.
+        pub fn borrow(self: *Self) !Borrow(T) {
             if (self.full()) {
                 return error.Full;
             }
 
-            const bytes = std.mem.toBytes(id)[0..];
-            const hash = @mod(std.hash.Wyhash.hash(0, bytes), self.items.len);
-
-            if (!self.dirty.isSet(@intCast(hash))) {
-                self.dirty.set(@intCast(hash));
-                return Borrow(T){ .index = hash, .item = self.get_ptr(@intCast(hash)) };
-            }
-
-            // Linear probing if the first fails.
-            // This ensures we end up using the whole Pool.
-            for (0..self.items.len) |i| {
-                const index = @mod(hash + i, self.items.len);
-
-                if (!self.dirty.isSet(@intCast(index))) {
-                    self.dirty.set(@intCast(index));
-                    return Borrow(T){ .index = index, .item = self.get_ptr(@intCast(index)) };
-                }
-            }
-
-            unreachable;
+            var iter = self.dirty.iterator(.{ .kind = .unset });
+            const index = iter.next() orelse unreachable;
+            self.dirty.set(index);
+            return .{ .index = index, .item = self.get_ptr(index) };
         }
 
-        // Releases the item with the given index back to the Pool.
-        // Asserts that the given index was borrowed.
+        /// Attempts to borrow at the given index.
+        /// Asserts that it is an available slot.
+        pub fn borrow_assume_unset(self: *Self, index: usize) Borrow(T) {
+            assert(!self.full());
+            assert(!self.dirty.isSet(index));
+
+            self.dirty.set(index);
+            return .{ .index = index, .item = self.get_ptr(index) };
+        }
+
+        /// Releases the item with the given index back to the Pool.
+        /// Asserts that the given index was borrowed.
         pub fn release(self: *Self, index: usize) void {
             assert(self.dirty.isSet(index));
             self.dirty.unset(index);
+        }
+
+        /// Returns an iterator over the taken values in the Pool.
+        pub fn iterator(self: *Self) Iterator {
+            const iter = self.dirty.iterator(.{});
+            const items = self.items;
+            return .{ .inner = iter, .items = items };
         }
     };
 }
@@ -174,8 +184,26 @@ test "Pool Borrowing" {
     }.init_hook, .{});
     defer byte_pool.deinit(null, null);
 
-    for (0..1024) |i| {
-        const x = try byte_pool.borrow(@intCast(i));
+    for (0..1024) |_| {
+        const x = try byte_pool.borrow();
         try testing.expectEqual(3, x.item.*);
     }
+}
+
+test "Pool Iterator" {
+    var int_pool = try Pool(usize).init(testing.allocator, 1024, null, null);
+    defer int_pool.deinit(null, null);
+
+    for (0..(1024 / 2)) |_| {
+        const borrowed = try int_pool.borrow();
+        borrowed.item.* = borrowed.index;
+    }
+
+    var iter = int_pool.iterator();
+    while (iter.next()) |item| {
+        try testing.expect(int_pool.dirty.isSet(item.*));
+        int_pool.release(item.*);
+    }
+
+    try testing.expect(int_pool.empty());
 }
