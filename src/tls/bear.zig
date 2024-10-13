@@ -4,8 +4,6 @@ const log = std.log.scoped(.@"zzz/tls/bearssl");
 
 const TLSFileOptions = @import("lib.zig").TLSFileOptions;
 
-const Socket = @import("../core/socket.zig").Socket;
-
 const bearssl = @cImport({
     @cInclude("bearssl.h");
 });
@@ -210,7 +208,7 @@ pub const TLSContext = struct {
         return self;
     }
 
-    pub fn create(self: TLSContext, socket: Socket) !TLS {
+    pub fn create(self: TLSContext, socket: std.posix.socket_t) !TLS {
         var tls = TLS.init(.{
             .allocator = self.parent_allocator,
             .socket = socket,
@@ -474,7 +472,7 @@ fn do_sign(
 
 const TLSOptions = struct {
     allocator: std.mem.Allocator,
-    socket: Socket,
+    socket: std.posix.socket_t,
     context: bearssl.br_ssl_server_context,
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
@@ -489,7 +487,7 @@ const policy_vtable = bearssl.br_ssl_server_policy_class{
 
 pub const TLS = struct {
     allocator: std.mem.Allocator,
-    socket: Socket,
+    socket: std.posix.socket_t,
     context: bearssl.br_ssl_server_context,
     iobuf: []u8,
     buffer: std.ArrayList(u8),

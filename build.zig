@@ -4,6 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zzz = b.addModule("zzz", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const tardy = b.dependency("tardy", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("tardy");
+
+    zzz.addImport("tardy", tardy);
+
     const bearssl = b.dependency("bearssl", .{
         .target = target,
         .optimize = optimize,
@@ -13,22 +26,16 @@ pub fn build(b: *std.Build) void {
         .BR_BE_UNALIGNED = false,
     }).artifact("bearssl");
 
-    const zzz = b.addModule("zzz", .{
-        .root_source_file = b.path("src/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     zzz.linkLibrary(bearssl);
 
-    addExample(b, "basic", false, target, optimize, zzz);
-    addExample(b, "custom", false, target, optimize, zzz);
-    addExample(b, "tls", true, target, optimize, zzz);
-    addExample(b, "minram", false, target, optimize, zzz);
-    addExample(b, "fs", false, target, optimize, zzz);
-    addExample(b, "multithread", false, target, optimize, zzz);
-    addExample(b, "benchmark", false, target, optimize, zzz);
-    addExample(b, "valgrind", true, target, optimize, zzz);
+    add_example(b, "basic", false, target, optimize, zzz);
+    add_example(b, "custom", false, target, optimize, zzz);
+    add_example(b, "tls", true, target, optimize, zzz);
+    add_example(b, "minram", false, target, optimize, zzz);
+    add_example(b, "fs", false, target, optimize, zzz);
+    add_example(b, "multithread", false, target, optimize, zzz);
+    add_example(b, "benchmark", false, target, optimize, zzz);
+    add_example(b, "valgrind", true, target, optimize, zzz);
 
     const tests = b.addTest(.{
         .name = "tests",
@@ -42,7 +49,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_test.step);
 }
 
-fn addExample(
+fn add_example(
     b: *std.Build,
     name: []const u8,
     link_libc: bool,
@@ -55,6 +62,7 @@ fn addExample(
         .root_source_file = b.path(b.fmt("src/examples/{s}/main.zig", .{name})),
         .target = target,
         .optimize = optimize,
+        .strip = false,
     });
 
     if (link_libc) {
