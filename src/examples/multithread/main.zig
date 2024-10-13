@@ -85,7 +85,7 @@ pub fn main() !void {
 
     var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
-        .threading = .{ .multi_threaded = .auto },
+        .threading = .auto,
     });
     defer server.deinit();
 

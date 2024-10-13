@@ -61,7 +61,7 @@ pub fn main() !void {
         .auto,
     ).init(.{
         .allocator = allocator,
-        .threading = .single_threaded,
+        .threading = .single,
     });
     defer server.deinit();
 
