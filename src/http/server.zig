@@ -7,9 +7,9 @@ const log = std.log.scoped(.@"zzz/http/server");
 
 const Runtime = @import("tardy").Runtime;
 const AsyncIOType = @import("tardy").AsyncIOType;
+const Pool = @import("tardy").Pool;
 
 const Job = @import("../core/lib.zig").Job;
-const Pool = @import("../core/lib.zig").Pool;
 const Pseudoslice = @import("../core/lib.zig").Pseudoslice;
 
 const HTTPError = @import("lib.zig").HTTPError;

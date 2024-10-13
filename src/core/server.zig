@@ -4,13 +4,13 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/server");
 
 const Pseudoslice = @import("pseudoslice.zig").Pseudoslice;
-const Pool = @import("pool.zig").Pool;
 const ZProvision = @import("zprovision.zig").ZProvision;
 
 const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
 const TLSContext = @import("../tls/lib.zig").TLSContext;
 const TLS = @import("../tls/lib.zig").TLS;
 
+const Pool = @import("tardy").Pool;
 pub const Threading = @import("tardy").TardyThreading;
 pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
