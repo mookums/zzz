@@ -36,7 +36,7 @@ pub const ProtocolData = struct {
     response: Response,
     stage: Stage,
 
-    pub fn init(allocator: std.mem.Allocator, config: ProtocolConfig) ProtocolData {
+    pub fn init(allocator: std.mem.Allocator, config: *const ProtocolConfig) ProtocolData {
         var queries = QueryMap.init(allocator);
         queries.ensureTotalCapacity(config.num_queries_max) catch unreachable;
 

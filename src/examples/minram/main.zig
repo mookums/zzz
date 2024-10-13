@@ -35,6 +35,7 @@ pub fn main() !void {
 
     var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
+        .threading = .single,
         .size_backlog = 32,
         .size_connections_max = 16,
         .size_connection_arena_retain = 64,
