@@ -39,6 +39,7 @@ pub fn main() !void {
         .size_backlog = 32,
         .size_connections_max = 16,
         .size_connection_arena_retain = 64,
+        .size_completions_reap_max = 8,
         .size_socket_buffer = 512,
     });
 
