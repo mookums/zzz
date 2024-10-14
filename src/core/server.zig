@@ -139,7 +139,7 @@ pub fn Server(
                     .allocator = config.allocator,
                     .threading = config.threading,
                     .size_tasks_max = config.size_connections_max,
-                    .size_aio_jobs_max = config.size_connections_max + 2,
+                    .size_aio_jobs_max = config.size_connections_max,
                     .size_aio_reap_max = config.size_completions_reap_max,
                 }) catch unreachable,
                 .config = config,
@@ -808,12 +808,16 @@ pub fn Server(
                         socket.* = try params.zzz.create_socket();
                         try std.posix.listen(socket.*, params.zzz.config.size_backlog);
 
+                        // use the arena here.
+                        var pool_params = params.zzz.config;
+                        pool_params.allocator = alloc;
+
                         const provision_pool = try alloc.create(Pool(Provision));
                         provision_pool.* = try Pool(Provision).init(
                             alloc,
                             params.zzz.config.size_connections_max,
                             Provision.init_hook,
-                            params.zzz.config,
+                            pool_params,
                         );
 
                         for (provision_pool.items) |*provision| {
