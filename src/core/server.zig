@@ -138,6 +138,9 @@ pub fn Server(
                 .tardy = Tardy.init(.{
                     .allocator = config.allocator,
                     .threading = config.threading,
+                    .size_tasks_max = config.size_connections_max + 1,
+                    .size_aio_jobs_max = config.size_connections_max + 1,
+                    .size_aio_reap_max = config.size_completions_reap_max,
                 }) catch unreachable,
                 .config = config,
                 .socket = null,
