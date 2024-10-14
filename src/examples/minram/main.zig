@@ -7,9 +7,9 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var buffer = [_]u8{undefined} ** (1024 * 200);
-    var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
-    const allocator = fba.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .enable_memory_limit = true }){ .requested_memory_limit = 1024 * 300 };
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
