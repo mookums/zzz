@@ -117,7 +117,7 @@ pub fn Server(
         allocator: std.mem.Allocator,
         tardy: Tardy,
         config: zzzConfig,
-        socket: ?std.posix.socket_t = null,
+        addr: std.net.Address,
         tls_ctx: TLSContextType,
 
         pub fn init(config: zzzConfig) Self {
@@ -138,24 +138,17 @@ pub fn Server(
                 .tardy = Tardy.init(.{
                     .allocator = config.allocator,
                     .threading = config.threading,
-                    .size_tasks_max = config.size_connections_max + 1,
-                    .size_aio_jobs_max = config.size_connections_max + 1,
+                    .size_tasks_max = config.size_connections_max,
+                    .size_aio_jobs_max = config.size_connections_max + 2,
                     .size_aio_reap_max = config.size_completions_reap_max,
                 }) catch unreachable,
                 .config = config,
-                .socket = null,
+                .addr = undefined,
                 .tls_ctx = tls_ctx,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.socket) |socket| {
-                switch (comptime std.posix.socket_t) {
-                    std.posix.socket_t => std.posix.close(socket),
-                    else => unreachable,
-                }
-            }
-
             if (comptime security == .tls) {
                 self.tls_ctx.deinit();
             }
@@ -163,30 +156,11 @@ pub fn Server(
             self.tardy.deinit();
         }
 
-        /// If you are using a custom implementation that does NOT rely
-        /// on TCP/IP, you can SKIP calling this method and just set the
-        /// socket value yourself.
-        ///
-        /// This is only allowed on certain targets that do not have TCP/IP
-        /// support.
-        pub fn bind(self: *Self, host: []const u8, port: u16) !void {
-            // This currently only works on POSIX systems.
-            // We should fix this.
-            assert(host.len > 0);
-            assert(port > 0);
-            defer assert(self.socket != null);
-
-            const addr = blk: {
-                switch (comptime builtin.os.tag) {
-                    .windows => break :blk try std.net.Address.parseIp(host, port),
-                    else => break :blk try std.net.Address.resolveIp(host, port),
-                }
-            };
-
+        fn create_socket(self: *const Self) !std.posix.socket_t {
             const socket: std.posix.socket_t = blk: {
                 const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
                 break :blk try std.posix.socket(
-                    addr.any.family,
+                    self.addr.any.family,
                     socket_flags,
                     std.posix.IPPROTO.TCP,
                 );
@@ -217,27 +191,47 @@ pub fn Server(
                 );
             }
 
-            try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
-            self.socket = socket;
+            try std.posix.bind(socket, &self.addr.any, self.addr.getOsSockLen());
+            return socket;
         }
 
-        /// Cleans up the TLS instance.
-        fn clean_tls(tls_ptr: *?TLS) void {
-            defer tls_ptr.* = null;
+        /// If you are using a custom implementation that does NOT rely
+        /// on TCP/IP, you can SKIP calling this method and just set the
+        /// socket value yourself.
+        ///
+        /// This is only allowed on certain targets that do not have TCP/IP
+        /// support.
+        pub fn bind(self: *Self, host: []const u8, port: u16) !void {
+            assert(host.len > 0);
+            assert(port > 0);
 
-            assert(tls_ptr.* != null);
-            tls_ptr.*.?.deinit();
+            self.addr = blk: {
+                switch (comptime builtin.os.tag) {
+                    .windows => break :blk try std.net.Address.parseIp(host, port),
+                    else => break :blk try std.net.Address.resolveIp(host, port),
+                }
+            };
         }
 
-        fn clean_connection(
-            provision: *Provision,
-            provision_pool: *Pool(Provision),
-            config: *const zzzConfig,
-        ) void {
-            defer provision_pool.release(provision.index);
+        fn close_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
+            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+            const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
+            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
+            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+            const tls_slice: []TLSType = @as(
+                [*]TLSType,
+                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+            )[0..z_config.size_connections_max];
 
             log.info("{d} - closing connection", .{provision.index});
-            std.posix.close(provision.socket);
+
+            if (comptime security == .tls) {
+                const tls_ptr: *?TLS = &tls_slice[provision.index];
+                assert(tls_ptr.* != null);
+                tls_ptr.*.?.deinit();
+                tls_ptr.* = null;
+            }
+
             switch (comptime builtin.target.os.tag) {
                 .windows => {
                     provision.socket = std.os.windows.ws2_32.INVALID_SOCKET;
@@ -247,21 +241,19 @@ pub fn Server(
                 },
             }
             provision.job = .empty;
-            _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
+            _ = provision.arena.reset(.{ .retain_with_limit = z_config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
-        }
+            pool.release(provision.index);
 
-        fn accept_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(ctx.?));
-            const child_socket = t.result.?.socket;
-
-            // requeue the accept.
             try rt.net.accept(.{
                 .socket = server_socket.*,
                 .func = accept_task,
-                .ctx = server_socket,
             });
+        }
+
+        fn accept_task(rt: *Runtime, t: *const Task, _: ?*anyopaque) !void {
+            const child_socket = t.result.?.socket;
 
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
@@ -287,11 +279,7 @@ pub fn Server(
             }
 
             // Borrow a provision from the pool otherwise close the socket.
-            const borrowed = pool.borrow_hint(t.index) catch {
-                log.warn("out of provision pool entries", .{});
-                std.posix.close(child_socket);
-                return error.PoolFull;
-            };
+            const borrowed = try pool.borrow_hint(t.index);
 
             log.info("{d} - accepting connection", .{borrowed.index});
             log.debug(
@@ -362,14 +350,21 @@ pub fn Server(
 
                     tls_ptr.* = tls_ctx.create(child_socket) catch |e| {
                         log.err("{d} - tls creation failed={any}", .{ provision.index, e });
-                        clean_connection(provision, pool, z_config);
+                        try rt.net.close(.{
+                            .fd = provision.socket,
+                            .func = close_task,
+                            .ctx = provision,
+                        });
                         return error.TLSCreationFailed;
                     };
 
                     const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
-                        clean_tls(tls_ptr);
                         log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
-                        clean_connection(provision, pool, z_config);
+                        try rt.net.close(.{
+                            .fd = provision.socket,
+                            .func = close_task,
+                            .ctx = provision,
+                        });
                         return error.TLSStartHandshakeFailed;
                     };
 
@@ -397,7 +392,6 @@ pub fn Server(
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
-            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const p_config: *const ProtocolConfig = @ptrCast(@alignCast(rt.storage.get("p_config").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
             const tls_slice: []TLSType = @as(
@@ -410,12 +404,11 @@ pub fn Server(
 
             // If the socket is closed.
             if (length <= 0) {
-                if (comptime security == .tls) {
-                    const tls_ptr: *?TLS = &tls_slice[p.index];
-                    clean_tls(tls_ptr);
-                }
-
-                clean_connection(p, pool, z_config);
+                try rt.net.close(.{
+                    .fd = p.socket,
+                    .func = close_task,
+                    .ctx = p,
+                });
                 return;
             }
 
@@ -433,8 +426,11 @@ pub fn Server(
 
                         break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
                             log.err("{d} - decrypt failed: {any}", .{ p.index, e });
-                            clean_tls(tls_ptr);
-                            clean_connection(p, pool, z_config);
+                            try rt.net.close(.{
+                                .fd = p.socket,
+                                .func = close_task,
+                                .ctx = p,
+                            });
                             return error.TLSDecryptFailed;
                         };
                     },
@@ -467,8 +463,11 @@ pub fn Server(
 
                             const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
                                 log.err("{d} - encrypt failed: {any}", .{ p.index, e });
-                                clean_tls(tls_ptr);
-                                clean_connection(p, pool, z_config);
+                                try rt.net.close(.{
+                                    .fd = p.socket,
+                                    .func = close_task,
+                                    .ctx = p,
+                                });
                                 return error.TLSEncryptFailed;
                             };
 
@@ -518,7 +517,6 @@ pub fn Server(
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
-            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
             const tls_slice: []TLSType = @as(
                 [*]TLSType,
@@ -536,8 +534,11 @@ pub fn Server(
 
                 if (length < 0 or handshake_job.count >= 50) {
                     log.debug("handshake taken too many cycles", .{});
-                    clean_tls(tls_ptr);
-                    clean_connection(p, pool, z_config);
+                    try rt.net.close(.{
+                        .fd = p.socket,
+                        .func = close_task,
+                        .ctx = p,
+                    });
                     return error.TLSHandshakeTooManyCycles;
                 }
 
@@ -549,9 +550,12 @@ pub fn Server(
                         const hstate = tls_ptr.*.?.continue_handshake(
                             .{ .recv = @intCast(hs_length) },
                         ) catch |e| {
-                            clean_tls(tls_ptr);
                             log.err("{d} - tls handshake on recv failed={any}", .{ p.index, e });
-                            clean_connection(p, pool, z_config);
+                            try rt.net.close(.{
+                                .fd = p.socket,
+                                .func = close_task,
+                                .ctx = p,
+                            });
                             return error.TLSHandshakeRecvFailed;
                         };
 
@@ -592,9 +596,12 @@ pub fn Server(
                         const hstate = tls_ptr.*.?.continue_handshake(
                             .{ .send = @intCast(hs_length) },
                         ) catch |e| {
-                            clean_tls(tls_ptr);
                             log.err("{d} - tls handshake on send failed={any}", .{ p.index, e });
-                            clean_connection(p, pool, z_config);
+                            try rt.net.close(.{
+                                .fd = p.socket,
+                                .func = close_task,
+                                .ctx = p,
+                            });
                             return error.TLSHandshakeSendFailed;
                         };
 
@@ -638,7 +645,6 @@ pub fn Server(
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
-            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
             const tls_slice: []TLSType = @as(
                 [*]TLSType,
@@ -647,13 +653,11 @@ pub fn Server(
 
             // If the socket is closed.
             if (length <= 0) {
-                // clean up
-                if (comptime security == .tls) {
-                    const tls_ptr: *?TLS = &tls_slice[p.index];
-                    clean_tls(tls_ptr);
-                }
-
-                clean_connection(p, pool, z_config);
+                try rt.net.close(.{
+                    .fd = p.socket,
+                    .func = close_task,
+                    .ctx = p,
+                });
                 return;
             }
 
@@ -707,8 +711,11 @@ pub fn Server(
 
                             const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch |e| {
                                 log.err("{d} - encrypt failed: {any}", .{ p.index, e });
-                                clean_tls(tls_ptr);
-                                clean_connection(p, pool, z_config);
+                                try rt.net.close(.{
+                                    .fd = p.socket,
+                                    .func = close_task,
+                                    .ctx = p,
+                                });
                                 return error.TLSEncryptFailed;
                             };
 
@@ -786,33 +793,27 @@ pub fn Server(
         }
 
         pub fn listen(self: *Self, protocol_config: ProtocolConfig) !void {
-            assert(self.socket != null);
-            const server_socket = self.socket.?;
-
             log.info("server listening...", .{});
             log.info("security mode: {s}", .{@tagName(security)});
 
-            try std.posix.listen(server_socket, self.config.size_backlog);
-
             const EntryParams = struct {
-                socket: *const std.posix.socket_t,
-                z_config: *const zzzConfig,
+                zzz: *const Self,
                 p_config: *const ProtocolConfig,
-                tls_ctx: *TLSContextType,
             };
 
             try self.tardy.entry(
                 struct {
                     fn rt_start(rt: *Runtime, alloc: std.mem.Allocator, params: EntryParams) !void {
-                        // this happens within each thread or runtime.
-                        // this is where we need to do all of the initalization basically
+                        const socket = try alloc.create(std.posix.socket_t);
+                        socket.* = try params.zzz.create_socket();
+                        try std.posix.listen(socket.*, params.zzz.config.size_backlog);
 
                         const provision_pool = try alloc.create(Pool(Provision));
                         provision_pool.* = try Pool(Provision).init(
                             alloc,
-                            params.z_config.size_connections_max,
+                            params.zzz.config.size_connections_max,
                             Provision.init_hook,
-                            params.z_config,
+                            params.zzz.config,
                         );
 
                         for (provision_pool.items) |*provision| {
@@ -820,11 +821,11 @@ pub fn Server(
                         }
 
                         try rt.storage.put("provision_pool", provision_pool);
-                        try rt.storage.put("z_config", @constCast(params.z_config));
+                        try rt.storage.put("z_config", @constCast(&params.zzz.config));
                         try rt.storage.put("p_config", @constCast(params.p_config));
 
                         const tls_slice_size = switch (comptime security) {
-                            .tls => params.z_config.size_connections_max,
+                            .tls => params.zzz.config.size_connections_max,
                             .plain => 0,
                         };
                         const tls_slice = try alloc.alloc(TLSType, tls_slice_size);
@@ -833,21 +834,22 @@ pub fn Server(
                                 tls.* = null;
                             }
                         }
-                        try rt.storage.put("tls_slice", tls_slice.ptr);
-                        try rt.storage.put("tls_ctx", params.tls_ctx);
 
-                        try rt.net.accept(.{
-                            .socket = params.socket.*,
-                            .func = accept_task,
-                            .ctx = @constCast(params.socket),
-                        });
+                        try rt.storage.put("server_socket", socket);
+                        try rt.storage.put("tls_slice", tls_slice.ptr);
+                        try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
+
+                        for (0..params.zzz.config.size_connections_max) |_| {
+                            try rt.net.accept(.{
+                                .socket = socket.*,
+                                .func = accept_task,
+                            });
+                        }
                     }
                 }.rt_start,
                 EntryParams{
-                    .socket = &server_socket,
-                    .z_config = &self.config,
+                    .zzz = self,
                     .p_config = &protocol_config,
-                    .tls_ctx = &self.tls_ctx,
                 },
             );
         }
