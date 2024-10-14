@@ -249,27 +249,16 @@ pub fn Server(
             provision.recv_buffer.clearRetainingCapacity();
         }
 
-        fn accept_predicate(rt: *Runtime, _: *Task) bool {
-            const provision_pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
-            const remaining = provision_pool.items.len - provision_pool.dirty.count();
-            // We need atleast three because the new tasks and the underlying task.
-            return remaining > 2;
-        }
-
-        fn accept_task(rt: *Runtime, t: *Task, ctx: ?*anyopaque) void {
+        fn accept_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(ctx.?));
             const child_socket = t.result.?.socket;
 
             // requeue the accept.
-            rt.net.accept(.{
+            try rt.net.accept(.{
                 .socket = server_socket.*,
                 .func = accept_task,
                 .ctx = server_socket,
-                .predicate = accept_predicate,
-            }) catch {
-                rt.stop();
-                return;
-            };
+            });
 
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
@@ -283,13 +272,13 @@ pub fn Server(
                 .windows => {
                     if (child_socket == std.os.windows.ws2_32.INVALID_SOCKET) {
                         log.err("socket accept failed", .{});
-                        return;
+                        return error.AcceptFailed;
                     }
                 },
                 else => {
                     if (child_socket <= 0) {
                         log.err("socket accept failed", .{});
-                        return;
+                        return error.AcceptFailed;
                     }
                 },
             }
@@ -298,7 +287,7 @@ pub fn Server(
             const borrowed = pool.borrow_hint(t.index) catch {
                 log.warn("out of provision pool entries", .{});
                 std.posix.close(child_socket);
-                return;
+                return error.PoolFull;
             };
 
             log.info("{d} - accepting connection", .{borrowed.index});
@@ -313,19 +302,19 @@ pub fn Server(
                     // Disable Nagle's
                     if (comptime builtin.os.tag.isDarwin()) {
                         // system.TCP is weird on MacOS.
-                        std.posix.setsockopt(
+                        try std.posix.setsockopt(
                             child_socket,
                             std.posix.IPPROTO.TCP,
                             1,
                             &std.mem.toBytes(@as(c_int, 1)),
-                        ) catch unreachable;
+                        );
                     } else {
-                        std.posix.setsockopt(
+                        try std.posix.setsockopt(
                             child_socket,
                             std.posix.IPPROTO.TCP,
                             std.posix.TCP.NODELAY,
                             &std.mem.toBytes(@as(c_int, 1)),
-                        ) catch unreachable;
+                        );
                     }
 
                     // Set non-blocking.
@@ -339,18 +328,18 @@ pub fn Server(
                             );
                         },
                         else => {
-                            const current_flags = std.posix.fcntl(
+                            const current_flags = try std.posix.fcntl(
                                 child_socket,
                                 std.posix.F.GETFL,
                                 0,
-                            ) catch unreachable;
+                            );
                             var new_flags = @as(
                                 std.posix.O,
                                 @bitCast(@as(u32, @intCast(current_flags))),
                             );
                             new_flags.NONBLOCK = true;
                             const arg: u32 = @bitCast(new_flags);
-                            _ = std.posix.fcntl(child_socket, std.posix.F.SETFL, arg) catch unreachable;
+                            _ = try std.posix.fcntl(child_socket, std.posix.F.SETFL, arg);
                         },
                     }
                 },
@@ -371,44 +360,47 @@ pub fn Server(
                     tls_ptr.* = tls_ctx.create(child_socket) catch |e| {
                         log.err("{d} - tls creation failed={any}", .{ provision.index, e });
                         clean_connection(provision, pool, z_config);
-                        return;
+                        return error.TLSCreationFailed;
                     };
 
                     const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                         clean_tls(tls_ptr);
                         log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
                         clean_connection(provision, pool, z_config);
-                        return;
+                        return error.TLSStartHandshakeFailed;
                     };
 
                     provision.job = .{ .handshake = .{ .state = .recv, .count = 0 } };
-                    rt.net.recv(.{
+                    try rt.net.recv(.{
                         .socket = child_socket,
                         .buffer = recv_buf,
                         .func = handshake_task,
                         .ctx = borrowed.item,
-                    }) catch unreachable;
+                    });
                 },
                 .plain => {
                     provision.job = .{ .recv = .{ .count = 0 } };
-                    rt.net.recv(.{
+                    try rt.net.recv(.{
                         .socket = child_socket,
                         .buffer = provision.buffer,
                         .func = recv_task,
                         .ctx = borrowed.item,
-                    }) catch unreachable;
+                    });
                 },
             }
         }
 
-        fn recv_task(rt: *Runtime, t: *Task, ctx: ?*anyopaque) void {
+        fn recv_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const p_config: *const ProtocolConfig = @ptrCast(@alignCast(rt.storage.get("p_config").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_slice: []TLSType = @as([*]TLSType, @ptrCast(@alignCast(rt.storage.get("tls_slice").?)))[0..z_config.size_connections_max];
+            const tls_slice: []TLSType = @as(
+                [*]TLSType,
+                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+            )[0..z_config.size_connections_max];
 
             assert(p.job == .recv);
             const recv_job = &p.job.recv;
@@ -440,7 +432,7 @@ pub fn Server(
                             log.err("{d} - decrypt failed: {any}", .{ p.index, e });
                             clean_tls(tls_ptr);
                             clean_connection(p, pool, z_config);
-                            return;
+                            return error.TLSDecryptFailed;
                         };
                     },
                     .plain => break :blk pre_recv_buffer,
@@ -452,15 +444,15 @@ pub fn Server(
             switch (status) {
                 .kill => {
                     rt.stop();
-                    return;
+                    return error.Killed;
                 },
                 .recv => {
-                    rt.net.recv(.{
+                    try rt.net.recv(.{
                         .socket = p.socket,
                         .buffer = p.buffer,
                         .func = recv_task,
                         .ctx = ctx,
-                    }) catch unreachable;
+                    });
                 },
                 .send => |*pslice| {
                     const plain_buffer = pslice.get(0, z_config.size_socket_buffer);
@@ -470,10 +462,11 @@ pub fn Server(
                             const tls_ptr: *?TLS = &tls_slice[p.index];
                             assert(tls_ptr.* != null);
 
-                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch {
+                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
+                                log.err("{d} - encrypt failed: {any}", .{ p.index, e });
                                 clean_tls(tls_ptr);
                                 clean_connection(p, pool, z_config);
-                                return;
+                                return error.TLSEncryptFailed;
                             };
 
                             p.job = .{
@@ -487,12 +480,12 @@ pub fn Server(
                                 },
                             };
 
-                            rt.net.send(.{
+                            try rt.net.send(.{
                                 .socket = p.socket,
                                 .buffer = encrypted_buffer,
                                 .func = send_task,
                                 .ctx = ctx,
-                            }) catch unreachable;
+                            });
                         },
                         .plain => {
                             p.job = .{
@@ -504,19 +497,19 @@ pub fn Server(
                                 },
                             };
 
-                            rt.net.send(.{
+                            try rt.net.send(.{
                                 .socket = p.socket,
                                 .buffer = plain_buffer,
                                 .func = send_task,
                                 .ctx = ctx,
-                            }) catch unreachable;
+                            });
                         },
                     }
                 },
             }
         }
 
-        fn handshake_task(rt: *Runtime, t: *Task, ctx: ?*anyopaque) void {
+        fn handshake_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             log.debug("Handshake Task", .{});
             assert(comptime security == .tls);
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
@@ -542,7 +535,7 @@ pub fn Server(
                     log.debug("handshake taken too many cycles", .{});
                     clean_tls(tls_ptr);
                     clean_connection(p, pool, z_config);
-                    return;
+                    return error.TLSHandshakeTooManyCycles;
                 }
 
                 const hs_length: usize = @intCast(length);
@@ -556,38 +549,38 @@ pub fn Server(
                             clean_tls(tls_ptr);
                             log.err("{d} - tls handshake on recv failed={any}", .{ p.index, e });
                             clean_connection(p, pool, z_config);
-                            return;
+                            return error.TLSHandshakeRecvFailed;
                         };
 
                         switch (hstate) {
                             .recv => |buf| {
                                 log.debug("requeing recv in handshake", .{});
-                                rt.net.recv(.{
+                                try rt.net.recv(.{
                                     .socket = p.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                             .send => |buf| {
                                 log.debug("queueing send in handshake", .{});
                                 handshake_job.state = .send;
-                                rt.net.send(.{
+                                try rt.net.send(.{
                                     .socket = p.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                             .complete => {
                                 log.debug("handshake complete", .{});
                                 p.job = .{ .recv = .{ .count = 0 } };
-                                rt.net.recv(.{
+                                try rt.net.recv(.{
                                     .socket = p.socket,
                                     .buffer = p.buffer,
                                     .func = recv_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                         }
                     },
@@ -599,38 +592,38 @@ pub fn Server(
                             clean_tls(tls_ptr);
                             log.err("{d} - tls handshake on send failed={any}", .{ p.index, e });
                             clean_connection(p, pool, z_config);
-                            return;
+                            return error.TLSHandshakeSendFailed;
                         };
 
                         switch (hstate) {
                             .recv => |buf| {
                                 handshake_job.state = .recv;
                                 log.debug("queuing recv in handshake", .{});
-                                rt.net.recv(.{
+                                try rt.net.recv(.{
                                     .socket = p.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                             .send => |buf| {
                                 log.debug("requeing send in handshake", .{});
-                                rt.net.send(.{
+                                try rt.net.send(.{
                                     .socket = p.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                             .complete => {
                                 log.debug("handshake complete", .{});
                                 p.job = .{ .recv = .{ .count = 0 } };
-                                rt.net.recv(.{
+                                try rt.net.recv(.{
                                     .socket = p.socket,
                                     .buffer = p.buffer,
                                     .func = recv_task,
                                     .ctx = p,
-                                }) catch unreachable;
+                                });
                             },
                         }
                     },
@@ -638,7 +631,7 @@ pub fn Server(
             } else unreachable;
         }
 
-        fn send_task(rt: *Runtime, t: *Task, ctx: ?*anyopaque) void {
+        fn send_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
@@ -686,12 +679,12 @@ pub fn Server(
                             p.recv_buffer.clearRetainingCapacity();
                             p.job = .{ .recv = .{ .count = 0 } };
 
-                            rt.net.recv(.{
+                            try rt.net.recv(.{
                                 .socket = p.socket,
                                 .buffer = p.buffer,
                                 .func = recv_task,
                                 .ctx = p,
-                            }) catch unreachable;
+                            });
                         } else {
                             // Queue a new chunk up for sending.
                             log.debug(
@@ -709,21 +702,22 @@ pub fn Server(
                             const tls_ptr: *?TLS = &tls_slice[p.index];
                             assert(tls_ptr.* != null);
 
-                            const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch {
+                            const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch |e| {
+                                log.err("{d} - encrypt failed: {any}", .{ p.index, e });
                                 clean_tls(tls_ptr);
                                 clean_connection(p, pool, z_config);
-                                return;
+                                return error.TLSEncryptFailed;
                             };
 
                             inner.encrypted = encrypted;
                             inner.encrypted_count = 0;
 
-                            rt.net.send(.{
+                            try rt.net.send(.{
                                 .socket = p.socket,
                                 .buffer = inner.encrypted,
                                 .func = send_task,
                                 .ctx = p,
-                            }) catch unreachable;
+                            });
                         }
                     } else {
                         log.debug(
@@ -732,12 +726,12 @@ pub fn Server(
                         );
 
                         const remainder = inner.encrypted[inner.encrypted_count..];
-                        rt.net.send(.{
+                        try rt.net.send(.{
                             .socket = p.socket,
                             .buffer = remainder,
                             .func = send_task,
                             .ctx = p,
-                        }) catch unreachable;
+                        });
                     }
                 },
                 .plain => {
@@ -755,12 +749,12 @@ pub fn Server(
                         p.recv_buffer.clearRetainingCapacity();
                         p.job = .{ .recv = .{ .count = 0 } };
 
-                        rt.net.recv(.{
+                        try rt.net.recv(.{
                             .socket = p.socket,
                             .buffer = p.buffer,
                             .func = recv_task,
                             .ctx = ctx,
-                        }) catch unreachable;
+                        });
                     } else {
                         log.debug(
                             "{d} - sending next chunk starting at index {d}",
@@ -777,12 +771,12 @@ pub fn Server(
                             plain_buffer.len + inner.count,
                         });
 
-                        rt.net.send(.{
+                        try rt.net.send(.{
                             .socket = p.socket,
                             .buffer = plain_buffer,
                             .func = recv_task,
                             .ctx = ctx,
-                        }) catch unreachable;
+                        });
                     }
                 },
             }
@@ -843,7 +837,6 @@ pub fn Server(
                             .socket = params.socket.*,
                             .func = accept_task,
                             .ctx = @constCast(params.socket),
-                            .predicate = accept_predicate,
                         });
                     }
                 }.rt_start,
