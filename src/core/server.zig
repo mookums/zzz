@@ -246,10 +246,14 @@ pub fn Server(
             provision.recv_buffer.clearRetainingCapacity();
             pool.release(provision.index);
 
-            try rt.net.accept(.{
-                .socket = server_socket.*,
-                .func = accept_task,
-            });
+            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+            if (!accept_queued.*) {
+                accept_queued.* = true;
+                try rt.net.accept(.{
+                    .socket = server_socket.*,
+                    .func = accept_task,
+                });
+            }
         }
 
         fn accept_task(rt: *Runtime, t: *const Task, _: ?*anyopaque) !void {
@@ -262,6 +266,18 @@ pub fn Server(
                 [*]TLSType,
                 @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
             )[0..z_config.size_connections_max];
+
+            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+            accept_queued.* = false;
+
+            if (rt.scheduler.tasks.clean() >= 2) {
+                accept_queued.* = true;
+                const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
+                try rt.net.accept(.{
+                    .socket = server_socket.*,
+                    .func = accept_task,
+                });
+            }
 
             switch (comptime builtin.target.os.tag) {
                 .windows => {
@@ -843,12 +859,14 @@ pub fn Server(
                         try rt.storage.put("tls_slice", tls_slice.ptr);
                         try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
 
-                        for (0..params.zzz.config.size_connections_max) |_| {
-                            try rt.net.accept(.{
-                                .socket = socket.*,
-                                .func = accept_task,
-                            });
-                        }
+                        const accept_queued: *bool = try alloc.create(bool);
+                        accept_queued.* = true;
+                        try rt.storage.put("accept_queued", accept_queued);
+
+                        try rt.net.accept(.{
+                            .socket = socket.*,
+                            .func = accept_task,
+                        });
                     }
                 }.rt_start,
                 EntryParams{
