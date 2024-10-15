@@ -549,7 +549,17 @@ pub fn Server(
                 log.debug("processing handshake", .{});
                 handshake_job.count += 1;
 
-                if (length < 0 or handshake_job.count >= 50) {
+                if (length <= 0) {
+                    log.debug("handshake connection closed", .{});
+                    try rt.net.close(.{
+                        .fd = p.socket,
+                        .func = close_task,
+                        .ctx = p,
+                    });
+                    return error.TLSHandshakeClosed;
+                }
+
+                if (handshake_job.count >= 50) {
                     log.debug("handshake taken too many cycles", .{});
                     try rt.net.close(.{
                         .fd = p.socket,
