@@ -430,7 +430,7 @@ pub fn Server(
 
             log.debug("{d} - recv triggered", .{p.index});
 
-            const recv_count: u32 = @intCast(length);
+            const recv_count: usize = @intCast(length);
             recv_job.count += recv_count;
             const pre_recv_buffer = p.buffer[0..recv_count];
 
@@ -489,11 +489,13 @@ pub fn Server(
 
                             p.job = .{
                                 .send = .{
-                                    .tls = .{
-                                        .slice = pslice.*,
-                                        .count = @intCast(plain_buffer.len),
-                                        .encrypted = encrypted_buffer,
-                                        .encrypted_count = 0,
+                                    .slice = pslice.*,
+                                    .count = @intCast(plain_buffer.len),
+                                    .security = .{
+                                        .tls = .{
+                                            .encrypted = encrypted_buffer,
+                                            .encrypted_count = 0,
+                                        },
                                     },
                                 },
                             };
@@ -508,10 +510,9 @@ pub fn Server(
                         .plain => {
                             p.job = .{
                                 .send = .{
-                                    .plain = .{
-                                        .slice = pslice.*,
-                                        .count = 0,
-                                    },
+                                    .slice = pslice.*,
+                                    .count = 0,
+                                    .security = .plain,
                                 },
                             };
 
@@ -529,7 +530,7 @@ pub fn Server(
 
         fn handshake_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             log.debug("Handshake Task", .{});
-            assert(comptime security == .tls);
+            assert(security == .tls);
             const p: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
@@ -681,19 +682,18 @@ pub fn Server(
             const send_job = &p.job.send;
 
             log.debug("{d} - send triggered", .{p.index});
-            const send_count: u32 = @intCast(length);
+            const send_count: usize = @intCast(length);
             log.debug("{d} - send length: {d}", .{ p.index, send_count });
 
             switch (comptime security) {
                 .tls => {
-                    // This is for when sending encrypted data.
-                    assert(send_job.* == .tls);
+                    assert(send_job.security == .tls);
 
-                    const inner = &send_job.tls;
-                    inner.encrypted_count += send_count;
+                    const job_tls = &send_job.security.tls;
+                    job_tls.encrypted_count += send_count;
 
-                    if (inner.encrypted_count >= inner.encrypted.len) {
-                        if (inner.count >= inner.slice.len) {
+                    if (job_tls.encrypted_count >= job_tls.encrypted.len) {
+                        if (send_job.count >= send_job.slice.len) {
                             // All done sending.
                             log.debug("{d} - queueing a new recv", .{p.index});
                             _ = p.arena.reset(.{
@@ -712,15 +712,15 @@ pub fn Server(
                             // Queue a new chunk up for sending.
                             log.debug(
                                 "{d} - sending next chunk starting at index {d}",
-                                .{ p.index, inner.count },
+                                .{ p.index, send_job.count },
                             );
 
-                            const inner_slice = inner.slice.get(
-                                inner.count,
-                                inner.count + z_config.size_socket_buffer,
+                            const inner_slice = send_job.slice.get(
+                                send_job.count,
+                                send_job.count + z_config.size_socket_buffer,
                             );
 
-                            inner.count += @intCast(inner_slice.len);
+                            send_job.count += @intCast(inner_slice.len);
 
                             const tls_ptr: *?TLS = &tls_slice[p.index];
                             assert(tls_ptr.* != null);
@@ -735,12 +735,12 @@ pub fn Server(
                                 return error.TLSEncryptFailed;
                             };
 
-                            inner.encrypted = encrypted;
-                            inner.encrypted_count = 0;
+                            job_tls.encrypted = encrypted;
+                            job_tls.encrypted_count = 0;
 
                             try rt.net.send(.{
                                 .socket = p.socket,
-                                .buffer = inner.encrypted,
+                                .buffer = job_tls.encrypted,
                                 .func = send_task,
                                 .ctx = p,
                             });
@@ -748,10 +748,10 @@ pub fn Server(
                     } else {
                         log.debug(
                             "{d} - sending next encrypted chunk starting at index {d}",
-                            .{ p.index, inner.encrypted_count },
+                            .{ p.index, job_tls.encrypted_count },
                         );
 
-                        const remainder = inner.encrypted[inner.encrypted_count..];
+                        const remainder = job_tls.encrypted[job_tls.encrypted_count..];
                         try rt.net.send(.{
                             .socket = p.socket,
                             .buffer = remainder,
@@ -761,13 +761,10 @@ pub fn Server(
                     }
                 },
                 .plain => {
-                    // This is for when sending plaintext.
-                    assert(send_job.* == .plain);
+                    assert(send_job.security == .plain);
+                    send_job.count += send_count;
 
-                    const inner = &send_job.plain;
-                    inner.count += send_count;
-
-                    if (inner.count >= inner.slice.len) {
+                    if (send_job.count >= send_job.slice.len) {
                         log.debug("{d} - queueing a new recv", .{p.index});
                         _ = p.arena.reset(.{
                             .retain_with_limit = z_config.size_connection_arena_retain,
@@ -784,17 +781,17 @@ pub fn Server(
                     } else {
                         log.debug(
                             "{d} - sending next chunk starting at index {d}",
-                            .{ p.index, inner.count },
+                            .{ p.index, send_job.count },
                         );
 
-                        const plain_buffer = inner.slice.get(
-                            inner.count,
-                            inner.count + z_config.size_socket_buffer,
+                        const plain_buffer = send_job.slice.get(
+                            send_job.count,
+                            send_job.count + z_config.size_socket_buffer,
                         );
 
                         log.debug("{d} - chunk ends at: {d}", .{
                             p.index,
-                            plain_buffer.len + inner.count,
+                            plain_buffer.len + send_job.count,
                         });
 
                         try rt.net.send(.{
