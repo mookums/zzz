@@ -70,7 +70,8 @@ pub const ProtocolData = struct {
 const testing = std.testing;
 
 test "ProtocolData deinit" {
-    var x = ProtocolData.init(testing.allocator, .{ .router = undefined });
+    const config: ProtocolConfig = .{ .router = undefined };
+    var x = ProtocolData.init(testing.allocator, &config);
     defer x.deinit(testing.allocator);
 
     try testing.expectEqual(x.stage, .header);

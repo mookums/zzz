@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
         .name = "tests",
         .root_source_file = b.path("./src/test.zig"),
     });
+    tests.root_module.addImport("tardy", tardy);
 
     const run_test = b.addRunArtifact(tests);
     run_test.step.dependOn(&tests.step);
