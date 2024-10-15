@@ -49,10 +49,10 @@ pub fn main() !void {
         .{
             .tls = .{
                 .cert = .{
-                    .file = .{ .path = "src/examples/tls/certs/cert.pem" },
+                    .file = .{ .path = "./examples/http/tls/certs/cert.pem" },
                 },
                 .key = .{
-                    .file = .{ .path = "src/examples/tls/certs/key.pem" },
+                    .file = .{ .path = "./examples/http/tls/certs/key.pem" },
                 },
                 .cert_name = "CERTIFICATE",
                 .key_name = "EC PRIVATE KEY",
