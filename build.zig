@@ -28,14 +28,14 @@ pub fn build(b: *std.Build) void {
 
     zzz.linkLibrary(bearssl);
 
-    add_example(b, "basic", false, target, optimize, zzz);
-    add_example(b, "custom", false, target, optimize, zzz);
-    add_example(b, "tls", true, target, optimize, zzz);
-    add_example(b, "minram", false, target, optimize, zzz);
-    add_example(b, "fs", false, target, optimize, zzz);
-    add_example(b, "multithread", false, target, optimize, zzz);
-    add_example(b, "benchmark", false, target, optimize, zzz);
-    add_example(b, "valgrind", true, target, optimize, zzz);
+    add_example(b, "basic", .http, false, target, optimize, zzz);
+    add_example(b, "custom", .http, false, target, optimize, zzz);
+    add_example(b, "tls", .http, true, target, optimize, zzz);
+    add_example(b, "minram", .http, false, target, optimize, zzz);
+    add_example(b, "fs", .http, false, target, optimize, zzz);
+    add_example(b, "multithread", .http, false, target, optimize, zzz);
+    add_example(b, "benchmark", .http, false, target, optimize, zzz);
+    add_example(b, "valgrind", .http, true, target, optimize, zzz);
 
     const tests = b.addTest(.{
         .name = "tests",
@@ -49,17 +49,22 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_test.step);
 }
 
+const Protocol = enum {
+    http,
+};
+
 fn add_example(
     b: *std.Build,
     name: []const u8,
+    protocol: Protocol,
     link_libc: bool,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
     zzz_module: *std.Build.Module,
 ) void {
     const example = b.addExecutable(.{
-        .name = b.fmt("zzz_example_{s}", .{name}),
-        .root_source_file = b.path(b.fmt("src/examples/{s}/main.zig", .{name})),
+        .name = b.fmt("{s}_{s}", .{ @tagName(protocol), name }),
+        .root_source_file = b.path(b.fmt("./examples/{s}/{s}/main.zig", .{ @tagName(protocol), name })),
         .target = target,
         .optimize = optimize,
         .strip = false,
@@ -78,6 +83,9 @@ fn add_example(
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step(b.fmt("run_{s}", .{name}), b.fmt("Run zzz example ({s})", .{name}));
+    const run_step = b.step(
+        b.fmt("run_{s}_{s}", .{ @tagName(protocol), name }),
+        b.fmt("Run {s} {s}", .{ @tagName(protocol), name }),
+    );
     run_step.dependOn(&run_cmd.step);
 }
