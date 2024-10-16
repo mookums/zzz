@@ -138,7 +138,7 @@ pub fn recv_fn(
 
     switch (stage) {
         .header => {
-            const start = provision.recv_buffer.items.len -| 3;
+            const start = provision.recv_buffer.items.len -| 4;
             provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
             const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
 
