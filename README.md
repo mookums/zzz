@@ -21,6 +21,7 @@ exe.root_module.addImport(zzz);
 ## zzz?
 zzz is a framework for writing performant and reliable networked services in Zig. It currently only supports TCP as the underlying transport layer and allows for any arbitrary protocol to run on top. It also natively supports TLS for securing connections.
 
+zzz currently supports Linux, Mac and Windows. Linux is currently the only target supported for deployments.
 
 > [!IMPORTANT]
 > zzz is currently **alpha** software and there is still a lot changing at a fairly quick pace and certain places where things are less polished.
@@ -51,14 +52,11 @@ On the CCX63 instance on Hetzner, we are 66.4% faster than [zap](https://github.
 zzz can be configured to utilize minimal memory while remaining performant. The provided `minram` example only uses 392 kB!
 
 ## Features
+- Built on top of [Tardy](https://github.com/mookums/tardy), an asynchronous runtime.
 - [Modular Asynchronous Implementation](https://muki.gg/post/modular-async)
-    - Allows for passing in your own Async implementation.
-    - Comes with:
-        - io_uring for Linux (>= 5.1.0).
-        - epoll for Linux (>= 2.5.45).
-        - busy_loop for Linux, Mac and Windows.
-        - IOCP for Windows (planned).
-        - kqueue for Darwin/BSD (planned).
+    - `io_uring` for Linux (>= 5.1.0).
+    - `epoll` for Linux (>= 2.5.45).
+    - `busy_loop` for Linux, Mac and Windows.
 - Modular Protocol Implementation
     - Allows for defining your own Protocol on top of TCP.
     - Comes with:
@@ -69,8 +67,3 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
 - TLS using BearSSL
 - (Almost) all memory allocated at startup
 
-
-## Platform Support
-zzz currently supports Linux, Mac, and Windows.
-
-Due to the modular nature, any platform (that works with Zig) can be supported as long as you define an Async backend.
