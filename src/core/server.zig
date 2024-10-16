@@ -215,17 +215,19 @@ pub fn Server(
 
         fn close_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
             const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+            assert(provision.job == .close);
             const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_slice: []TLSType = @as(
-                [*]TLSType,
-                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-            )[0..z_config.size_connections_max];
 
             log.info("{d} - closing connection", .{provision.index});
 
             if (comptime security == .tls) {
+                const tls_slice: []TLSType = @as(
+                    [*]TLSType,
+                    @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                )[0..z_config.size_connections_max];
+
                 const tls_ptr: *?TLS = &tls_slice[provision.index];
                 assert(tls_ptr.* != null);
                 tls_ptr.*.?.deinit();
@@ -240,6 +242,7 @@ pub fn Server(
                     provision.socket = -1;
                 },
             }
+
             provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = z_config.size_connection_arena_retain });
             provision.data.clean();
@@ -290,8 +293,8 @@ pub fn Server(
                 },
             }
 
-            // Borrow a provision from the pool otherwise close the socket.
-            const borrowed = try pool.borrow_hint(t.index);
+            // This should never fail. It means that we have a dangling item.
+            const borrowed = pool.borrow_hint(t.index) catch unreachable;
 
             log.info("{d} - accepting connection", .{borrowed.index});
             log.debug(
@@ -367,6 +370,7 @@ pub fn Server(
 
                     tls_ptr.* = tls_ctx.create(child_socket) catch |e| {
                         log.err("{d} - tls creation failed={any}", .{ provision.index, e });
+                        provision.job = .close;
                         try rt.net.close(.{
                             .fd = provision.socket,
                             .func = close_task,
@@ -377,6 +381,7 @@ pub fn Server(
 
                     const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                         log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
+                        provision.job = .close;
                         try rt.net.close(.{
                             .fd = provision.socket,
                             .func = close_task,
@@ -406,30 +411,31 @@ pub fn Server(
         }
 
         fn recv_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            const p: *Provision = @ptrCast(@alignCast(ctx.?));
+            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+            assert(provision.job == .recv);
             const length: i32 = t.result.?.value;
 
             const p_config: *const ProtocolConfig = @ptrCast(@alignCast(rt.storage.get("p_config").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
 
-            assert(p.job == .recv);
-            const recv_job = &p.job.recv;
+            const recv_job = &provision.job.recv;
 
             // If the socket is closed.
             if (length <= 0) {
+                provision.job = .close;
                 try rt.net.close(.{
-                    .fd = p.socket,
+                    .fd = provision.socket,
                     .func = close_task,
-                    .ctx = p,
+                    .ctx = provision,
                 });
                 return;
             }
 
-            log.debug("{d} - recv triggered", .{p.index});
+            log.debug("{d} - recv triggered", .{provision.index});
 
             const recv_count: usize = @intCast(length);
             recv_job.count += recv_count;
-            const pre_recv_buffer = p.buffer[0..recv_count];
+            const pre_recv_buffer = provision.buffer[0..recv_count];
 
             const recv_buffer = blk: {
                 switch (comptime security) {
@@ -439,15 +445,16 @@ pub fn Server(
                             @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
                         )[0..z_config.size_connections_max];
 
-                        const tls_ptr: *?TLS = &tls_slice[p.index];
+                        const tls_ptr: *?TLS = &tls_slice[provision.index];
                         assert(tls_ptr.* != null);
 
                         break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
-                            log.err("{d} - decrypt failed: {any}", .{ p.index, e });
+                            log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
+                            provision.job = .close;
                             try rt.net.close(.{
-                                .fd = p.socket,
+                                .fd = provision.socket,
                                 .func = close_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                             return error.TLSDecryptFailed;
                         };
@@ -456,7 +463,7 @@ pub fn Server(
                 }
             };
 
-            var status: RecvStatus = recv_fn(rt, p, p_config, z_config, recv_buffer);
+            var status: RecvStatus = recv_fn(rt, provision, p_config, z_config, recv_buffer);
 
             switch (status) {
                 .kill => {
@@ -465,10 +472,10 @@ pub fn Server(
                 },
                 .recv => {
                     try rt.net.recv(.{
-                        .socket = p.socket,
-                        .buffer = p.buffer,
+                        .socket = provision.socket,
+                        .buffer = provision.buffer,
                         .func = recv_task,
-                        .ctx = p,
+                        .ctx = provision,
                     });
                 },
                 .send => |*pslice| {
@@ -481,20 +488,21 @@ pub fn Server(
                                 @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
                             )[0..z_config.size_connections_max];
 
-                            const tls_ptr: *?TLS = &tls_slice[p.index];
+                            const tls_ptr: *?TLS = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
 
                             const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
-                                log.err("{d} - encrypt failed: {any}", .{ p.index, e });
+                                log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
+                                provision.job = .close;
                                 try rt.net.close(.{
-                                    .fd = p.socket,
+                                    .fd = provision.socket,
                                     .func = close_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                                 return error.TLSEncryptFailed;
                             };
 
-                            p.job = .{
+                            provision.job = .{
                                 .send = .{
                                     .slice = pslice.*,
                                     .count = @intCast(plain_buffer.len),
@@ -508,14 +516,14 @@ pub fn Server(
                             };
 
                             try rt.net.send(.{
-                                .socket = p.socket,
+                                .socket = provision.socket,
                                 .buffer = encrypted_buffer,
                                 .func = send_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                         },
                         .plain => {
-                            p.job = .{
+                            provision.job = .{
                                 .send = .{
                                     .slice = pslice.*,
                                     .count = 0,
@@ -524,10 +532,10 @@ pub fn Server(
                             };
 
                             try rt.net.send(.{
-                                .socket = p.socket,
+                                .socket = provision.socket,
                                 .buffer = plain_buffer,
                                 .func = send_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                         },
                     }
@@ -538,7 +546,7 @@ pub fn Server(
         fn handshake_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             log.debug("Handshake Task", .{});
             assert(security == .tls);
-            const p: *Provision = @ptrCast(@alignCast(ctx.?));
+            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
@@ -548,30 +556,32 @@ pub fn Server(
             )[0..z_config.size_connections_max];
 
             if (comptime security == .tls) {
-                assert(p.job == .handshake);
-                const handshake_job = &p.job.handshake;
+                assert(provision.job == .handshake);
+                const handshake_job = &provision.job.handshake;
 
-                const tls_ptr: *?TLS = &tls_slice[p.index];
+                const tls_ptr: *?TLS = &tls_slice[provision.index];
                 assert(tls_ptr.* != null);
                 log.debug("processing handshake", .{});
                 handshake_job.count += 1;
 
                 if (length <= 0) {
                     log.debug("handshake connection closed", .{});
+                    provision.job = .close;
                     try rt.net.close(.{
-                        .fd = p.socket,
+                        .fd = provision.socket,
                         .func = close_task,
-                        .ctx = p,
+                        .ctx = provision,
                     });
                     return error.TLSHandshakeClosed;
                 }
 
                 if (handshake_job.count >= 50) {
                     log.debug("handshake taken too many cycles", .{});
+                    provision.job = .close;
                     try rt.net.close(.{
-                        .fd = p.socket,
+                        .fd = provision.socket,
                         .func = close_task,
-                        .ctx = p,
+                        .ctx = provision,
                     });
                     return error.TLSHandshakeTooManyCycles;
                 }
@@ -584,11 +594,12 @@ pub fn Server(
                         const hstate = tls_ptr.*.?.continue_handshake(
                             .{ .recv = @intCast(hs_length) },
                         ) catch |e| {
-                            log.err("{d} - tls handshake on recv failed={any}", .{ p.index, e });
+                            log.err("{d} - tls handshake on recv failed={any}", .{ provision.index, e });
+                            provision.job = .close;
                             try rt.net.close(.{
-                                .fd = p.socket,
+                                .fd = provision.socket,
                                 .func = close_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                             return error.TLSHandshakeRecvFailed;
                         };
@@ -597,30 +608,30 @@ pub fn Server(
                             .recv => |buf| {
                                 log.debug("requeing recv in handshake", .{});
                                 try rt.net.recv(.{
-                                    .socket = p.socket,
+                                    .socket = provision.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                             .send => |buf| {
                                 log.debug("queueing send in handshake", .{});
                                 handshake_job.state = .send;
                                 try rt.net.send(.{
-                                    .socket = p.socket,
+                                    .socket = provision.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                             .complete => {
                                 log.debug("handshake complete", .{});
-                                p.job = .{ .recv = .{ .count = 0 } };
+                                provision.job = .{ .recv = .{ .count = 0 } };
                                 try rt.net.recv(.{
-                                    .socket = p.socket,
-                                    .buffer = p.buffer,
+                                    .socket = provision.socket,
+                                    .buffer = provision.buffer,
                                     .func = recv_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                         }
@@ -630,11 +641,12 @@ pub fn Server(
                         const hstate = tls_ptr.*.?.continue_handshake(
                             .{ .send = @intCast(hs_length) },
                         ) catch |e| {
-                            log.err("{d} - tls handshake on send failed={any}", .{ p.index, e });
+                            log.err("{d} - tls handshake on send failed={any}", .{ provision.index, e });
+                            provision.job = .close;
                             try rt.net.close(.{
-                                .fd = p.socket,
+                                .fd = provision.socket,
                                 .func = close_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                             return error.TLSHandshakeSendFailed;
                         };
@@ -644,29 +656,29 @@ pub fn Server(
                                 handshake_job.state = .recv;
                                 log.debug("queuing recv in handshake", .{});
                                 try rt.net.recv(.{
-                                    .socket = p.socket,
+                                    .socket = provision.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                             .send => |buf| {
                                 log.debug("requeing send in handshake", .{});
                                 try rt.net.send(.{
-                                    .socket = p.socket,
+                                    .socket = provision.socket,
                                     .buffer = buf,
                                     .func = handshake_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                             .complete => {
                                 log.debug("handshake complete", .{});
-                                p.job = .{ .recv = .{ .count = 0 } };
+                                provision.job = .{ .recv = .{ .count = 0 } };
                                 try rt.net.recv(.{
-                                    .socket = p.socket,
-                                    .buffer = p.buffer,
+                                    .socket = provision.socket,
+                                    .buffer = provision.buffer,
                                     .func = recv_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                             },
                         }
@@ -676,27 +688,28 @@ pub fn Server(
         }
 
         fn send_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            const p: *Provision = @ptrCast(@alignCast(ctx.?));
+            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+            assert(provision.job == .send);
             const length: i32 = t.result.?.value;
 
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
 
             // If the socket is closed.
             if (length <= 0) {
+                provision.job = .close;
                 try rt.net.close(.{
-                    .fd = p.socket,
+                    .fd = provision.socket,
                     .func = close_task,
-                    .ctx = p,
+                    .ctx = provision,
                 });
                 return;
             }
 
-            assert(p.job == .send);
-            const send_job = &p.job.send;
+            const send_job = &provision.job.send;
 
-            log.debug("{d} - send triggered", .{p.index});
+            log.debug("{d} - send triggered", .{provision.index});
             const send_count: usize = @intCast(length);
-            log.debug("{d} - send length: {d}", .{ p.index, send_count });
+            log.debug("{d} - send length: {d}", .{ provision.index, send_count });
 
             switch (comptime security) {
                 .tls => {
@@ -713,24 +726,24 @@ pub fn Server(
                     if (job_tls.encrypted_count >= job_tls.encrypted.len) {
                         if (send_job.count >= send_job.slice.len) {
                             // All done sending.
-                            log.debug("{d} - queueing a new recv", .{p.index});
-                            _ = p.arena.reset(.{
+                            log.debug("{d} - queueing a new recv", .{provision.index});
+                            _ = provision.arena.reset(.{
                                 .retain_with_limit = z_config.size_connection_arena_retain,
                             });
-                            p.recv_buffer.clearRetainingCapacity();
-                            p.job = .{ .recv = .{ .count = 0 } };
+                            provision.recv_buffer.clearRetainingCapacity();
+                            provision.job = .{ .recv = .{ .count = 0 } };
 
                             try rt.net.recv(.{
-                                .socket = p.socket,
-                                .buffer = p.buffer,
+                                .socket = provision.socket,
+                                .buffer = provision.buffer,
                                 .func = recv_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                         } else {
                             // Queue a new chunk up for sending.
                             log.debug(
                                 "{d} - sending next chunk starting at index {d}",
-                                .{ p.index, send_job.count },
+                                .{ provision.index, send_job.count },
                             );
 
                             const inner_slice = send_job.slice.get(
@@ -740,15 +753,16 @@ pub fn Server(
 
                             send_job.count += @intCast(inner_slice.len);
 
-                            const tls_ptr: *?TLS = &tls_slice[p.index];
+                            const tls_ptr: *?TLS = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
 
                             const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch |e| {
-                                log.err("{d} - encrypt failed: {any}", .{ p.index, e });
+                                log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
+                                provision.job = .close;
                                 try rt.net.close(.{
-                                    .fd = p.socket,
+                                    .fd = provision.socket,
                                     .func = close_task,
-                                    .ctx = p,
+                                    .ctx = provision,
                                 });
                                 return error.TLSEncryptFailed;
                             };
@@ -757,24 +771,24 @@ pub fn Server(
                             job_tls.encrypted_count = 0;
 
                             try rt.net.send(.{
-                                .socket = p.socket,
+                                .socket = provision.socket,
                                 .buffer = job_tls.encrypted,
                                 .func = send_task,
-                                .ctx = p,
+                                .ctx = provision,
                             });
                         }
                     } else {
                         log.debug(
                             "{d} - sending next encrypted chunk starting at index {d}",
-                            .{ p.index, job_tls.encrypted_count },
+                            .{ provision.index, job_tls.encrypted_count },
                         );
 
                         const remainder = job_tls.encrypted[job_tls.encrypted_count..];
                         try rt.net.send(.{
-                            .socket = p.socket,
+                            .socket = provision.socket,
                             .buffer = remainder,
                             .func = send_task,
-                            .ctx = p,
+                            .ctx = provision,
                         });
                     }
                 },
@@ -783,23 +797,23 @@ pub fn Server(
                     send_job.count += send_count;
 
                     if (send_job.count >= send_job.slice.len) {
-                        log.debug("{d} - queueing a new recv", .{p.index});
-                        _ = p.arena.reset(.{
+                        log.debug("{d} - queueing a new recv", .{provision.index});
+                        _ = provision.arena.reset(.{
                             .retain_with_limit = z_config.size_connection_arena_retain,
                         });
-                        p.recv_buffer.clearRetainingCapacity();
-                        p.job = .{ .recv = .{ .count = 0 } };
+                        provision.recv_buffer.clearRetainingCapacity();
+                        provision.job = .{ .recv = .{ .count = 0 } };
 
                         try rt.net.recv(.{
-                            .socket = p.socket,
-                            .buffer = p.buffer,
+                            .socket = provision.socket,
+                            .buffer = provision.buffer,
                             .func = recv_task,
-                            .ctx = p,
+                            .ctx = provision,
                         });
                     } else {
                         log.debug(
                             "{d} - sending next chunk starting at index {d}",
-                            .{ p.index, send_job.count },
+                            .{ provision.index, send_job.count },
                         );
 
                         const plain_buffer = send_job.slice.get(
@@ -808,15 +822,15 @@ pub fn Server(
                         );
 
                         log.debug("{d} - chunk ends at: {d}", .{
-                            p.index,
+                            provision.index,
                             plain_buffer.len + send_job.count,
                         });
 
                         try rt.net.send(.{
-                            .socket = p.socket,
+                            .socket = provision.socket,
                             .buffer = plain_buffer,
                             .func = send_task,
-                            .ctx = p,
+                            .ctx = provision,
                         });
                     }
                 },
