@@ -262,10 +262,6 @@ pub fn Server(
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
             const tls_ctx: *TLSContextType = @ptrCast(@alignCast(rt.storage.get("tls_ctx").?));
-            const tls_slice: []TLSType = @as(
-                [*]TLSType,
-                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-            )[0..z_config.size_connections_max];
 
             const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
             accept_queued.* = false;
@@ -361,6 +357,11 @@ pub fn Server(
 
             switch (comptime security) {
                 .tls => |_| {
+                    const tls_slice: []TLSType = @as(
+                        [*]TLSType,
+                        @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                    )[0..z_config.size_connections_max];
+
                     const tls_ptr: *?TLS = &tls_slice[provision.index];
                     assert(tls_ptr.* == null);
 
@@ -410,10 +411,6 @@ pub fn Server(
 
             const p_config: *const ProtocolConfig = @ptrCast(@alignCast(rt.storage.get("p_config").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_slice: []TLSType = @as(
-                [*]TLSType,
-                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-            )[0..z_config.size_connections_max];
 
             assert(p.job == .recv);
             const recv_job = &p.job.recv;
@@ -437,6 +434,11 @@ pub fn Server(
             const recv_buffer = blk: {
                 switch (comptime security) {
                     .tls => |_| {
+                        const tls_slice: []TLSType = @as(
+                            [*]TLSType,
+                            @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                        )[0..z_config.size_connections_max];
+
                         const tls_ptr: *?TLS = &tls_slice[p.index];
                         assert(tls_ptr.* != null);
 
@@ -466,7 +468,7 @@ pub fn Server(
                         .socket = p.socket,
                         .buffer = p.buffer,
                         .func = recv_task,
-                        .ctx = ctx,
+                        .ctx = p,
                     });
                 },
                 .send => |*pslice| {
@@ -474,6 +476,11 @@ pub fn Server(
 
                     switch (comptime security) {
                         .tls => |_| {
+                            const tls_slice: []TLSType = @as(
+                                [*]TLSType,
+                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                            )[0..z_config.size_connections_max];
+
                             const tls_ptr: *?TLS = &tls_slice[p.index];
                             assert(tls_ptr.* != null);
 
@@ -504,7 +511,7 @@ pub fn Server(
                                 .socket = p.socket,
                                 .buffer = encrypted_buffer,
                                 .func = send_task,
-                                .ctx = ctx,
+                                .ctx = p,
                             });
                         },
                         .plain => {
@@ -520,7 +527,7 @@ pub fn Server(
                                 .socket = p.socket,
                                 .buffer = plain_buffer,
                                 .func = send_task,
-                                .ctx = ctx,
+                                .ctx = p,
                             });
                         },
                     }
@@ -673,10 +680,6 @@ pub fn Server(
             const length: i32 = t.result.?.value;
 
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_slice: []TLSType = @as(
-                [*]TLSType,
-                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-            )[0..z_config.size_connections_max];
 
             // If the socket is closed.
             if (length <= 0) {
@@ -698,6 +701,11 @@ pub fn Server(
             switch (comptime security) {
                 .tls => {
                     assert(send_job.security == .tls);
+
+                    const tls_slice: []TLSType = @as(
+                        [*]TLSType,
+                        @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                    )[0..z_config.size_connections_max];
 
                     const job_tls = &send_job.security.tls;
                     job_tls.encrypted_count += send_count;
@@ -786,7 +794,7 @@ pub fn Server(
                             .socket = p.socket,
                             .buffer = p.buffer,
                             .func = recv_task,
-                            .ctx = ctx,
+                            .ctx = p,
                         });
                     } else {
                         log.debug(
@@ -807,8 +815,8 @@ pub fn Server(
                         try rt.net.send(.{
                             .socket = p.socket,
                             .buffer = plain_buffer,
-                            .func = recv_task,
-                            .ctx = ctx,
+                            .func = send_task,
+                            .ctx = p,
                         });
                     }
                 },
