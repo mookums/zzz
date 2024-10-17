@@ -37,7 +37,7 @@ For more information, look here:
 ## Optimization
 zzz is **very** fast. Through a combination of methods, such as allocation at start up and avoiding thread contention, we are able to extract tons of performance out of a fairly simple implementation. zzz is quite robust currently but is still early stage software. It's currently been running in production, serving my [site](https://muki.gg).
 
-We are nearly as fast as gnet (zzz is 2% slower at 1000 concurrent connections), the fastest plaintext HTTP server according to [TechEmpower](https://www.techempower.com/benchmarks/#hw=ph&test=plaintext&section=data-r22), while consuming only ~21% of the memory that gnet requires.
+With the recent migration to [tardy](https://github.com/mookums/tardy), zzz is about as fast as gnet, the fastest plaintext HTTP server according to [TechEmpower](https://www.techempower.com/benchmarks/#hw=ph&test=plaintext&section=data-r22), while consuming only ~22% of the memory that gnet requires.
 
 ![benchmark (request per sec)](./docs/benchmark/req_per_sec_ccx63_24.png)
 
@@ -47,9 +47,9 @@ We are nearly as fast as gnet (zzz is 2% slower at 1000 concurrent connections),
 
 [Raw Data](./docs/benchmark/memory_ccx63_24.csv)
 
-On the CCX63 instance on Hetzner, we are 66.4% faster than [zap](https://github.com/zigzap/zap) and 77% faster than [http.zig](https://github.com/karlseguin/http.zig). We also utilize less memory, using only ~3% of the memory used by zap and ~18% of the memory used by http.zig.
+On the CCX63 instance on Hetzner with 2000 max connections, we are 70.9% faster than [zap](https://github.com/zigzap/zap) and 83.8% faster than [http.zig](https://github.com/karlseguin/http.zig). We also utilize less memory, using only ~3% of the memory used by zap and ~1.6% of the memory used by http.zig.
 
-zzz can be configured to utilize minimal memory while remaining performant. The provided `minram` example only uses 392 kB!
+zzz can be configured to utilize minimal memory while remaining performant. The provided `minram` example only uses 256 kB (using `io_uring` and musl)!
 
 ## Features
 - Built on top of [Tardy](https://github.com/mookums/tardy), an asynchronous runtime.
