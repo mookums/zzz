@@ -15,6 +15,7 @@ pub const Threading = @import("tardy").TardyThreading;
 pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
 pub const AsyncIOType = @import("tardy").AsyncIOType;
+pub const auto_async_match = @import("tardy").auto_async_match;
 const TardyCreator = @import("tardy").Tardy;
 
 pub const RecvStatus = union(enum) {
@@ -102,15 +103,16 @@ fn RecvFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
 
 pub fn Server(
     comptime security: Security,
-    comptime async_type: AsyncIOType,
+    comptime _async_type: AsyncIOType,
     comptime ProtocolData: type,
     comptime ProtocolConfig: type,
     comptime recv_fn: RecvFn(ProtocolData, ProtocolConfig),
 ) type {
+    const async_type: AsyncIOType = if (comptime _async_type == .auto) auto_async_match() else _async_type;
     const TLSContextType = comptime if (security == .tls) TLSContext else void;
     const TLSType = comptime if (security == .tls) ?TLS else void;
     const Provision = ZProvision(ProtocolData);
-    const Tardy = TardyCreator(async_type);
+    const Tardy = TardyCreator(_async_type);
 
     return struct {
         const Self = @This();
@@ -249,13 +251,24 @@ pub fn Server(
             provision.recv_buffer.clearRetainingCapacity();
             pool.release(provision.index);
 
-            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
-            if (!accept_queued.*) {
-                accept_queued.* = true;
-                try rt.net.accept(.{
-                    .socket = server_socket.*,
-                    .func = accept_task,
-                });
+            switch (comptime async_type) {
+                .auto => unreachable,
+                .io_uring => {
+                    try rt.net.accept(.{
+                        .socket = server_socket.*,
+                        .func = accept_task,
+                    });
+                },
+                inline else => {
+                    const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+                    if (!accept_queued.*) {
+                        accept_queued.* = true;
+                        try rt.net.accept(.{
+                            .socket = server_socket.*,
+                            .func = accept_task,
+                        });
+                    }
+                },
             }
         }
 
@@ -266,16 +279,18 @@ pub fn Server(
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
             const tls_ctx: *TLSContextType = @ptrCast(@alignCast(rt.storage.get("tls_ctx").?));
 
-            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
-            accept_queued.* = false;
+            if (comptime async_type != .io_uring) {
+                const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+                accept_queued.* = false;
 
-            if (rt.scheduler.tasks.clean() >= 2) {
-                accept_queued.* = true;
-                const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
-                try rt.net.accept(.{
-                    .socket = server_socket.*,
-                    .func = accept_task,
-                });
+                if (rt.scheduler.tasks.clean() >= 2) {
+                    accept_queued.* = true;
+                    const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
+                    try rt.net.accept(.{
+                        .socket = server_socket.*,
+                        .func = accept_task,
+                    });
+                }
             }
 
             switch (comptime builtin.target.os.tag) {
@@ -889,14 +904,27 @@ pub fn Server(
                         try rt.storage.put("tls_slice", tls_slice.ptr);
                         try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
 
-                        const accept_queued: *bool = try alloc.create(bool);
-                        accept_queued.* = true;
-                        try rt.storage.put("accept_queued", accept_queued);
+                        switch (comptime async_type) {
+                            .auto => unreachable,
+                            .io_uring => {
+                                for (0..params.zzz.config.size_connections_max) |_| {
+                                    try rt.net.accept(.{
+                                        .socket = socket.*,
+                                        .func = accept_task,
+                                    });
+                                }
+                            },
+                            inline else => {
+                                const accept_queued: *bool = try alloc.create(bool);
+                                accept_queued.* = true;
+                                try rt.storage.put("accept_queued", accept_queued);
 
-                        try rt.net.accept(.{
-                            .socket = socket.*,
-                            .func = accept_task,
-                        });
+                                try rt.net.accept(.{
+                                    .socket = socket.*,
+                                    .func = accept_task,
+                                });
+                            },
+                        }
                     }
                 }.rt_start,
                 EntryParams{
