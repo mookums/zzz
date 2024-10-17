@@ -294,6 +294,7 @@ pub fn Server(
             }
 
             // This should never fail. It means that we have a dangling item.
+            assert(pool.clean() > 0);
             const borrowed = pool.borrow_hint(t.index) catch unreachable;
 
             log.info("{d} - accepting connection", .{borrowed.index});
