@@ -14,6 +14,7 @@ const Pool = @import("tardy").Pool;
 pub const Threading = @import("tardy").TardyThreading;
 pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
+const TaskFn = @import("tardy").TaskFn;
 pub const AsyncIOType = @import("tardy").AsyncIOType;
 const TardyCreator = @import("tardy").Tardy;
 const Cross = @import("tardy").Cross;
@@ -22,9 +23,10 @@ pub const RecvStatus = union(enum) {
     kill,
     recv,
     send: Pseudoslice,
+    spawned,
 };
 
-/// Security Model to use.
+/// Security Model to use.chinp acas
 ///
 /// Default: .plain (plaintext)
 pub const Security = union(enum) {
@@ -94,6 +96,7 @@ pub const zzzConfig = struct {
 fn RecvFn(comptime ProtocolData: type, comptime ProtocolConfig: type) type {
     return *const fn (
         rt: *Runtime,
+        trigger_task: TaskFn,
         provision: *ZProvision(ProtocolData),
         p_config: *const ProtocolConfig,
         z_config: *const zzzConfig,
@@ -340,6 +343,75 @@ pub fn Server(
             }
         }
 
+        /// This is the task you MUST trigger if the `recv_fn` returns `.spawned`.
+        fn trigger_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
+            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+
+            switch (provision.job) {
+                else => unreachable,
+                .recv => {
+                    try rt.net.recv(.{
+                        .socket = provision.socket,
+                        .buffer = provision.buffer,
+                        .func = recv_task,
+                        .ctx = provision,
+                    });
+                },
+                .send => |*send_job| {
+                    const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+                    const plain_buffer = send_job.slice.get(0, z_config.size_socket_buffer);
+
+                    switch (comptime security) {
+                        .tls => |_| {
+                            const tls_slice: []TLSType = @as(
+                                [*]TLSType,
+                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                            )[0..z_config.size_connections_max];
+
+                            const tls_ptr: *?TLS = &tls_slice[provision.index];
+                            assert(tls_ptr.* != null);
+
+                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
+                                log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
+                                provision.job = .close;
+                                try rt.net.close(.{
+                                    .fd = provision.socket,
+                                    .func = close_task,
+                                    .ctx = provision,
+                                });
+                                return error.TLSEncryptFailed;
+                            };
+
+                            send_job.count = plain_buffer.len;
+                            send_job.security = .{
+                                .tls = .{
+                                    .encrypted = encrypted_buffer,
+                                    .encrypted_count = 0,
+                                },
+                            };
+
+                            try rt.net.send(.{
+                                .socket = provision.socket,
+                                .buffer = encrypted_buffer,
+                                .func = send_task,
+                                .ctx = provision,
+                            });
+                        },
+                        .plain => {
+                            send_job.security = .plain;
+
+                            try rt.net.send(.{
+                                .socket = provision.socket,
+                                .buffer = plain_buffer,
+                                .func = send_task,
+                                .ctx = provision,
+                            });
+                        },
+                    }
+                },
+            }
+        }
+
         fn recv_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
             const provision: *Provision = @ptrCast(@alignCast(ctx.?));
             assert(provision.job == .recv);
@@ -390,9 +462,10 @@ pub fn Server(
                 }
             };
 
-            var status: RecvStatus = recv_fn(rt, provision, p_config, z_config, recv_buffer);
+            var status: RecvStatus = @call(.auto, recv_fn, .{ rt, trigger_task, provision, p_config, z_config, recv_buffer });
 
             switch (status) {
+                .spawned => return,
                 .kill => {
                     rt.stop();
                     return error.Killed;
