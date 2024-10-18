@@ -26,7 +26,7 @@ pub const RecvStatus = union(enum) {
     spawned,
 };
 
-/// Security Model to use.chinp acas
+/// Security Model to use.
 ///
 /// Default: .plain (plaintext)
 pub const Security = union(enum) {
@@ -239,7 +239,14 @@ pub fn Server(
             provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = z_config.size_connection_arena_retain });
             provision.data.clean();
-            provision.recv_buffer.clearRetainingCapacity();
+
+            // TODO: new z_config setting here!
+            if (provision.recv_buffer.items.len > 1024) {
+                provision.recv_buffer.shrinkRetainingCapacity(1024);
+            } else {
+                provision.recv_buffer.clearRetainingCapacity();
+            }
+
             pool.release(provision.index);
 
             const accept_queued = rt.storage.get_ptr("accept_queued", bool);
