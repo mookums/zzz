@@ -3,11 +3,11 @@ const zzz = @import("zzz");
 const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/multithread");
 
-fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) void {
-    const name = context.captures[0].string;
-    const greeting = context.queries.get("greeting") orelse "Hi";
+fn hi_handler(ctx: *http.Context) void {
+    const name = ctx.captures[0].string;
+    const greeting = ctx.queries.get("greeting") orelse "Hi";
 
-    const body = std.fmt.allocPrint(context.allocator,
+    const body = std.fmt.allocPrint(ctx.allocator,
         \\ <!DOCTYPE html>
         \\ <html>
         \\ <body>
@@ -25,7 +25,7 @@ fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) 
         \\ </body>
         \\ </html>
     , .{ greeting, name }) catch {
-        response.set(.{
+        ctx.respond(.{
             .status = .@"Internal Server Error",
             .mime = http.Mime.HTML,
             .body = "Out of Memory!",
@@ -33,35 +33,26 @@ fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) 
         return;
     };
 
-    response.set(.{
+    ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
     });
 }
 
-fn redir_handler(_: http.Request, response: *http.Response, context: http.Context) void {
-    _ = context;
-    response.set(.{
+fn redir_handler(ctx: *http.Context) void {
+    ctx.response.headers.add("Location", "/hi/redirect") catch unreachable;
+    ctx.respond(.{
         .status = .@"Permanent Redirect",
         .mime = http.Mime.HTML,
         .body = "",
     });
-
-    response.headers.add("Location", "/hi/redirect") catch {
-        response.set(.{
-            .status = .@"Internal Server Error",
-            .mime = http.Mime.HTML,
-            .body = "Redirect Handler Failed",
-        });
-        return;
-    };
 }
 
-fn post_handler(request: http.Request, response: *http.Response, _: http.Context) void {
-    log.debug("Body: {s}", .{request.body});
+fn post_handler(ctx: *http.Context) void {
+    log.debug("Body: {s}", .{ctx.request.body});
 
-    response.set(.{
+    ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
@@ -73,7 +64,11 @@ pub fn main() !void {
     const port: u16 = 9862;
 
     // if multithreaded, you need a thread-safe allocator.
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(
+        .{ .thread_safe = true },
+    ){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();

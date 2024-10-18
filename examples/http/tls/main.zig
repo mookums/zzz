@@ -6,7 +6,11 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(
+        .{ .thread_safe = true },
+    ){ .backing_allocator = std.heap.c_allocator };
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -14,7 +18,7 @@ pub fn main() !void {
     try router.serve_embedded_file("/embed/pico.min.css", http.Mime.CSS, @embedFile("embed/pico.min.css"));
 
     try router.serve_route("/", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
+        pub fn handler_fn(ctx: *http.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -27,7 +31,7 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            response.set(.{
+            ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
@@ -36,8 +40,8 @@ pub fn main() !void {
     }.handler_fn));
 
     try router.serve_route("/kill", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
-            response.set(.{
+        pub fn handler_fn(ctx: *http.Context) void {
+            ctx.respond(.{
                 .status = .Kill,
                 .mime = http.Mime.HTML,
                 .body = "",

@@ -7,10 +7,10 @@ pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) void {
-    const name = context.captures[0].string;
+fn hi_handler(ctx: *http.Context) void {
+    const name = ctx.captures[0].string;
 
-    const body = std.fmt.allocPrint(context.allocator,
+    const body = std.fmt.allocPrint(ctx.allocator,
         \\ <!DOCTYPE html>
         \\ <html>
         \\ <body>
@@ -28,7 +28,7 @@ fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) 
         \\ </body>
         \\ </html>
     , .{name}) catch {
-        response.set(.{
+        ctx.respond(.{
             .status = .@"Internal Server Error",
             .mime = http.Mime.HTML,
             .body = "Out of Memory!",
@@ -36,7 +36,7 @@ fn hi_handler(_: http.Request, response: *http.Response, context: http.Context) 
         return;
     };
 
-    response.set(.{
+    ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,

@@ -15,7 +15,7 @@ pub fn main() !void {
     defer router.deinit();
 
     try router.serve_route("/", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
+        pub fn handler_fn(ctx: *http.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -25,7 +25,7 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            response.set(.{
+            ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
