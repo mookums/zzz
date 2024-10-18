@@ -29,11 +29,13 @@ const Provision = @import("../core/zprovision.zig").ZProvision(ProtocolData);
 const RecvStatus = @import("../core/server.zig").RecvStatus;
 const zzzServer = @import("../core/server.zig").Server;
 
+const TaskFn = @import("tardy").TaskFn;
+
 /// Uses the current p.response to generate and queue up the sending
 /// of a response. This is used when we already know what we want to send.
 ///
 /// See: `route_and_respond`
-fn raw_respond(p: *Provision) !RecvStatus {
+pub inline fn raw_respond(p: *Provision) !RecvStatus {
     {
         const status_code: u16 = if (p.data.response.status) |status| @intFromEnum(status) else 0;
         const status_name = if (p.data.response.status) |status| @tagName(status) else "No Status";
@@ -47,22 +49,28 @@ fn raw_respond(p: *Provision) !RecvStatus {
     return .{ .send = pseudo };
 }
 
-fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
+fn route_and_respond(runtime: *Runtime, trigger: TaskFn, p: *Provision, router: *const Router) !RecvStatus {
     route: {
         const found = router.get_route_from_host(p.data.request.uri, p.data.captures, &p.data.queries);
         if (found) |f| {
             const handler = f.route.get_handler(p.data.request.method);
 
             if (handler) |func| {
-                const context: Context = Context.init(
+                const context: *Context = try p.arena.allocator().create(Context);
+                context.* = Context.init(
                     p.arena.allocator(),
+                    trigger,
+                    runtime,
+                    p,
+                    &p.data.request,
+                    &p.data.response,
                     p.data.request.uri,
                     f.captures,
                     f.queries,
                 );
 
-                @call(.auto, func, .{ p.data.request, &p.data.response, context });
-                break :route;
+                @call(.auto, func, .{context});
+                return .spawned;
             } else {
                 // If we match the route but not the method.
                 p.data.response.set(.{
@@ -114,13 +122,13 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
 }
 
 pub fn recv_fn(
-    rt: *Runtime,
+    runtime: *Runtime,
+    trigger: TaskFn,
     provision: *Provision,
     p_config: *const ProtocolConfig,
     z_config: *const zzzConfig,
     recv_buffer: []const u8,
 ) RecvStatus {
-    _ = rt;
     _ = z_config;
 
     var stage = provision.data.stage;
@@ -222,7 +230,7 @@ pub fn recv_fn(
             }
 
             if (!provision.data.request.expect_body()) {
-                return route_and_respond(provision, p_config.router) catch unreachable;
+                return route_and_respond(runtime, trigger, provision, p_config.router) catch unreachable;
             }
 
             // Everything after here is a Request that is expecting a body.
@@ -249,7 +257,7 @@ pub fn recv_fn(
                     log.debug("{d} - got whole body with header", .{provision.index});
                     const body_end = header_end + difference;
                     provision.data.request.set_body(provision.recv_buffer.items[header_end..body_end]);
-                    return route_and_respond(provision, p_config.router) catch unreachable;
+                    return route_and_respond(runtime, trigger, provision, p_config.router) catch unreachable;
                 } else {
                     // Partial Body
                     log.debug("{d} - got partial body with header", .{provision.index});
@@ -262,7 +270,7 @@ pub fn recv_fn(
                     log.debug("{d} - got body of length 0", .{provision.index});
                     // Body of Length 0.
                     provision.data.request.set_body("");
-                    return route_and_respond(provision, p_config.router) catch unreachable;
+                    return route_and_respond(runtime, trigger, provision, p_config.router) catch unreachable;
                 } else {
                     // Got only header.
                     log.debug("{d} - got all header aka no body", .{provision.index});
@@ -313,7 +321,7 @@ pub fn recv_fn(
 
             if (job.count >= request_length) {
                 provision.data.request.set_body(provision.recv_buffer.items[header_end..request_length]);
-                return route_and_respond(provision, p_config.router) catch unreachable;
+                return route_and_respond(runtime, trigger, provision, p_config.router) catch unreachable;
             } else {
                 return .recv;
             }

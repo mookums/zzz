@@ -7,7 +7,9 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .enable_memory_limit = true }){ .requested_memory_limit = 1024 * 300 };
+    var gpa = std.heap.GeneralPurposeAllocator(
+        .{ .enable_memory_limit = true },
+    ){ .requested_memory_limit = 1024 * 300 };
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -15,7 +17,7 @@ pub fn main() !void {
     defer router.deinit();
 
     try router.serve_route("/", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
+        pub fn handler_fn(ctx: *http.Context) void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -25,7 +27,7 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            response.set(.{
+            ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
