@@ -98,24 +98,18 @@ pub const Router = struct {
     ) !void {
         assert(!self.locked);
         const route = Route.init().get(struct {
-            pub fn handler_fn(request: Request, response: *Response, _: Context) void {
-                response.set(.{
-                    .status = .OK,
-                    .mime = mime,
-                    .body = bytes,
-                });
-
+            pub fn handler_fn(ctx: *Context) void {
                 if (comptime builtin.mode == .Debug) {
                     // Don't Cache in Debug.
-                    response.headers.add(
+                    ctx.response.headers.add(
                         "Cache-Control",
                         "no-cache",
                     ) catch unreachable;
                 } else {
                     // Cache for 30 days.
-                    response.headers.add(
+                    ctx.response.headers.add(
                         "Cache-Control",
-                        comptime std.fmt.comptimePrint("max-age={d}", .{60 * 60 * 24 * 30}),
+                        comptime std.fmt.comptimePrint("max-age={d}", .{std.time.s_per_day * 30}),
                     ) catch unreachable;
                 }
 
@@ -124,15 +118,26 @@ pub const Router = struct {
                 if (comptime bytes.len > 1024) {
                     @setEvalBranchQuota(1_000_000);
                     const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
-                    response.headers.add("ETag", etag[0..]) catch unreachable;
+                    ctx.response.headers.add("ETag", etag[0..]) catch unreachable;
 
-                    if (request.headers.get("If-None-Match")) |match| {
+                    if (ctx.request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
-                            response.set_status(.@"Not Modified");
-                            response.set_body("");
+                            ctx.respond(.{
+                                .status = .@"Not Modified",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            return;
                         }
                     }
                 }
+
+                ctx.respond(.{
+                    .status = .OK,
+                    .mime = mime,
+                    .body = bytes,
+                });
             }
         }.handler_fn);
 

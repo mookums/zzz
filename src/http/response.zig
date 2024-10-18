@@ -59,7 +59,7 @@ pub const Response = struct {
         self.body = null;
     }
 
-    const ResponseSetOptions = struct {
+    pub const ResponseSetOptions = struct {
         status: ?Status = null,
         mime: ?Mime = null,
         body: ?[]const u8 = null,
