@@ -36,7 +36,7 @@ pub const ProtocolData = struct {
     response: Response,
     stage: Stage,
 
-    pub fn init(allocator: std.mem.Allocator, config: ProtocolConfig) ProtocolData {
+    pub fn init(allocator: std.mem.Allocator, config: *const ProtocolConfig) ProtocolData {
         var queries = QueryMap.init(allocator);
         queries.ensureTotalCapacity(config.num_queries_max) catch unreachable;
 
@@ -70,7 +70,8 @@ pub const ProtocolData = struct {
 const testing = std.testing;
 
 test "ProtocolData deinit" {
-    var x = ProtocolData.init(testing.allocator, .{ .router = undefined });
+    const config: ProtocolConfig = .{ .router = undefined };
+    var x = ProtocolData.init(testing.allocator, &config);
     defer x.deinit(testing.allocator);
 
     try testing.expectEqual(x.stage, .header);

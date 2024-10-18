@@ -1,6 +1,5 @@
 const std = @import("std");
 const panic = std.debug.panic;
-const Socket = @import("socket.zig").Socket;
 const Job = @import("../core/lib.zig").Job;
 const TLS = @import("../tls/lib.zig").TLS;
 
@@ -9,7 +8,7 @@ pub fn ZProvision(comptime ProtocolData: type) type {
         const Self = @This();
         index: usize,
         job: Job,
-        socket: Socket,
+        socket: std.posix.socket_t,
         buffer: []u8,
         recv_buffer: std.ArrayList(u8),
         arena: std.heap.ArenaAllocator,
@@ -17,6 +16,7 @@ pub fn ZProvision(comptime ProtocolData: type) type {
 
         pub fn init_hook(provisions: []Self, ctx: anytype) void {
             for (provisions) |*provision| {
+                provision.job = .empty;
                 provision.socket = undefined;
                 provision.data = undefined;
                 // Create Buffer

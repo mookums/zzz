@@ -3,10 +3,10 @@ zzz is a networking framework that allows for modularity and flexibility in desi
 
 For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP.
 
-`zig fetch --save https://github.com/mookums/zzz/archive/main.tar.gz`
+`zig fetch --save git+https://github.com/mookums/zzz#main`
 
 ## Hello, World!
-We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `src/examples/basic` directory.
+We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `examples/basic` directory.
 
 ```zig
 const std = @import("std");
@@ -18,7 +18,9 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -42,15 +44,14 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{
+    var server = http.Server(.plain, .auto).init(.{
         .allocator = allocator,
-    }, null);
+        .threading = .single,
+    });
     defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen(.{
-        .router = &router,
-    });
+    try server.listen(.{ .router = &router });
 }
 ```
 

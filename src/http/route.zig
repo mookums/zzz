@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log.scoped(.route);
+const log = std.log.scoped(.@"zzz/http/route");
 const Method = @import("method.zig").Method;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;

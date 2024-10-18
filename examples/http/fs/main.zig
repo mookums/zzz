@@ -1,15 +1,13 @@
 const std = @import("std");
 const zzz = @import("zzz");
 const http = zzz.HTTP;
-const log = std.log.scoped(.@"examples/basic");
+const log = std.log.scoped(.@"examples/fs");
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
+    const allocator = std.heap.page_allocator;
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -33,9 +31,9 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{ .allocator = allocator }, null);
-    defer server.deinit();
+    try router.serve_fs_dir("/static", "./src/examples/fs/static");
 
+    var server = http.Server(.plain, .auto).init(.{ .allocator = allocator });
     try server.bind(host, port);
     try server.listen(.{ .router = &router });
 }
