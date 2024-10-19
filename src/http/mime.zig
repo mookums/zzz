@@ -21,16 +21,16 @@ pub const Mime = struct {
         .description = "Animated Portable Network Graphics (APNG) Image",
     };
 
-    pub const AVI = Mime{
-        .content_type = "video/x-msvideo",
-        .extension = ".avi",
-        .description = "AVI: Audio Video Interleave",
-    };
-
     pub const AVIF = Mime{
         .content_type = "image/avif",
         .extension = ".avif",
         .description = "AVIF Image",
+    };
+
+    pub const AVI = Mime{
+        .content_type = "video/x-msvideo",
+        .extension = ".avi",
+        .description = "AVI: Audio Video Interleave",
     };
 
     pub const BIN = Mime{
@@ -39,10 +39,34 @@ pub const Mime = struct {
         .description = "Any kind of binary data",
     };
 
+    pub const BMP = Mime{
+        .content_type = "image/bmp",
+        .extension = ".bmp",
+        .description = "Windows OS/2 Bitmap Graphics",
+    };
+
     pub const CSS = Mime{
         .content_type = "text/css",
         .extension = ".css",
         .description = "Cascading Style Sheets (CSS)",
+    };
+
+    pub const CSV = Mime{
+        .content_type = "text/csv",
+        .extension = ".csv",
+        .description = "Comma-seperated values (CSV)",
+    };
+
+    pub const GZ = Mime{
+        .content_type = "application/gzip",
+        .extension = ".gz",
+        .description = "GZip Compressed Archive",
+    };
+
+    pub const GIF = Mime{
+        .content_type = "image/gif",
+        .extension = ".gif",
+        .description = "Graphics Interchange Format (GIF)",
     };
 
     pub const HTML = Mime{
@@ -55,6 +79,12 @@ pub const Mime = struct {
         .content_type = "image/vnd.microsoft.icon",
         .extension = ".ico",
         .description = "Icon Format",
+    };
+
+    pub const JPEG = Mime{
+        .content_type = "image/jpeg",
+        .extension = ".jpg",
+        .description = "JPEG Image",
     };
 
     pub const JS = Mime{
@@ -75,6 +105,12 @@ pub const Mime = struct {
         .description = "MP3 audio",
     };
 
+    pub const MP4 = Mime{
+        .content_type = "video/mp4",
+        .extension = ".mp4",
+        .description = "MP4 Video",
+    };
+
     pub const PNG = Mime{
         .content_type = "image/png",
         .extension = ".png",
@@ -87,31 +123,86 @@ pub const Mime = struct {
         .description = "Adobe Portable Document Format",
     };
 
-    /// This turn an extension into a unsigned 64 bit number
-    /// to be used as a key for quickly matching extensions
-    /// with their MIME type.
-    ///
-    /// We are making an assumption here that users will not
-    /// use an extension that is longer than 8 characters.
-    ///
-    /// If we need one more character, it might be worth
-    /// omitting the dot at the start since it is the same
-    /// amongst all of them.
+    pub const SH = Mime{
+        .content_type = "application/x-sh",
+        .extension = ".sh",
+        .description = "Bourne shell script",
+    };
+
+    pub const SVG = Mime{
+        .content_type = "image/svg+xml",
+        .extension = ".svg",
+        .description = "Scalable Vector Graphics (SVG)",
+    };
+
+    pub const TAR = Mime{
+        .content_type = "application/x-tar",
+        .extension = ".tar",
+        .description = "Tape Archive (TAR)",
+    };
+
+    pub const TTF = Mime{
+        .content_type = "font/ttf",
+        .extension = ".ttf",
+        .description = "TrueType Font",
+    };
+
+    pub const TEXT = Mime{
+        .content_type = "text/plain",
+        .extension = ".txt",
+        .description = "Text (generally ASCII or ISO-8859-n)",
+    };
+
+    pub const WAV = Mime{
+        .content_type = "audio/wav",
+        .extension = ".wav",
+        .description = "Waveform Audio Format",
+    };
+
+    pub const WEBM = Mime{
+        .content_type = "video/webm",
+        .extension = ".webm",
+        .description = "WEBM Video",
+    };
+
+    pub const WEBP = Mime{
+        .content_type = "image/webp",
+        .extension = ".webp",
+        .description = "WEBP Image",
+    };
+
+    pub const WOFF = Mime{
+        .content_type = "font/woff",
+        .extension = ".woff",
+        .description = "Web Open Font Format (WOFF)",
+    };
+
+    pub const XML = Mime{
+        .content_type = "application/xml",
+        .extension = ".xml",
+        .description = "XML",
+    };
+
+    pub const ZIP = Mime{
+        .content_type = "application/zip",
+        .extension = ".zip",
+        .description = "ZIP Archive",
+    };
+
+    pub const @"7Z" = Mime{
+        .content_type = "application/x-7z-compressed",
+        .extension = ".7z",
+        .description = "7-zip archive",
+    };
+
     fn extension_to_key(extension: []const u8) u64 {
         assert(extension.len > 0);
-        assert(extension.len <= 8);
-
-        // Here, we just pad the extension, ensuring
-        // that it will be able to get cast into a u64.
-        var buffer = [1]u8{0} ** 8;
-        for (0..extension.len) |i| {
-            buffer[i] = extension[i];
-        }
-
-        return std.mem.readPackedIntNative(u64, buffer[0..], 0);
+        const hash = std.hash.Wyhash.hash(0, extension);
+        return hash;
     }
 
     fn content_type_to_key(content_type: []const u8) u64 {
+        assert(content_type.len > 0);
         const hash = std.hash.Wyhash.hash(0, content_type);
         return hash;
     }
@@ -120,79 +211,60 @@ pub const Mime = struct {
         assert(extension.len > 0);
         assert(extension.len <= 8);
 
-        return switch (extension_to_key(extension)) {
-            extension_to_key(Mime.AAC.extension) => Mime.AAC,
-            extension_to_key(Mime.APNG.extension) => Mime.APNG,
-            extension_to_key(Mime.AVI.extension) => Mime.AVI,
-            extension_to_key(Mime.AVIF.extension) => Mime.AVIF,
-            extension_to_key(Mime.BIN.extension) => Mime.BIN,
-            extension_to_key(Mime.CSS.extension) => Mime.CSS,
-            extension_to_key(Mime.HTML.extension), extension_to_key(".htm") => Mime.HTML,
-            extension_to_key(Mime.ICO.extension) => Mime.ICO,
-            extension_to_key(Mime.JS.extension) => Mime.JS,
-            extension_to_key(Mime.JSON.extension) => Mime.JSON,
-            extension_to_key(Mime.MP3.extension) => Mime.MP3,
-            extension_to_key(Mime.PNG.extension) => Mime.PNG,
-            extension_to_key(Mime.PDF.extension) => Mime.PDF,
+        const extension_key = extension_to_key(extension);
+        inline for (all_mime_types) |mime| {
+            const mime_extension_key = comptime extension_to_key(mime.extension);
+            if (extension_key == mime_extension_key) return mime;
+        }
 
-            // If it is not a supported MIME type, send it as an octet-stream.
-            // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
-            else => Mime{
-                .extension = extension,
-                .content_type = "application/octet-stream",
-                .description = "Unknown File Type",
-            },
+        return Mime{
+            .extension = extension,
+            .content_type = "application/octet-stream",
+            .description = "Unknown File Type",
         };
     }
 
     pub fn from_content_type(content_type: []const u8) Mime {
-        return switch (content_type_to_key(content_type)) {
-            content_type_to_key(Mime.AAC.content_type) => Mime.AAC,
-            content_type_to_key(Mime.APNG.content_type) => Mime.APNG,
-            content_type_to_key(Mime.AVI.content_type) => Mime.AVI,
-            content_type_to_key(Mime.AVIF.content_type) => Mime.AVIF,
-            content_type_to_key(Mime.BIN.content_type) => Mime.BIN,
-            content_type_to_key(Mime.CSS.content_type) => Mime.CSS,
-            content_type_to_key(Mime.HTML.content_type) => Mime.HTML,
-            content_type_to_key(Mime.ICO.content_type) => Mime.ICO,
-            content_type_to_key(Mime.JS.content_type) => Mime.JS,
-            content_type_to_key(Mime.JSON.content_type) => Mime.JSON,
-            content_type_to_key(Mime.MP3.content_type) => Mime.MP3,
-            content_type_to_key(Mime.PNG.content_type) => Mime.PNG,
-            content_type_to_key(Mime.PDF.content_type) => Mime.PDF,
+        assert(content_type.len > 0);
 
-            // If it is not a supported MIME type, we use the bin extension.
-            else => Mime{
-                .extension = ".bin",
-                .content_type = content_type,
-                .description = "Unknown File Type",
-            },
+        const content_type_key = content_type_to_key(content_type);
+        inline for (all_mime_types) |mime| {
+            const mime_content_type_key = comptime content_type_to_key(mime.content_type);
+            if (content_type_key == mime_content_type_key) return mime;
+        }
+
+        return Mime{
+            .extension = ".bin",
+            .content_type = content_type,
+            .description = "Unknown File Type",
         };
     }
 };
 
-const testing = std.testing;
+const all_mime_types = blk: {
+    const decls = @typeInfo(Mime).Struct.decls;
+    var mimes: [decls.len]Mime = undefined;
+    var index: usize = 0;
+    for (decls) |decl| {
+        if (@TypeOf(@field(Mime, decl.name)) == Mime) {
+            mimes[index] = @field(Mime, decl.name);
+            index += 1;
+        }
+    }
 
-const all_mimes = [_]Mime{
-    Mime.AAC,
-    Mime.APNG,
-    Mime.AVI,
-    Mime.AVIF,
-    Mime.BIN,
-    Mime.CSS,
-    Mime.HTML,
-    Mime.ICO,
-    Mime.JS,
-    Mime.JSON,
-    Mime.MP3,
-    Mime.PNG,
-    Mime.PDF,
+    var return_mimes: [index]Mime = undefined;
+    for (0..index) |i| {
+        return_mimes[i] = mimes[i];
+    }
+
+    break :blk return_mimes;
 };
 
+const testing = std.testing;
+
 test "MIME from extensions" {
-    for (all_mimes) |mime| {
-        //std.debug.print("Mime: {s}\n", .{mime.description});
-        try testing.expectEqual(mime, Mime.from_extension(mime.extension));
+    for (all_mime_types) |mime| {
+        try testing.expectEqualStrings(mime.description, Mime.from_extension(mime.extension).description);
     }
 }
 
@@ -204,8 +276,8 @@ test "MIME from unknown extension" {
 }
 
 test "MIME from content types" {
-    for (all_mimes) |mime| {
-        try testing.expectEqual(mime, Mime.from_content_type(mime.content_type));
+    for (all_mime_types) |mime| {
+        try testing.expectEqualStrings(mime.description, Mime.from_content_type(mime.content_type).description);
     }
 }
 
