@@ -30,9 +30,9 @@ pub fn ZProvision(comptime ProtocolData: type) type {
             }
         }
 
-        pub fn deinit_hook(provisions: []Self, ctx: anytype) void {
+        pub fn deinit_hook(provisions: []Self, allocator: anytype) void {
             for (provisions) |*provision| {
-                ctx.allocator.free(provision.buffer);
+                allocator.free(provision.buffer);
                 provision.recv_buffer.deinit();
                 provision.arena.deinit();
             }

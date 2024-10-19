@@ -264,7 +264,6 @@ pub fn Server(
 
             const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
             const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_ctx: *TLSContextType = @ptrCast(@alignCast(rt.storage.get("tls_ctx").?));
 
             const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
             accept_queued.* = false;
@@ -361,6 +360,7 @@ pub fn Server(
 
             switch (comptime security) {
                 .tls => |_| {
+                    const tls_ctx: *TLSContextType = @ptrCast(@alignCast(rt.storage.get("tls_ctx").?));
                     const tls_slice: []TLSType = @as(
                         [*]TLSType,
                         @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
@@ -874,20 +874,21 @@ pub fn Server(
                         try rt.storage.put("z_config", @constCast(&params.zzz.config));
                         try rt.storage.put("p_config", @constCast(params.p_config));
 
-                        const tls_slice_size = switch (comptime security) {
-                            .tls => params.zzz.config.size_connections_max,
-                            .plain => 0,
-                        };
-                        const tls_slice = try alloc.alloc(TLSType, tls_slice_size);
                         if (comptime security == .tls) {
-                            for (tls_slice) |*tls| {
-                                tls.* = null;
+                            const tls_slice = try alloc.alloc(
+                                TLSType,
+                                params.zzz.config.size_connections_max,
+                            );
+                            if (comptime security == .tls) {
+                                for (tls_slice) |*tls| {
+                                    tls.* = null;
+                                }
                             }
+                            try rt.storage.put("tls_slice", tls_slice.ptr);
+                            try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
                         }
 
                         try rt.storage.put("server_socket", socket);
-                        try rt.storage.put("tls_slice", tls_slice.ptr);
-                        try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
 
                         const accept_queued: *bool = try alloc.create(bool);
                         accept_queued.* = true;
@@ -903,6 +904,36 @@ pub fn Server(
                     .zzz = self,
                     .p_config = &protocol_config,
                 },
+                struct {
+                    fn rt_end(rt: *Runtime, alloc: std.mem.Allocator, _: anytype) void {
+                        // clean up socket.
+                        const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
+                        std.posix.close(server_socket.*);
+                        alloc.destroy(server_socket);
+
+                        const accepted_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+                        alloc.destroy(accepted_queued);
+
+                        // clean up provision pool.
+                        const provision_pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
+                        for (provision_pool.items) |*provision| {
+                            provision.data.deinit(alloc);
+                        }
+                        provision_pool.deinit(Provision.deinit_hook, alloc);
+                        alloc.destroy(provision_pool);
+
+                        // clean up TLS.
+                        if (comptime security == .tls) {
+                            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+                            const tls_slice: []TLSType = @as(
+                                [*]TLSType,
+                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
+                            )[0..z_config.size_connections_max];
+                            alloc.free(tls_slice);
+                        }
+                    }
+                }.rt_end,
+                void,
             );
         }
     };

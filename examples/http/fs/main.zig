@@ -31,7 +31,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    try router.serve_fs_dir("/static", "./src/examples/fs/static");
+    try router.serve_fs_dir("/static", "./examples/http/fs/static");
 
     var server = http.Server(.plain, .auto).init(.{ .allocator = allocator });
     try server.bind(host, port);
