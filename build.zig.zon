@@ -1,8 +1,12 @@
 .{
     .name = "zzz",
     .version = "0.0.0",
-    .minimum_zig_version = "0.11.0",
+    .minimum_zig_version = "0.13.0",
     .dependencies = .{
+        .tardy = .{
+            .url = "git+https://github.com/mookums/tardy?ref=main#f8e40ddc94c5879b0f9e7347286d9bd21bc1efef",
+            .hash = "1220d4c97a190710ea547e82585e34835ab6403d3cb039b6be69316107f050845a35",
+        },
         .bearssl = .{
             .url = "https://github.com/mookums/bearssl-zig/archive/37a96eee56fe2543579bbc6da148ca886f3dd32b.tar.gz",
             .hash = "12200e89d16612100a2f145cfa292537ac25b2205735fc1c644c799d2995f94e8e20",

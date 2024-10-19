@@ -7,9 +7,9 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -33,7 +33,10 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain).init(.{ .allocator = allocator }, null);
+    var server = http.Server(.plain, .auto).init(.{
+        .allocator = allocator,
+        .threading = .single,
+    });
     defer server.deinit();
 
     try server.bind(host, port);

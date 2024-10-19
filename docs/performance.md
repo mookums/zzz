@@ -4,38 +4,39 @@ zzz's design philosophy results in a lot of knobs that the consumer of the libra
 These performance tips are general and can apply to any protocol implementation. HTTP is used as the general example because it is currently the only completed protocol.
 
 ## Performance Hunting
-When seeking out maximum performance, one of the most important settings to change is the `.threading` setting of the server. By default, zzz runs in a single threaded mode (likely to change in a future development cycle). 
+zzz now officially runs multithreaded by default. By default, it will utilize `@min(cpu_count / 2 - 1, 1)` threads. This can be tuned by using the `.threading` flag.
 
 ```zig
-var server = http.Server(.plain).init(.{
+var server = http.Server(.plain, .auto).init(.{
     .allocator = allocator,
-}, null);
-```
-This means that you can gain the largest performance boon by simply adding this one line:
-```zig
-var server = http.Server(.plain).init(.{
-    .allocator = allocator,
-    .threading = .{ .multi_threaded = .auto },
-}, null);
+    .threading = .{ .multi = COUNT },
+    .size_backlog = 32,
+    .size_connections_max = 16,
+    .size_connection_arena_retain = 64,
+    .size_socket_buffer = 512,
+});
 ```
 
-The most important part of switching to the multi threaded model is using a **thread-safe** allocator.  I tend to use the page allocator but I believe the general purpose allocator can also be thread-safe.
+The most important part of switching to the multi threaded model is using a **thread-safe** allocator. The general purpose allocator with the thread safe flag is an ideal choice.
+
+Another way to alter the performance is by changing which Async I/O model you use. `.auto` will select the best one overall but there are other options that may be worth benchmarking
+depending on your use case.
 
 Other settings of note include:
--  `size_connection_arena_retain` which controls how much memory that has been allocated within a connection's arena will be retained for the next connection. 
+- `size_connection_arena_retain` which controls how much memory that has been allocated within a connection's arena will be retained for the next connection.
 - `size_connections_max` which controls the maximum number of connections that each thread can handle.  Any connection after this number will get closed.
 
 ## Minimizing Memory Usage
 When using zzz in certain environments, your goal may be to reduce memory usage. zzz provides a variety of controls for handling how much memory is allocated at start up.
 
 ```zig
-var server = http.Server(.plain).init(.{
+var server = http.Server(.plain, .auto).init(.{
     .allocator = allocator,
     .size_backlog = 32,
     .size_connections_max = 16,
     .size_connection_arena_retain = 64,
     .size_socket_buffer = 512,
-}, null);
+});
 ```
 
 There is no overarching setting here but a selection of ones you can tune to minimize:

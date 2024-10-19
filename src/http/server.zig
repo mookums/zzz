@@ -3,12 +3,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const panic = std.debug.panic;
-const log = std.log.scoped(.@"zzz/server/http");
+const log = std.log.scoped(.@"zzz/http/server");
 
-const Async = @import("../async/lib.zig").Async;
+const Runtime = @import("tardy").Runtime;
+const AsyncIOType = @import("tardy").AsyncIOType;
+const Pool = @import("tardy").Pool;
 
 const Job = @import("../core/lib.zig").Job;
-const Pool = @import("../core/lib.zig").Pool;
 const Pseudoslice = @import("../core/lib.zig").Pseudoslice;
 
 const HTTPError = @import("lib.zig").HTTPError;
@@ -112,25 +113,15 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
     return try raw_respond(p);
 }
 
-pub fn accept_fn(provision: *Provision, p_config: ProtocolConfig, z_config: zzzConfig, backend: *Async) void {
-    // HTTP doesn't need to do anything special on accept.
-    // We have some generic stuff that happens but that is for zzz to do.
-    // eg. Provision assigning etc.
-    _ = p_config;
-    _ = z_config;
-    _ = backend;
-    provision.data.stage = .header;
-}
-
 pub fn recv_fn(
+    rt: *Runtime,
     provision: *Provision,
-    p_config: ProtocolConfig,
-    z_config: zzzConfig,
-    backend: *Async,
+    p_config: *const ProtocolConfig,
+    z_config: *const zzzConfig,
     recv_buffer: []const u8,
 ) RecvStatus {
+    _ = rt;
     _ = z_config;
-    _ = backend;
 
     var stage = provision.data.stage;
     const job = provision.job.recv;
@@ -147,8 +138,9 @@ pub fn recv_fn(
 
     switch (stage) {
         .header => {
+            const start = provision.recv_buffer.items.len -| 4;
             provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
-            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items, "\r\n\r\n");
+            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
@@ -329,6 +321,6 @@ pub fn recv_fn(
     }
 }
 
-pub fn Server(comptime security: Security) type {
-    return zzzServer(security, ProtocolData, ProtocolConfig, accept_fn, recv_fn);
+pub fn Server(comptime security: Security, comptime async_type: AsyncIOType) type {
+    return zzzServer(security, async_type, ProtocolData, ProtocolConfig, recv_fn);
 }

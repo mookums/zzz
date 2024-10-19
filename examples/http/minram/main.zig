@@ -1,13 +1,15 @@
 const std = @import("std");
 const zzz = @import("zzz");
 const http = zzz.HTTP;
-const log = std.log.scoped(.@"examples/fs");
+const log = std.log.scoped(.@"examples/minram");
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .enable_memory_limit = true }){ .requested_memory_limit = 1024 * 300 };
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var router = http.Router.init(allocator);
     defer router.deinit();
@@ -31,9 +33,22 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    try router.serve_fs_dir("/static", "./src/examples/fs/static");
+    var server = http.Server(.plain, .auto).init(.{
+        .allocator = allocator,
+        .threading = .single,
+        .size_backlog = 32,
+        .size_connections_max = 16,
+        .size_connection_arena_retain = 64,
+        .size_completions_reap_max = 8,
+        .size_socket_buffer = 512,
+    });
 
-    var server = http.Server(.plain).init(.{ .allocator = allocator }, null);
     try server.bind(host, port);
-    try server.listen(.{ .router = &router });
+    try server.listen(.{
+        .router = &router,
+        .num_header_max = 32,
+        .num_captures_max = 0,
+        .size_request_max = 2048,
+        .size_request_uri_max = 256,
+    });
 }
