@@ -5,7 +5,7 @@ const log = std.log.scoped(.@"zzz/http/context");
 const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
 
-const Provision = @import("../core/zprovision.zig").ZProvision(@import("protocol.zig").ProtocolData);
+const Provision = @import("provision.zig").Provision;
 
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;

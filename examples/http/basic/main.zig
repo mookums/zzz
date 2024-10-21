@@ -34,11 +34,12 @@ pub fn main() !void {
     }.handler_fn));
 
     var server = http.Server(.plain, .auto).init(.{
+        .router = &router,
         .allocator = allocator,
         .threading = .single,
     });
     defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen(.{ .router = &router });
+    try server.listen();
 }
