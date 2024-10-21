@@ -209,7 +209,6 @@ pub const Mime = struct {
 
     pub fn from_extension(extension: []const u8) Mime {
         assert(extension.len > 0);
-        assert(extension.len <= 8);
 
         const extension_key = extension_to_key(extension);
         inline for (all_mime_types) |mime| {
