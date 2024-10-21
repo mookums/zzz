@@ -16,6 +16,7 @@ pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
 pub const AsyncIOType = @import("tardy").AsyncIOType;
 const TardyCreator = @import("tardy").Tardy;
+const Cross = @import("tardy").Cross;
 
 pub const RecvStatus = union(enum) {
     kill,
@@ -216,17 +217,14 @@ pub fn Server(
         fn close_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
             const provision: *Provision = @ptrCast(@alignCast(ctx.?));
             assert(provision.job == .close);
-            const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
-            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
-            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+            const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
+            const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
+            const z_config = rt.storage.get_const_ptr("z_config", zzzConfig);
 
             log.info("{d} - closing connection", .{provision.index});
 
             if (comptime security == .tls) {
-                const tls_slice: []TLSType = @as(
-                    [*]TLSType,
-                    @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                )[0..z_config.size_connections_max];
+                const tls_slice = rt.storage.get("tls_slice", []TLSType);
 
                 const tls_ptr: *?TLS = &tls_slice[provision.index];
                 assert(tls_ptr.* != null);
@@ -234,26 +232,18 @@ pub fn Server(
                 tls_ptr.* = null;
             }
 
-            switch (comptime builtin.target.os.tag) {
-                .windows => {
-                    provision.socket = std.os.windows.ws2_32.INVALID_SOCKET;
-                },
-                else => {
-                    provision.socket = -1;
-                },
-            }
-
+            provision.socket = Cross.socket.INVALID_SOCKET;
             provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = z_config.size_connection_arena_retain });
             provision.data.clean();
             provision.recv_buffer.clearRetainingCapacity();
             pool.release(provision.index);
 
-            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+            const accept_queued = rt.storage.get_ptr("accept_queued", bool);
             if (!accept_queued.*) {
                 accept_queued.* = true;
                 try rt.net.accept(.{
-                    .socket = server_socket.*,
+                    .socket = server_socket,
                     .func = accept_task,
                 });
             }
@@ -262,34 +252,22 @@ pub fn Server(
         fn accept_task(rt: *Runtime, t: *const Task, _: ?*anyopaque) !void {
             const child_socket = t.result.?.socket;
 
-            const pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
-            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-
-            const accept_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
+            const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
+            const accept_queued = rt.storage.get_ptr("accept_queued", bool);
             accept_queued.* = false;
 
             if (rt.scheduler.tasks.clean() >= 2) {
                 accept_queued.* = true;
-                const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
+                const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
                 try rt.net.accept(.{
-                    .socket = server_socket.*,
+                    .socket = server_socket,
                     .func = accept_task,
                 });
             }
 
-            switch (comptime builtin.target.os.tag) {
-                .windows => {
-                    if (child_socket == std.os.windows.ws2_32.INVALID_SOCKET) {
-                        log.err("socket accept failed", .{});
-                        return error.AcceptFailed;
-                    }
-                },
-                else => {
-                    if (child_socket <= 0) {
-                        log.err("socket accept failed", .{});
-                        return error.AcceptFailed;
-                    }
-                },
+            if (!Cross.socket.is_valid(child_socket)) {
+                log.err("socket accept failed", .{});
+                return error.AcceptFailed;
             }
 
             // This should never fail. It means that we have a dangling item.
@@ -303,54 +281,8 @@ pub fn Server(
             );
             assert(borrowed.item.job == .empty);
 
-            switch (comptime std.posix.socket_t) {
-                std.posix.socket_t => {
-                    // Disable Nagle's
-                    if (comptime builtin.os.tag.isDarwin()) {
-                        // system.TCP is weird on MacOS.
-                        try std.posix.setsockopt(
-                            child_socket,
-                            std.posix.IPPROTO.TCP,
-                            1,
-                            &std.mem.toBytes(@as(c_int, 1)),
-                        );
-                    } else {
-                        try std.posix.setsockopt(
-                            child_socket,
-                            std.posix.IPPROTO.TCP,
-                            std.posix.TCP.NODELAY,
-                            &std.mem.toBytes(@as(c_int, 1)),
-                        );
-                    }
-
-                    // Set non-blocking.
-                    switch (comptime builtin.target.os.tag) {
-                        .windows => {
-                            var mode: u32 = 1;
-                            _ = std.os.windows.ws2_32.ioctlsocket(
-                                child_socket,
-                                std.os.windows.ws2_32.FIONBIO,
-                                &mode,
-                            );
-                        },
-                        else => {
-                            const current_flags = try std.posix.fcntl(
-                                child_socket,
-                                std.posix.F.GETFL,
-                                0,
-                            );
-                            var new_flags = @as(
-                                std.posix.O,
-                                @bitCast(@as(u32, @intCast(current_flags))),
-                            );
-                            new_flags.NONBLOCK = true;
-                            const arg: u32 = @bitCast(new_flags);
-                            _ = try std.posix.fcntl(child_socket, std.posix.F.SETFL, arg);
-                        },
-                    }
-                },
-                else => unreachable,
-            }
+            try Cross.socket.disable_nagle(child_socket);
+            try Cross.socket.to_nonblock(child_socket);
 
             const provision = borrowed.item;
 
@@ -360,11 +292,8 @@ pub fn Server(
 
             switch (comptime security) {
                 .tls => |_| {
-                    const tls_ctx: *TLSContextType = @ptrCast(@alignCast(rt.storage.get("tls_ctx").?));
-                    const tls_slice: []TLSType = @as(
-                        [*]TLSType,
-                        @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                    )[0..z_config.size_connections_max];
+                    const tls_ctx = rt.storage.get_const_ptr("tls_ctx", TLSContextType);
+                    const tls_slice = rt.storage.get("tls_slice", []TLSType);
 
                     const tls_ptr: *?TLS = &tls_slice[provision.index];
                     assert(tls_ptr.* == null);
@@ -373,7 +302,7 @@ pub fn Server(
                         log.err("{d} - tls creation failed={any}", .{ provision.index, e });
                         provision.job = .close;
                         try rt.net.close(.{
-                            .fd = provision.socket,
+                            .socket = provision.socket,
                             .func = close_task,
                             .ctx = provision,
                         });
@@ -384,7 +313,7 @@ pub fn Server(
                         log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
                         provision.job = .close;
                         try rt.net.close(.{
-                            .fd = provision.socket,
+                            .socket = provision.socket,
                             .func = close_task,
                             .ctx = provision,
                         });
@@ -416,8 +345,8 @@ pub fn Server(
             assert(provision.job == .recv);
             const length: i32 = t.result.?.value;
 
-            const p_config: *const ProtocolConfig = @ptrCast(@alignCast(rt.storage.get("p_config").?));
-            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+            const p_config = rt.storage.get_const_ptr("p_config", ProtocolConfig);
+            const z_config = rt.storage.get_const_ptr("z_config", zzzConfig);
 
             const recv_job = &provision.job.recv;
 
@@ -425,7 +354,7 @@ pub fn Server(
             if (length <= 0) {
                 provision.job = .close;
                 try rt.net.close(.{
-                    .fd = provision.socket,
+                    .socket = provision.socket,
                     .func = close_task,
                     .ctx = provision,
                 });
@@ -441,10 +370,7 @@ pub fn Server(
             const recv_buffer = blk: {
                 switch (comptime security) {
                     .tls => |_| {
-                        const tls_slice: []TLSType = @as(
-                            [*]TLSType,
-                            @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                        )[0..z_config.size_connections_max];
+                        const tls_slice = rt.storage.get("tls_slice", []TLSType);
 
                         const tls_ptr: *?TLS = &tls_slice[provision.index];
                         assert(tls_ptr.* != null);
@@ -453,7 +379,7 @@ pub fn Server(
                             log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
                             provision.job = .close;
                             try rt.net.close(.{
-                                .fd = provision.socket,
+                                .socket = provision.socket,
                                 .func = close_task,
                                 .ctx = provision,
                             });
@@ -484,10 +410,7 @@ pub fn Server(
 
                     switch (comptime security) {
                         .tls => |_| {
-                            const tls_slice: []TLSType = @as(
-                                [*]TLSType,
-                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                            )[0..z_config.size_connections_max];
+                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
 
                             const tls_ptr: *?TLS = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
@@ -496,7 +419,7 @@ pub fn Server(
                                 log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
                                 provision.job = .close;
                                 try rt.net.close(.{
-                                    .fd = provision.socket,
+                                    .socket = provision.socket,
                                     .func = close_task,
                                     .ctx = provision,
                                 });
@@ -550,13 +473,9 @@ pub fn Server(
             const provision: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
-            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-            const tls_slice: []TLSType = @as(
-                [*]TLSType,
-                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-            )[0..z_config.size_connections_max];
-
             if (comptime security == .tls) {
+                const tls_slice = rt.storage.get("tls_slice", []TLSType);
+
                 assert(provision.job == .handshake);
                 const handshake_job = &provision.job.handshake;
 
@@ -569,7 +488,7 @@ pub fn Server(
                     log.debug("handshake connection closed", .{});
                     provision.job = .close;
                     try rt.net.close(.{
-                        .fd = provision.socket,
+                        .socket = provision.socket,
                         .func = close_task,
                         .ctx = provision,
                     });
@@ -580,7 +499,7 @@ pub fn Server(
                     log.debug("handshake taken too many cycles", .{});
                     provision.job = .close;
                     try rt.net.close(.{
-                        .fd = provision.socket,
+                        .socket = provision.socket,
                         .func = close_task,
                         .ctx = provision,
                     });
@@ -598,7 +517,7 @@ pub fn Server(
                             log.err("{d} - tls handshake on recv failed={any}", .{ provision.index, e });
                             provision.job = .close;
                             try rt.net.close(.{
-                                .fd = provision.socket,
+                                .socket = provision.socket,
                                 .func = close_task,
                                 .ctx = provision,
                             });
@@ -645,7 +564,7 @@ pub fn Server(
                             log.err("{d} - tls handshake on send failed={any}", .{ provision.index, e });
                             provision.job = .close;
                             try rt.net.close(.{
-                                .fd = provision.socket,
+                                .socket = provision.socket,
                                 .func = close_task,
                                 .ctx = provision,
                             });
@@ -693,13 +612,13 @@ pub fn Server(
             assert(provision.job == .send);
             const length: i32 = t.result.?.value;
 
-            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
+            const z_config = rt.storage.get_const_ptr("z_config", zzzConfig);
 
             // If the socket is closed.
             if (length <= 0) {
                 provision.job = .close;
                 try rt.net.close(.{
-                    .fd = provision.socket,
+                    .socket = provision.socket,
                     .func = close_task,
                     .ctx = provision,
                 });
@@ -716,10 +635,7 @@ pub fn Server(
                 .tls => {
                     assert(send_job.security == .tls);
 
-                    const tls_slice: []TLSType = @as(
-                        [*]TLSType,
-                        @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                    )[0..z_config.size_connections_max];
+                    const tls_slice = rt.storage.get("tls_slice", []TLSType);
 
                     const job_tls = &send_job.security.tls;
                     job_tls.encrypted_count += send_count;
@@ -761,7 +677,7 @@ pub fn Server(
                                 log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
                                 provision.job = .close;
                                 try rt.net.close(.{
-                                    .fd = provision.socket,
+                                    .socket = provision.socket,
                                     .func = close_task,
                                     .ctx = provision,
                                 });
@@ -843,16 +759,15 @@ pub fn Server(
             log.info("security mode: {s}", .{@tagName(security)});
 
             const EntryParams = struct {
-                zzz: *const Self,
-                p_config: *const ProtocolConfig,
+                zzz: *Self,
+                p_config: *ProtocolConfig,
             };
 
             try self.tardy.entry(
                 struct {
                     fn rt_start(rt: *Runtime, alloc: std.mem.Allocator, params: EntryParams) !void {
-                        const socket = try alloc.create(std.posix.socket_t);
-                        socket.* = try params.zzz.create_socket();
-                        try std.posix.listen(socket.*, params.zzz.config.size_backlog);
+                        const socket = try params.zzz.create_socket();
+                        try std.posix.listen(socket, params.zzz.config.size_backlog);
 
                         // use the arena here.
                         var pool_params = params.zzz.config;
@@ -870,9 +785,9 @@ pub fn Server(
                             provision.data = ProtocolData.init(alloc, params.p_config);
                         }
 
-                        try rt.storage.put("provision_pool", provision_pool);
-                        try rt.storage.put("z_config", @constCast(&params.zzz.config));
-                        try rt.storage.put("p_config", @constCast(params.p_config));
+                        try rt.storage.store_ptr("provision_pool", provision_pool);
+                        try rt.storage.store_ptr("z_config", &params.zzz.config);
+                        try rt.storage.store_ptr("p_config", params.p_config);
 
                         if (comptime security == .tls) {
                             const tls_slice = try alloc.alloc(
@@ -884,38 +799,33 @@ pub fn Server(
                                     tls.* = null;
                                 }
                             }
-                            try rt.storage.put("tls_slice", tls_slice.ptr);
-                            try rt.storage.put("tls_ctx", @constCast(&params.zzz.tls_ctx));
+
+                            // since slices are fat pointers...
+                            try rt.storage.store_alloc("tls_slice", tls_slice);
+                            try rt.storage.store_ptr("tls_ctx", &params.zzz.tls_ctx);
                         }
 
-                        try rt.storage.put("server_socket", socket);
-
-                        const accept_queued: *bool = try alloc.create(bool);
-                        accept_queued.* = true;
-                        try rt.storage.put("accept_queued", accept_queued);
+                        try rt.storage.store_alloc("server_socket", socket);
+                        try rt.storage.store_alloc("accept_queued", true);
 
                         try rt.net.accept(.{
-                            .socket = socket.*,
+                            .socket = socket,
                             .func = accept_task,
                         });
                     }
                 }.rt_start,
                 EntryParams{
                     .zzz = self,
-                    .p_config = &protocol_config,
+                    .p_config = @constCast(&protocol_config),
                 },
                 struct {
                     fn rt_end(rt: *Runtime, alloc: std.mem.Allocator, _: anytype) void {
                         // clean up socket.
-                        const server_socket: *std.posix.socket_t = @ptrCast(@alignCast(rt.storage.get("server_socket").?));
-                        std.posix.close(server_socket.*);
-                        alloc.destroy(server_socket);
-
-                        const accepted_queued: *bool = @ptrCast(@alignCast(rt.storage.get("accept_queued").?));
-                        alloc.destroy(accepted_queued);
+                        const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
+                        std.posix.close(server_socket);
 
                         // clean up provision pool.
-                        const provision_pool: *Pool(Provision) = @ptrCast(@alignCast(rt.storage.get("provision_pool").?));
+                        const provision_pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
                         for (provision_pool.items) |*provision| {
                             provision.data.deinit(alloc);
                         }
@@ -924,11 +834,7 @@ pub fn Server(
 
                         // clean up TLS.
                         if (comptime security == .tls) {
-                            const z_config: *const zzzConfig = @ptrCast(@alignCast(rt.storage.get("z_config").?));
-                            const tls_slice: []TLSType = @as(
-                                [*]TLSType,
-                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                            )[0..z_config.size_connections_max];
+                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
                             alloc.free(tls_slice);
                         }
                     }
