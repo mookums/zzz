@@ -3,9 +3,11 @@
 
 
 ## Installing
-Tracking Latest Zig Stable: `0.13.0`
+Latest Zig Stable: `0.13.0`
+
+Latest zzz release: `0.1.0`
 ```
-zig fetch --save git+https://github.com/mookums/zzz#main
+zig fetch --save git+https://github.com/mookums/zzz#v0.1.0
 ```
 
 You can then add the dependency in your `build.zig` file:
@@ -66,4 +68,3 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
 - Single and Multi-threaded Support
 - TLS using BearSSL
 - (Almost) all memory allocated at startup
-
