@@ -146,9 +146,8 @@ pub fn recv_fn(
 
     switch (stage) {
         .header => {
-            const start = provision.recv_buffer.items.len -| 4;
             provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
-            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
+            const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[0..], "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
