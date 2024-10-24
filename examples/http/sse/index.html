@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE Example</title>
+    <style>
+        #messages {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .error {
+            color: red;
+        }
+        .status {
+            color: blue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Server-Sent Events Example</h1>
+    <button id="toggle-sse">Start SSE Connection</button>
+    <div id="status"></div>
+    <script>
+        let eventSource = null;
+        const button = document.getElementById('toggle-sse');
+        const statusDiv = document.getElementById('status');
+        const messagesDiv = document.getElementById('messages');
+
+        function logStatus(message, isError = false) {
+            const p = document.createElement('p');
+            p.textContent = `${new Date().toISOString()}: ${message}`;
+            p.className = isError ? 'error' : 'status';
+            statusDiv.appendChild(p);
+            console.log(message);
+        }
+
+        button.addEventListener('click', function() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                button.textContent = 'Start SSE Connection';
+                logStatus('Connection closed');
+                return;
+            }
+
+            try {
+                logStatus('Attempting to connect...');
+                eventSource = new EventSource('/stream');
+                button.textContent = 'Stop SSE Connection';
+
+                eventSource.onopen = function() {
+                    logStatus('Connection established');
+                };
+
+                eventSource.onmessage = function(event) {
+                    logStatus(`Message received: ${event.data}`);
+                };
+
+                eventSource.onerror = function(err) {
+                    const errorMsg = `Error occurred: ${err.type}`;
+                    logStatus(errorMsg, true);
+                    console.error('SSE Error:', err);
+                    
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        logStatus('Connection was closed', true);
+                    } else if (eventSource.readyState === EventSource.CONNECTING) {
+                        logStatus('Attempting to reconnect...', true);
+                    }
+                    
+                    // Optional: close connection on error
+                    // eventSource.close();
+                    // eventSource = null;
+                    // button.textContent = 'Start SSE Connection';
+                };
+            } catch (err) {
+                logStatus(`Failed to create EventSource: ${err.message}`, true);
+            }
+        });
+
+        window.addEventListener('unload', () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>

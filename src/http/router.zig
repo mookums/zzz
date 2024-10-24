@@ -15,6 +15,7 @@ const QueryMap = @import("routing_trie.zig").QueryMap;
 
 const Runtime = @import("tardy").Runtime;
 const Task = @import("tardy").Task;
+const TaskFn = @import("tardy").TaskFn;
 
 pub const Router = struct {
     allocator: std.mem.Allocator,
@@ -247,6 +248,36 @@ pub const Router = struct {
                     .mime = mime,
                     .body = bytes,
                 });
+            }
+        }.handler_fn);
+
+        try self.serve_route(path, route);
+    }
+
+    pub fn serve_sse_endpoint(
+        self: *Router,
+        comptime path: []const u8,
+        comptime then: TaskFn,
+    ) !void {
+        assert(!self.locked);
+        const route = Route.init().get(struct {
+            pub fn handler_fn(context: *Context) void {
+                context.response.set_status(.OK);
+                context.response.set_mime(Mime{
+                    .extension = "",
+                    .description = "Server Sent Events (SSE)",
+                    .content_type = "text/event-stream",
+                });
+                context.response.headers.add("Connection", "keep-alive") catch unreachable;
+
+                const headers = context.response.headers_into_buffer(context.provision.buffer, null) catch unreachable;
+
+                context.runtime.net.send_all(.{
+                    .socket = context.provision.socket,
+                    .buffer = headers,
+                    .func = then,
+                    .ctx = context,
+                }) catch unreachable;
             }
         }.handler_fn);
 

@@ -7,6 +7,7 @@ const QueryMap = @import("routing_trie.zig").QueryMap;
 
 const Provision = @import("provision.zig").Provision;
 
+const Mime = @import("mime.zig").Mime;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const ResponseSetOptions = Response.ResponseSetOptions;
@@ -57,10 +58,41 @@ pub const Context = struct {
         };
     }
 
+    fn to_sse(self: *Context, then: TaskFn) void {
+        self.response.set_status(.OK);
+        self.response.set_mime(Mime{
+            .extension = "",
+            .description = "Server Sent Events (SSE)",
+            .content_type = "text/event-stream",
+        });
+        self.response.headers.add("Connection", "keep-alive") catch unreachable;
+
+        const headers = self.response.headers_into_buffer(self.provision.buffer, null) catch unreachable;
+
+        self.runtime.net.send_all(.{
+            .socket = self.provision.socket,
+            .buffer = headers,
+            .func = then,
+            .ctx = self,
+        }) catch unreachable;
+    }
+
+    pub fn raw_send(self: *Context, message: []const u8, then: TaskFn) void {
+        self.runtime.net.send_all(.{
+            .socket = self.provision.socket,
+            .buffer = message,
+            .func = then,
+            .ctx = self,
+        }) catch unreachable;
+    }
+
     pub fn respond(self: *Context, options: ResponseSetOptions) void {
         assert(!self.triggered);
         self.triggered = true;
         self.response.set(options);
+
+        // On standard responses, add `keep-alive`.
+        self.response.headers.add("Connection", "keep-alive") catch unreachable;
 
         // this will write the data into the appropriate places.
         const status = raw_respond(self.provision) catch unreachable;
