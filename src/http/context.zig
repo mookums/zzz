@@ -62,6 +62,9 @@ pub const Context = struct {
         self.triggered = true;
         self.response.set(options);
 
+        // Keep alive.
+        self.response.headers.add("Connection", "keep-alive") catch unreachable;
+
         // this will write the data into the appropriate places.
         const status = raw_respond(self.provision) catch unreachable;
 
