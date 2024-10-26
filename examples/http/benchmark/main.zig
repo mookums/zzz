@@ -3,11 +3,16 @@ const zzz = @import("zzz");
 const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/benchmark");
 
+const Server = http.Server(.plain, .auto);
+const Context = Server.Context;
+const Route = Server.Route;
+const Router = Server.Router;
+
 pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(ctx: *http.Context) void {
+fn hi_handler(ctx: *Context) void {
     const name = ctx.captures[0].string;
 
     const body = std.fmt.allocPrint(ctx.allocator,
@@ -50,17 +55,18 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = http.Router.init(allocator);
+    var router = Router.init(allocator);
     defer router.deinit();
     try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", http.Route.init().get(hi_handler));
+    try router.serve_route("/hi/%s", Route.init().get(hi_handler));
 
-    var server = http.Server(.plain, .auto).init(.{
+    var server = Server.init(.{
+        .router = &router,
         .allocator = allocator,
         .threading = .auto,
     });
     defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen(.{ .router = &router });
+    try server.listen();
 }

@@ -4,7 +4,6 @@ const log = std.log.scoped(.@"zzz/http/context");
 
 const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
-
 const Provision = @import("provision.zig").Provision;
 
 const Request = @import("request.zig").Request;
@@ -13,69 +12,47 @@ const ResponseSetOptions = Response.ResponseSetOptions;
 
 const Runtime = @import("tardy").Runtime;
 const Task = @import("tardy").Task;
-// Needed here to prevent a dependency loop.
-const TaskFn = *const fn (*Runtime, *const Task, ?*anyopaque) anyerror!void;
 
 const raw_respond = @import("server.zig").raw_respond;
 
-pub const Context = struct {
-    allocator: std.mem.Allocator,
-    trigger: TaskFn,
-    runtime: *Runtime,
-    /// The Request that triggered this handler.
-    request: *const Request,
-    /// The Response that will be returned.
-    /// To actually trigger the send, use `Context.respond`.
-    response: *Response,
-    path: []const u8,
-    captures: []Capture,
-    queries: *QueryMap,
-    provision: *Provision,
-    triggered: bool = false,
-
-    pub fn init(
+// Context is dependent on the server that gets created.
+// This is because the trigger_task ends up being dependent.
+pub fn Context(comptime Server: type) type {
+    return struct {
+        const Self = @This();
         allocator: std.mem.Allocator,
-        trigger: TaskFn,
         runtime: *Runtime,
-        ctx: *Provision,
+        /// The Request that triggered this handler.
         request: *const Request,
+        /// The Response that will be returned.
         response: *Response,
         path: []const u8,
         captures: []Capture,
         queries: *QueryMap,
-    ) Context {
-        return Context{
-            .allocator = allocator,
-            .trigger = trigger,
-            .runtime = runtime,
-            .provision = ctx,
-            .request = request,
-            .response = response,
-            .path = path,
-            .captures = captures,
-            .queries = queries,
-        };
-    }
+        provision: *Provision,
+        triggered: bool = false,
 
-    pub fn respond(self: *Context, options: ResponseSetOptions) void {
-        assert(!self.triggered);
-        self.triggered = true;
-        self.response.set(options);
+        pub fn respond(self: *Self, options: ResponseSetOptions) void {
+            assert(!self.triggered);
+            self.triggered = true;
+            self.response.set(options);
 
-        // this will write the data into the appropriate places.
-        const status = raw_respond(self.provision) catch unreachable;
+            // this will write the data into the appropriate places.
+            const status = raw_respond(self.provision) catch unreachable;
 
-        self.provision.job = .{
-            .send = .{
-                .count = 0,
-                .slice = status.send,
-                .security = undefined,
-            },
-        };
+            self.provision.job = .{
+                .send = .{
+                    .count = 0,
+                    .slice = status.send,
+                    .security = undefined,
+                },
+            };
 
-        self.runtime.spawn(.{
-            .func = self.trigger,
-            .ctx = self.provision,
-        }) catch unreachable;
-    }
-};
+            self.runtime.spawn(
+                *Provision,
+                Server.trigger_task,
+                self.provision,
+            ) catch unreachable;
+        }
+    };
+}

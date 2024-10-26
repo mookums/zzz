@@ -3,7 +3,13 @@ const zzz = @import("zzz");
 const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/multithread");
 
-fn hi_handler(ctx: *http.Context) void {
+const Server = http.Server(.plain, .auto);
+
+const Context = Server.Context;
+const Route = Server.Route;
+const Router = Server.Router;
+
+fn hi_handler(ctx: *Context) void {
     const name = ctx.captures[0].string;
     const greeting = ctx.queries.get("greeting") orelse "Hi";
 
@@ -40,7 +46,7 @@ fn hi_handler(ctx: *http.Context) void {
     });
 }
 
-fn redir_handler(ctx: *http.Context) void {
+fn redir_handler(ctx: *Context) void {
     ctx.response.headers.add("Location", "/hi/redirect") catch unreachable;
     ctx.respond(.{
         .status = .@"Permanent Redirect",
@@ -49,7 +55,7 @@ fn redir_handler(ctx: *http.Context) void {
     });
 }
 
-fn post_handler(ctx: *http.Context) void {
+fn post_handler(ctx: *Context) void {
     log.debug("Body: {s}", .{ctx.request.body});
 
     ctx.respond(.{
@@ -70,20 +76,21 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = http.Router.init(allocator);
+    var router = Router.init(allocator);
     defer router.deinit();
 
     try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", http.Route.init().get(hi_handler));
-    try router.serve_route("/redirect", http.Route.init().get(redir_handler));
-    try router.serve_route("/post", http.Route.init().post(post_handler));
+    try router.serve_route("/hi/%s", Route.init().get(hi_handler));
+    try router.serve_route("/redirect", Route.init().get(redir_handler));
+    try router.serve_route("/post", Route.init().post(post_handler));
 
-    var server = http.Server(.plain, .auto).init(.{
+    var server = Server.init(.{
+        .router = &router,
         .allocator = allocator,
         .threading = .auto,
     });
     defer server.deinit();
 
     try server.bind(host, port);
-    try server.listen(.{ .router = &router });
+    try server.listen();
 }

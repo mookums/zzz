@@ -9,10 +9,17 @@ const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
 const TLSContext = @import("../tls/lib.zig").TLSContext;
 const TLS = @import("../tls/lib.zig").TLS;
 
+const _Context = @import("context.zig").Context;
+const Request = @import("request.zig").Request;
+const Response = @import("response.zig").Response;
+const Capture = @import("routing_trie.zig").Capture;
+const QueryMap = @import("routing_trie.zig").QueryMap;
+const ResponseSetOptions = Response.ResponseSetOptions;
+
 const Provision = @import("provision.zig").Provision;
 const Mime = @import("mime.zig").Mime;
-const Router = @import("router.zig").Router;
-const Context = @import("context.zig").Context;
+const _Router = @import("router.zig").Router;
+const _Route = @import("route.zig").Route;
 const HTTPError = @import("lib.zig").HTTPError;
 
 const Pool = @import("tardy").Pool;
@@ -44,82 +51,6 @@ pub const Security = union(enum) {
     },
 };
 
-/// These are various general configuration
-/// options that are important for the actual framework.
-///
-/// This includes various different options and limits
-/// for interacting with the underlying network.
-pub const ServerConfig = struct {
-    /// The allocator that server will use.
-    allocator: std.mem.Allocator,
-    /// HTTP Request Router.
-    router: *Router,
-    /// Threading Model to use.
-    ///
-    /// Default: .auto
-    threading: Threading = .auto,
-    /// Kernel Backlog Value.
-    size_backlog: u31 = 512,
-    /// Number of Maximum Concurrent Connections.
-    ///
-    /// This is applied PER thread if using multi-threading.
-    /// zzz will drop/close any connections greater
-    /// than this.
-    ///
-    /// You want to tune this to your expected number
-    /// of maximum connections.
-    ///
-    /// Default: 1024
-    size_connections_max: u16 = 1024,
-    /// Maximum number of completions we can reap
-    /// with a single call of reap().
-    ///
-    /// Default: 256
-    size_completions_reap_max: u16 = 256,
-    /// Amount of allocated memory retained
-    /// after an arena is cleared.
-    ///
-    /// A higher value will increase memory usage but
-    /// should make allocators faster.Tardy
-    ///
-    /// A lower value will reduce memory usage but
-    /// will make allocators slower.
-    ///
-    /// Default: 1KB
-    size_connection_arena_retain: u32 = 1024,
-    /// Size of the buffer (in bytes) used for
-    /// interacting with the socket.
-    ///
-    /// Default: 4 KB.
-    size_socket_buffer: u32 = 1024 * 4,
-    /// Maximum size (in bytes) of the Recv buffer.
-    /// This is mainly a concern when you are reading in
-    /// large requests before responding.
-    ///
-    /// Default: 2MB.
-    size_recv_buffer_max: u32 = 1024 * 1024 * 2,
-    /// Maximum number of Headers in a Request/Response
-    ///
-    /// Default: 32
-    num_header_max: u32 = 32,
-    /// Maximum number of Captures in a Route
-    ///
-    /// Default: 8
-    num_captures_max: u32 = 8,
-    /// Maximum number of Queries in a URL
-    ///
-    /// Default: 8
-    num_queries_max: u32 = 8,
-    /// Maximum size (in bytes) of the Request.
-    ///
-    /// Default: 2MB.
-    size_request_max: u32 = 1024 * 1024 * 2,
-    /// Maximum size (in bytes) of the Request URI.
-    ///
-    /// Default: 2KB.
-    size_request_uri_max: u32 = 1024 * 2,
-};
-
 /// Uses the current p.response to generate and queue up the sending
 /// of a response. This is used when we already know what we want to send.
 ///
@@ -138,78 +69,6 @@ pub inline fn raw_respond(p: *Provision) !RecvStatus {
     return .{ .send = pseudo };
 }
 
-fn route_and_respond(runtime: *Runtime, trigger: TaskFn, p: *Provision, router: *const Router) !RecvStatus {
-    route: {
-        const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
-        if (found) |f| {
-            const handler = f.route.get_handler(p.request.method);
-
-            if (handler) |func| {
-                const context: *Context = try p.arena.allocator().create(Context);
-                context.* = Context.init(
-                    p.arena.allocator(),
-                    trigger,
-                    runtime,
-                    p,
-                    &p.request,
-                    &p.response,
-                    p.request.uri,
-                    f.captures,
-                    f.queries,
-                );
-
-                @call(.auto, func, .{context});
-                return .spawned;
-            } else {
-                // If we match the route but not the method.
-                p.response.set(.{
-                    .status = .@"Method Not Allowed",
-                    .mime = Mime.HTML,
-                    .body = "405 Method Not Allowed",
-                });
-
-                // We also need to add to Allow header.
-                // This uses the connection's arena to allocate 64 bytes.
-                const allowed = f.route.get_allowed(p.arena.allocator()) catch {
-                    p.response.set(.{
-                        .status = .@"Internal Server Error",
-                        .mime = Mime.HTML,
-                        .body = "",
-                    });
-
-                    break :route;
-                };
-
-                p.response.headers.add("Allow", allowed) catch {
-                    p.response.set(.{
-                        .status = .@"Internal Server Error",
-                        .mime = Mime.HTML,
-                        .body = "",
-                    });
-
-                    break :route;
-                };
-
-                break :route;
-            }
-        }
-
-        // Didn't match any route.
-        p.response.set(.{
-            .status = .@"Not Found",
-            .mime = Mime.HTML,
-            .body = "404 Not Found",
-        });
-        break :route;
-    }
-
-    if (p.response.status == .Kill) {
-        return .kill;
-    }
-
-    return try raw_respond(p);
-}
-
 pub fn Server(
     comptime security: Security,
     comptime async_type: AsyncIOType,
@@ -220,11 +79,161 @@ pub fn Server(
 
     return struct {
         const Self = @This();
+        pub const Context = _Context(Self);
+        pub const Router = _Router(Self);
+        pub const Route = _Route(Self);
         allocator: std.mem.Allocator,
         tardy: Tardy,
         config: ServerConfig,
         addr: std.net.Address,
         tls_ctx: TLSContextType,
+
+        fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
+            route: {
+                const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
+                if (found) |f| {
+                    const handler = f.route.get_handler(p.request.method);
+
+                    if (handler) |func| {
+                        const context: *Context = try p.arena.allocator().create(Context);
+                        context.* = .{
+                            .allocator = p.arena.allocator(),
+                            .runtime = runtime,
+                            .request = &p.request,
+                            .response = &p.response,
+                            .path = p.request.uri,
+                            .captures = f.captures,
+                            .queries = f.queries,
+                            .provision = p,
+                        };
+
+                        @call(.auto, func, .{context});
+                        return .spawned;
+                    } else {
+                        // If we match the route but not the method.
+                        p.response.set(.{
+                            .status = .@"Method Not Allowed",
+                            .mime = Mime.HTML,
+                            .body = "405 Method Not Allowed",
+                        });
+
+                        // We also need to add to Allow header.
+                        // This uses the connection's arena to allocate 64 bytes.
+                        const allowed = f.route.get_allowed(p.arena.allocator()) catch {
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            break :route;
+                        };
+
+                        p.response.headers.add("Allow", allowed) catch {
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            break :route;
+                        };
+
+                        break :route;
+                    }
+                }
+
+                // Didn't match any route.
+                p.response.set(.{
+                    .status = .@"Not Found",
+                    .mime = Mime.HTML,
+                    .body = "404 Not Found",
+                });
+                break :route;
+            }
+
+            if (p.response.status == .Kill) {
+                return .kill;
+            }
+
+            return try raw_respond(p);
+        }
+
+        /// These are various general configuration
+        /// options that are important for the actual framework.
+        ///
+        /// This includes various different options and limits
+        /// for interacting with the underlying network.
+        pub const ServerConfig = struct {
+            /// The allocator that server will use.
+            allocator: std.mem.Allocator,
+            /// HTTP Request Router.
+            router: *Router,
+            /// Threading Model to use.
+            ///
+            /// Default: .auto
+            threading: Threading = .auto,
+            /// Kernel Backlog Value.
+            size_backlog: u31 = 512,
+            /// Number of Maximum Concurrent Connections.
+            ///
+            /// This is applied PER thread if using multi-threading.
+            /// zzz will drop/close any connections greater
+            /// than this.
+            ///
+            /// You want to tune this to your expected number
+            /// of maximum connections.
+            ///
+            /// Default: 1024
+            size_connections_max: u16 = 1024,
+            /// Maximum number of completions we can reap
+            /// with a single call of reap().
+            ///
+            /// Default: 256
+            size_completions_reap_max: u16 = 256,
+            /// Amount of allocated memory retained
+            /// after an arena is cleared.
+            ///
+            /// A higher value will increase memory usage but
+            /// should make allocators faster.Tardy
+            ///
+            /// A lower value will reduce memory usage but
+            /// will make allocators slower.
+            ///
+            /// Default: 1KB
+            size_connection_arena_retain: u32 = 1024,
+            /// Size of the buffer (in bytes) used for
+            /// interacting with the socket.
+            ///
+            /// Default: 4 KB.
+            size_socket_buffer: u32 = 1024 * 4,
+            /// Maximum size (in bytes) of the Recv buffer.
+            /// This is mainly a concern when you are reading in
+            /// large requests before responding.
+            ///
+            /// Default: 2MB.
+            size_recv_buffer_max: u32 = 1024 * 1024 * 2,
+            /// Maximum number of Headers in a Request/Response
+            ///
+            /// Default: 32
+            num_header_max: u32 = 32,
+            /// Maximum number of Captures in a Route
+            ///
+            /// Default: 8
+            num_captures_max: u32 = 8,
+            /// Maximum number of Queries in a URL
+            ///
+            /// Default: 8
+            num_queries_max: u32 = 8,
+            /// Maximum size (in bytes) of the Request.
+            ///
+            /// Default: 2MB.
+            size_request_max: u32 = 1024 * 1024 * 2,
+            /// Maximum size (in bytes) of the Request URI.
+            ///
+            /// Default: 2KB.
+            size_request_uri_max: u32 = 1024 * 2,
+        };
 
         pub fn init(config: ServerConfig) Self {
             const tls_ctx = switch (comptime security) {
@@ -319,8 +328,7 @@ pub fn Server(
             };
         }
 
-        fn close_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
-            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+        fn close_task(rt: *Runtime, _: *const Task, provision: *Provision) !void {
             assert(provision.job == .close);
             const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
             const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
@@ -354,14 +362,16 @@ pub fn Server(
             const accept_queued = rt.storage.get_ptr("accept_queued", bool);
             if (!accept_queued.*) {
                 accept_queued.* = true;
-                try rt.net.accept(.{
-                    .socket = server_socket,
-                    .func = accept_task,
-                });
+                try rt.net.accept(
+                    std.posix.socket_t,
+                    accept_task,
+                    server_socket,
+                    server_socket,
+                );
             }
         }
 
-        fn accept_task(rt: *Runtime, t: *const Task, _: ?*anyopaque) !void {
+        fn accept_task(rt: *Runtime, t: *const Task, server_socket: std.posix.socket_t) !void {
             const child_socket = t.result.?.socket;
 
             const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
@@ -370,11 +380,12 @@ pub fn Server(
 
             if (rt.scheduler.tasks.clean() >= 2) {
                 accept_queued.* = true;
-                const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
-                try rt.net.accept(.{
-                    .socket = server_socket,
-                    .func = accept_task,
-                });
+                try rt.net.accept(
+                    std.posix.socket_t,
+                    accept_task,
+                    server_socket,
+                    server_socket,
+                );
             }
 
             if (!Cross.socket.is_valid(child_socket)) {
@@ -413,81 +424,71 @@ pub fn Server(
                     tls_ptr.* = tls_ctx.create(child_socket) catch |e| {
                         log.err("{d} - tls creation failed={any}", .{ provision.index, e });
                         provision.job = .close;
-                        try rt.net.close(.{
-                            .socket = provision.socket,
-                            .func = close_task,
-                            .ctx = provision,
-                        });
+                        try rt.net.close(*Provision, close_task, provision, provision.socket);
                         return error.TLSCreationFailed;
                     };
 
                     const recv_buf = tls_ptr.*.?.start_handshake() catch |e| {
                         log.err("{d} - tls start handshake failed={any}", .{ provision.index, e });
                         provision.job = .close;
-                        try rt.net.close(.{
-                            .socket = provision.socket,
-                            .func = close_task,
-                            .ctx = provision,
-                        });
+                        try rt.net.close(*Provision, close_task, provision, provision.socket);
                         return error.TLSStartHandshakeFailed;
                     };
 
                     provision.job = .{ .handshake = .{ .state = .recv, .count = 0 } };
-                    try rt.net.recv(.{
-                        .socket = child_socket,
-                        .buffer = recv_buf,
-                        .func = handshake_task,
-                        .ctx = borrowed.item,
-                    });
+                    try rt.net.recv(
+                        *Provision,
+                        handshake_task,
+                        borrowed.item,
+                        child_socket,
+                        recv_buf,
+                    );
                 },
                 .plain => {
                     provision.job = .{ .recv = .{ .count = 0 } };
-                    try rt.net.recv(.{
-                        .socket = child_socket,
-                        .buffer = provision.buffer,
-                        .func = recv_task,
-                        .ctx = borrowed.item,
-                    });
+                    try rt.net.recv(
+                        *Provision,
+                        recv_task,
+                        provision,
+                        child_socket,
+                        provision.buffer,
+                    );
                 },
             }
         }
 
         /// This is the task you MUST trigger if the `recv_fn` returns `.spawned`.
-        fn trigger_task(rt: *Runtime, _: *const Task, ctx: ?*anyopaque) !void {
-            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
-
+        pub fn trigger_task(rt: *Runtime, _: *const Task, provision: *Provision) !void {
             switch (provision.job) {
                 else => unreachable,
                 .recv => {
-                    try rt.net.recv(.{
-                        .socket = provision.socket,
-                        .buffer = provision.buffer,
-                        .func = recv_task,
-                        .ctx = provision,
-                    });
+                    try rt.net.recv(
+                        *Provision,
+                        recv_task,
+                        provision,
+                        provision.socket,
+                        provision.buffer,
+                    );
                 },
                 .send => |*send_job| {
                     const config = rt.storage.get_const_ptr("config", ServerConfig);
                     const plain_buffer = send_job.slice.get(0, config.size_socket_buffer);
 
+                    if (provision.response.status.? == .Kill) {
+                        rt.stop();
+                        return;
+                    }
+
                     switch (comptime security) {
                         .tls => |_| {
-                            const tls_slice: []TLSType = @as(
-                                [*]TLSType,
-                                @ptrCast(@alignCast(rt.storage.get("tls_slice").?)),
-                            )[0..config.size_connections_max];
-
+                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
                             const tls_ptr: *TLSType = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
 
                             const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
                                 log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
                                 provision.job = .close;
-                                try rt.net.close(.{
-                                    .fd = provision.socket,
-                                    .func = close_task,
-                                    .ctx = provision,
-                                });
+                                try rt.net.close(*Provision, close_task, provision, provision.socket);
                                 return error.TLSEncryptFailed;
                             };
 
@@ -499,30 +500,31 @@ pub fn Server(
                                 },
                             };
 
-                            try rt.net.send(.{
-                                .socket = provision.socket,
-                                .buffer = encrypted_buffer,
-                                .func = send_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.send(
+                                *Provision,
+                                send_task,
+                                provision,
+                                provision.socket,
+                                encrypted_buffer,
+                            );
                         },
                         .plain => {
                             send_job.security = .plain;
 
-                            try rt.net.send(.{
-                                .socket = provision.socket,
-                                .buffer = plain_buffer,
-                                .func = send_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.send(
+                                *Provision,
+                                send_task,
+                                provision,
+                                provision.socket,
+                                provision.buffer,
+                            );
                         },
                     }
                 },
             }
         }
 
-        fn recv_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+        fn recv_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
             assert(provision.job == .recv);
             const length: i32 = t.result.?.value;
 
@@ -533,11 +535,7 @@ pub fn Server(
             // If the socket is closed.
             if (length <= 0) {
                 provision.job = .close;
-                try rt.net.close(.{
-                    .socket = provision.socket,
-                    .func = close_task,
-                    .ctx = provision,
-                });
+                try rt.net.close(*Provision, close_task, provision, provision.socket);
                 return;
             }
 
@@ -551,18 +549,13 @@ pub fn Server(
                 switch (comptime security) {
                     .tls => |_| {
                         const tls_slice = rt.storage.get("tls_slice", []TLSType);
-
                         const tls_ptr: *TLSType = &tls_slice[provision.index];
                         assert(tls_ptr.* != null);
 
                         break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
                             log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
                             provision.job = .close;
-                            try rt.net.close(.{
-                                .socket = provision.socket,
-                                .func = close_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.close(*Provision, close_task, provision, provision.socket);
                             return error.TLSDecryptFailed;
                         };
                     },
@@ -670,7 +663,7 @@ pub fn Server(
                         }
 
                         if (!provision.request.expect_body()) {
-                            break :status route_and_respond(rt, trigger_task, provision, config.router) catch unreachable;
+                            break :status route_and_respond(rt, provision, config.router) catch unreachable;
                         }
 
                         // Everything after here is a Request that is expecting a body.
@@ -697,7 +690,7 @@ pub fn Server(
                                 log.debug("{d} - got whole body with header", .{provision.index});
                                 const body_end = header_end + difference;
                                 provision.request.set_body(provision.recv_buffer.items[header_end..body_end]);
-                                break :status route_and_respond(rt, trigger_task, provision, config.router) catch unreachable;
+                                break :status route_and_respond(rt, provision, config.router) catch unreachable;
                             } else {
                                 // Partial Body
                                 log.debug("{d} - got partial body with header", .{provision.index});
@@ -710,7 +703,7 @@ pub fn Server(
                                 log.debug("{d} - got body of length 0", .{provision.index});
                                 // Body of Length 0.
                                 provision.request.set_body("");
-                                break :status route_and_respond(rt, trigger_task, provision, config.router) catch unreachable;
+                                break :status route_and_respond(rt, provision, config.router) catch unreachable;
                             } else {
                                 // Got only header.
                                 log.debug("{d} - got all header aka no body", .{provision.index});
@@ -761,7 +754,7 @@ pub fn Server(
 
                         if (job.count >= request_length) {
                             provision.request.set_body(provision.recv_buffer.items[header_end..request_length]);
-                            break :status route_and_respond(rt, trigger_task, provision, config.router) catch unreachable;
+                            break :status route_and_respond(rt, provision, config.router) catch unreachable;
                         } else {
                             break :status .recv;
                         }
@@ -776,12 +769,13 @@ pub fn Server(
                     return error.Killed;
                 },
                 .recv => {
-                    try rt.net.recv(.{
-                        .socket = provision.socket,
-                        .buffer = provision.buffer,
-                        .func = recv_task,
-                        .ctx = provision,
-                    });
+                    try rt.net.recv(
+                        *Provision,
+                        recv_task,
+                        provision,
+                        provision.socket,
+                        provision.buffer,
+                    );
                 },
                 .send => |*pslice| {
                     const plain_buffer = pslice.get(0, config.size_socket_buffer);
@@ -789,18 +783,13 @@ pub fn Server(
                     switch (comptime security) {
                         .tls => |_| {
                             const tls_slice = rt.storage.get("tls_slice", []TLSType);
-
                             const tls_ptr: *TLSType = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
 
                             const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
                                 log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
                                 provision.job = .close;
-                                try rt.net.close(.{
-                                    .socket = provision.socket,
-                                    .func = close_task,
-                                    .ctx = provision,
-                                });
+                                try rt.net.close(*Provision, close_task, provision, provision.socket);
                                 return error.TLSEncryptFailed;
                             };
 
@@ -817,12 +806,13 @@ pub fn Server(
                                 },
                             };
 
-                            try rt.net.send(.{
-                                .socket = provision.socket,
-                                .buffer = encrypted_buffer,
-                                .func = send_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.send(
+                                *Provision,
+                                send_task,
+                                provision,
+                                provision.socket,
+                                provision.buffer,
+                            );
                         },
                         .plain => {
                             provision.job = .{
@@ -833,22 +823,21 @@ pub fn Server(
                                 },
                             };
 
-                            try rt.net.send(.{
-                                .socket = provision.socket,
-                                .buffer = plain_buffer,
-                                .func = send_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.send(
+                                *Provision,
+                                send_task,
+                                provision,
+                                provision.socket,
+                                provision.buffer,
+                            );
                         },
                     }
                 },
             }
         }
 
-        fn handshake_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            log.debug("Handshake Task", .{});
+        fn handshake_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
             assert(security == .tls);
-            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
             const length: i32 = t.result.?.value;
 
             if (comptime security == .tls) {
@@ -865,128 +854,68 @@ pub fn Server(
                 if (length <= 0) {
                     log.debug("handshake connection closed", .{});
                     provision.job = .close;
-                    try rt.net.close(.{
-                        .socket = provision.socket,
-                        .func = close_task,
-                        .ctx = provision,
-                    });
+                    try rt.net.close(*Provision, close_task, provision, provision.socket);
                     return error.TLSHandshakeClosed;
                 }
 
                 if (handshake_job.count >= 50) {
                     log.debug("handshake taken too many cycles", .{});
                     provision.job = .close;
-                    try rt.net.close(.{
-                        .socket = provision.socket,
-                        .func = close_task,
-                        .ctx = provision,
-                    });
+                    try rt.net.close(*Provision, close_task, provision, provision.socket);
                     return error.TLSHandshakeTooManyCycles;
                 }
 
                 const hs_length: usize = @intCast(length);
 
-                switch (handshake_job.state) {
-                    .recv => {
-                        // on recv, we want to read from socket and feed into tls engien
-                        const hstate = tls_ptr.*.?.continue_handshake(
-                            .{ .recv = @intCast(hs_length) },
-                        ) catch |e| {
-                            log.err("{d} - tls handshake on recv failed={any}", .{ provision.index, e });
-                            provision.job = .close;
-                            try rt.net.close(.{
-                                .socket = provision.socket,
-                                .func = close_task,
-                                .ctx = provision,
-                            });
-                            return error.TLSHandshakeRecvFailed;
-                        };
+                const hstate = switch (handshake_job.state) {
+                    .recv => tls_ptr.*.?.continue_handshake(.{ .recv = @intCast(hs_length) }),
+                    .send => tls_ptr.*.?.continue_handshake(.{ .send = @intCast(hs_length) }),
+                } catch |e| {
+                    log.err("{d} - tls handshake failed={any}", .{ provision.index, e });
+                    provision.job = .close;
+                    try rt.net.close(*Provision, close_task, provision, provision.socket);
+                    return error.TLSHandshakeRecvFailed;
+                };
 
-                        switch (hstate) {
-                            .recv => |buf| {
-                                log.debug("requeing recv in handshake", .{});
-                                try rt.net.recv(.{
-                                    .socket = provision.socket,
-                                    .buffer = buf,
-                                    .func = handshake_task,
-                                    .ctx = provision,
-                                });
-                            },
-                            .send => |buf| {
-                                log.debug("queueing send in handshake", .{});
-                                handshake_job.state = .send;
-                                try rt.net.send(.{
-                                    .socket = provision.socket,
-                                    .buffer = buf,
-                                    .func = handshake_task,
-                                    .ctx = provision,
-                                });
-                            },
-                            .complete => {
-                                log.debug("handshake complete", .{});
-                                provision.job = .{ .recv = .{ .count = 0 } };
-                                try rt.net.recv(.{
-                                    .socket = provision.socket,
-                                    .buffer = provision.buffer,
-                                    .func = recv_task,
-                                    .ctx = provision,
-                                });
-                            },
-                        }
+                switch (hstate) {
+                    .recv => |buf| {
+                        log.debug("queueing recv in handshake", .{});
+                        handshake_job.state = .recv;
+                        try rt.net.recv(
+                            *Provision,
+                            handshake_task,
+                            provision,
+                            provision.socket,
+                            buf,
+                        );
                     },
-                    .send => {
-                        // on recv, we want to read from socket and feed into tls engien
-                        const hstate = tls_ptr.*.?.continue_handshake(
-                            .{ .send = @intCast(hs_length) },
-                        ) catch |e| {
-                            log.err("{d} - tls handshake on send failed={any}", .{ provision.index, e });
-                            provision.job = .close;
-                            try rt.net.close(.{
-                                .socket = provision.socket,
-                                .func = close_task,
-                                .ctx = provision,
-                            });
-                            return error.TLSHandshakeSendFailed;
-                        };
-
-                        switch (hstate) {
-                            .recv => |buf| {
-                                handshake_job.state = .recv;
-                                log.debug("queuing recv in handshake", .{});
-                                try rt.net.recv(.{
-                                    .socket = provision.socket,
-                                    .buffer = buf,
-                                    .func = handshake_task,
-                                    .ctx = provision,
-                                });
-                            },
-                            .send => |buf| {
-                                log.debug("requeing send in handshake", .{});
-                                try rt.net.send(.{
-                                    .socket = provision.socket,
-                                    .buffer = buf,
-                                    .func = handshake_task,
-                                    .ctx = provision,
-                                });
-                            },
-                            .complete => {
-                                log.debug("handshake complete", .{});
-                                provision.job = .{ .recv = .{ .count = 0 } };
-                                try rt.net.recv(.{
-                                    .socket = provision.socket,
-                                    .buffer = provision.buffer,
-                                    .func = recv_task,
-                                    .ctx = provision,
-                                });
-                            },
-                        }
+                    .send => |buf| {
+                        log.debug("queueing send in handshake", .{});
+                        handshake_job.state = .send;
+                        try rt.net.send(
+                            *Provision,
+                            handshake_task,
+                            provision,
+                            provision.socket,
+                            buf,
+                        );
+                    },
+                    .complete => {
+                        log.debug("handshake complete", .{});
+                        provision.job = .{ .recv = .{ .count = 0 } };
+                        try rt.net.recv(
+                            *Provision,
+                            recv_task,
+                            provision,
+                            provision.socket,
+                            provision.buffer,
+                        );
                     },
                 }
-            } else unreachable;
+            }
         }
 
-        fn send_task(rt: *Runtime, t: *const Task, ctx: ?*anyopaque) !void {
-            const provision: *Provision = @ptrCast(@alignCast(ctx.?));
+        fn send_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
             assert(provision.job == .send);
             const length: i32 = t.result.?.value;
 
@@ -995,11 +924,7 @@ pub fn Server(
             // If the socket is closed.
             if (length <= 0) {
                 provision.job = .close;
-                try rt.net.close(.{
-                    .socket = provision.socket,
-                    .func = close_task,
-                    .ctx = provision,
-                });
+                try rt.net.close(*Provision, close_task, provision, provision.socket);
                 return;
             }
 
@@ -1028,12 +953,13 @@ pub fn Server(
                             provision.recv_buffer.clearRetainingCapacity();
                             provision.job = .{ .recv = .{ .count = 0 } };
 
-                            try rt.net.recv(.{
-                                .socket = provision.socket,
-                                .buffer = provision.buffer,
-                                .func = recv_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.recv(
+                                *Provision,
+                                recv_task,
+                                provision,
+                                provision.socket,
+                                provision.buffer,
+                            );
                         } else {
                             // Queue a new chunk up for sending.
                             log.debug(
@@ -1054,23 +980,20 @@ pub fn Server(
                             const encrypted = tls_ptr.*.?.encrypt(inner_slice) catch |e| {
                                 log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
                                 provision.job = .close;
-                                try rt.net.close(.{
-                                    .socket = provision.socket,
-                                    .func = close_task,
-                                    .ctx = provision,
-                                });
+                                try rt.net.close(*Provision, close_task, provision, provision.socket);
                                 return error.TLSEncryptFailed;
                             };
 
                             job_tls.encrypted = encrypted;
                             job_tls.encrypted_count = 0;
 
-                            try rt.net.send(.{
-                                .socket = provision.socket,
-                                .buffer = job_tls.encrypted,
-                                .func = send_task,
-                                .ctx = provision,
-                            });
+                            try rt.net.send(
+                                *Provision,
+                                send_task,
+                                provision,
+                                provision.socket,
+                                job_tls.encrypted,
+                            );
                         }
                     } else {
                         log.debug(
@@ -1079,12 +1002,13 @@ pub fn Server(
                         );
 
                         const remainder = job_tls.encrypted[job_tls.encrypted_count..];
-                        try rt.net.send(.{
-                            .socket = provision.socket,
-                            .buffer = remainder,
-                            .func = send_task,
-                            .ctx = provision,
-                        });
+                        try rt.net.send(
+                            *Provision,
+                            send_task,
+                            provision,
+                            provision.socket,
+                            remainder,
+                        );
                     }
                 },
                 .plain => {
@@ -1099,12 +1023,13 @@ pub fn Server(
                         provision.recv_buffer.clearRetainingCapacity();
                         provision.job = .{ .recv = .{ .count = 0 } };
 
-                        try rt.net.recv(.{
-                            .socket = provision.socket,
-                            .buffer = provision.buffer,
-                            .func = recv_task,
-                            .ctx = provision,
-                        });
+                        try rt.net.recv(
+                            *Provision,
+                            recv_task,
+                            provision,
+                            provision.socket,
+                            provision.buffer,
+                        );
                     } else {
                         log.debug(
                             "{d} - sending next chunk starting at index {d}",
@@ -1121,12 +1046,13 @@ pub fn Server(
                             plain_buffer.len + send_job.count,
                         });
 
-                        try rt.net.send(.{
-                            .socket = provision.socket,
-                            .buffer = plain_buffer,
-                            .func = send_task,
-                            .ctx = provision,
-                        });
+                        try rt.net.send(
+                            *Provision,
+                            recv_task,
+                            provision,
+                            provision.socket,
+                            plain_buffer,
+                        );
                     }
                 },
             }
@@ -1166,16 +1092,18 @@ pub fn Server(
 
                             // since slices are fat pointers...
                             try rt.storage.store_alloc("tls_slice", tls_slice);
-                            try rt.storage.store_ptr("tls_ctx", zzz.tls_ctx);
+                            try rt.storage.store_ptr("tls_ctx", &zzz.tls_ctx);
                         }
 
                         try rt.storage.store_alloc("server_socket", socket);
                         try rt.storage.store_alloc("accept_queued", true);
 
-                        try rt.net.accept(.{
-                            .socket = socket,
-                            .func = accept_task,
-                        });
+                        try rt.net.accept(
+                            std.posix.socket_t,
+                            accept_task,
+                            socket,
+                            socket,
+                        );
                     }
                 }.rt_start,
                 self,
