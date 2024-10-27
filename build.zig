@@ -28,14 +28,15 @@ pub fn build(b: *std.Build) void {
 
     zzz.linkLibrary(bearssl);
 
-    add_example(b, "basic", .http, false, target, optimize, zzz);
-    add_example(b, "custom", .http, false, target, optimize, zzz);
-    add_example(b, "tls", .http, true, target, optimize, zzz);
-    add_example(b, "minram", .http, false, target, optimize, zzz);
-    add_example(b, "fs", .http, false, target, optimize, zzz);
-    add_example(b, "multithread", .http, false, target, optimize, zzz);
-    add_example(b, "benchmark", .http, false, target, optimize, zzz);
-    add_example(b, "valgrind", .http, true, target, optimize, zzz);
+    add_example(b, "basic", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "sse", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "custom", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "tls", .http, true, target, optimize, zzz, tardy);
+    add_example(b, "minram", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "fs", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "multithread", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "benchmark", .http, false, target, optimize, zzz, tardy);
+    add_example(b, "valgrind", .http, true, target, optimize, zzz, tardy);
 
     const tests = b.addTest(.{
         .name = "tests",
@@ -62,6 +63,7 @@ fn add_example(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
     zzz_module: *std.Build.Module,
+    tardy_module: *std.Build.Module,
 ) void {
     const example = b.addExecutable(.{
         .name = b.fmt("{s}_{s}", .{ @tagName(protocol), name }),
@@ -76,6 +78,7 @@ fn add_example(
     }
 
     example.root_module.addImport("zzz", zzz_module);
+    example.root_module.addImport("tardy", tardy_module);
     const install_artifact = b.addInstallArtifact(example, .{});
 
     const run_cmd = b.addRunArtifact(example);

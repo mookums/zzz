@@ -1,9 +1,14 @@
 const std = @import("std");
-const zzz = @import("zzz");
-const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/basic");
 
-const Server = http.Server(.plain, .auto);
+const zzz = @import("zzz");
+const http = zzz.HTTP;
+
+const tardy = @import("tardy");
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+const Server = http.Server(.plain);
 const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
@@ -11,10 +16,20 @@ const Route = Server.Route;
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
+    const max_conn = 512;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    var t = try Tardy.init(.{
+        .allocator = allocator,
+        .threading = .single,
+        .size_tasks_max = max_conn,
+        .size_aio_jobs_max = max_conn,
+        .size_aio_reap_max = max_conn,
+    });
+    defer t.deinit();
 
     var router = Router.init(allocator);
     defer router.deinit();
@@ -38,13 +53,23 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain, .auto).init(.{
-        .router = &router,
-        .allocator = allocator,
-        .threading = .single,
-    });
-    defer server.deinit();
-
-    try server.bind(host, port);
-    try server.listen();
+    try t.entry(
+        struct {
+            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
+                var server = Server.init(.{
+                    .allocator = alloc,
+                    .size_connections_max = max_conn,
+                });
+                try server.bind(host, port);
+                try server.serve(r, rt);
+            }
+        }.entry,
+        &router,
+        struct {
+            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
+                Server.clean(rt) catch unreachable;
+            }
+        }.exit,
+        {},
+    );
 }

@@ -242,7 +242,7 @@ pub fn Router(comptime Server: type) type {
                                     .status = .@"Not Modified",
                                     .mime = Mime.HTML,
                                     .body = "",
-                                });
+                                }) catch unreachable;
 
                                 return;
                             }
@@ -253,7 +253,7 @@ pub fn Router(comptime Server: type) type {
                         .status = .OK,
                         .mime = mime,
                         .body = bytes,
-                    });
+                    }) catch unreachable;
                 }
             }.handler_fn);
 

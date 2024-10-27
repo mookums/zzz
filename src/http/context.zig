@@ -2,6 +2,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/context");
 
+const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
+
 const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
 const Provision = @import("provision.zig").Provision;
@@ -9,17 +11,20 @@ const Provision = @import("provision.zig").Provision;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const ResponseSetOptions = Response.ResponseSetOptions;
+const Mime = @import("mime.zig").Mime;
+const _SSE = @import("sse.zig").SSE;
 
 const Runtime = @import("tardy").Runtime;
 const Task = @import("tardy").Task;
+const TaskFn = @import("tardy").TaskFn;
 
 const raw_respond = @import("server.zig").raw_respond;
 
 // Context is dependent on the server that gets created.
-// This is because the trigger_task ends up being dependent.
 pub fn Context(comptime Server: type) type {
     return struct {
         const Self = @This();
+        const SSE = _SSE(Server);
         allocator: std.mem.Allocator,
         runtime: *Runtime,
         /// The Request that triggered this handler.
@@ -32,38 +37,82 @@ pub fn Context(comptime Server: type) type {
         provision: *Provision,
         triggered: bool = false,
 
-        pub fn respond(self: *Self, options: ResponseSetOptions) void {
+        pub fn to_sse(self: *Self, then: TaskFn(bool, *SSE)) !void {
+            assert(!self.triggered);
+            self.triggered = true;
+
+            self.response.set(.{
+                .status = .OK,
+                .body = "",
+                .mime = Mime{
+                    .extension = ".sse",
+                    .description = "Server-Sent Events",
+                    .content_type = "text/event-stream",
+                },
+            });
+
+            const headers = try self.provision.response.headers_into_buffer(
+                self.provision.buffer,
+                null,
+            );
+
+            const sse = try self.allocator.create(SSE);
+            sse.* = .{ .context = self };
+
+            const pslice = Pseudoslice.init(headers, "", self.provision.buffer);
+
+            const first_chunk = try Server.prepare_send(
+                self.runtime,
+                self.provision,
+                .{ .sse = .{
+                    .func = then,
+                    .ctx = sse,
+                } },
+                pslice,
+            );
+
+            try self.runtime.net.send(
+                self.provision,
+                Server.send_then_sse_task,
+                self.provision.socket,
+                first_chunk,
+            );
+        }
+
+        pub fn close(self: *Self) !void {
+            self.provision.job = .close;
+            try self.runtime.net.close(
+                self.provision,
+                Server.close_task,
+                self.provision.socket,
+            );
+        }
+
+        pub fn respond(self: *Self, options: ResponseSetOptions) !void {
             assert(!self.triggered);
             self.triggered = true;
             self.response.set(options);
 
-            // this will write the data into the appropriate places.
-            const status = raw_respond(self.provision) catch unreachable;
-
-            self.provision.job = .{
-                .send = .{
-                    .count = 0,
-                    .slice = status.send,
-                    .security = undefined,
-                },
-            };
-
             const body = options.body orelse "";
+            const headers = try self.provision.response.headers_into_buffer(
+                self.provision.buffer,
+                @intCast(body.len),
+            );
+            const pslice = Pseudoslice.init(headers, body, self.provision.buffer);
 
-            const first_chunk = Server.prepare_send(
+            const first_chunk = try Server.prepare_send(
                 self.runtime,
                 self.provision,
-                body,
-                @intCast(body.len),
-            ) catch unreachable;
+                .recv,
+                pslice,
+            );
 
-            self.runtime.net.send(
-                *Provision,
-                Server.send_task,
+            try self.runtime.net.send(
                 self.provision,
+                Server.send_then_recv_task,
                 self.provision.socket,
                 first_chunk,
-            ) catch unreachable;
+            );
         }
     };
 }
