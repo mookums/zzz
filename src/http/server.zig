@@ -457,64 +457,6 @@ pub fn Server(
             }
         }
 
-        /// This is the task you MUST trigger if the `recv_fn` returns `.spawned`.
-        pub fn trigger_task(rt: *Runtime, _: *const Task, provision: *Provision) !void {
-            switch (provision.job) {
-                else => unreachable,
-                .send => |*send_job| {
-                    const config = rt.storage.get_const_ptr("config", ServerConfig);
-                    const plain_buffer = send_job.slice.get(0, config.size_socket_buffer);
-
-                    if (provision.response.status.? == .Kill) {
-                        rt.stop();
-                        return;
-                    }
-
-                    switch (comptime security) {
-                        .tls => |_| {
-                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
-                            const tls_ptr: *TLSType = &tls_slice[provision.index];
-                            assert(tls_ptr.* != null);
-
-                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
-                                log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
-                                provision.job = .close;
-                                try rt.net.close(*Provision, close_task, provision, provision.socket);
-                                return error.TLSEncryptFailed;
-                            };
-
-                            send_job.count = plain_buffer.len;
-                            send_job.security = .{
-                                .tls = .{
-                                    .encrypted = encrypted_buffer,
-                                    .encrypted_count = 0,
-                                },
-                            };
-
-                            try rt.net.send(
-                                *Provision,
-                                send_task,
-                                provision,
-                                provision.socket,
-                                encrypted_buffer,
-                            );
-                        },
-                        .plain => {
-                            send_job.security = .plain;
-
-                            try rt.net.send(
-                                *Provision,
-                                send_task,
-                                provision,
-                                provision.socket,
-                                plain_buffer,
-                            );
-                        },
-                    }
-                },
-            }
-        }
-
         fn recv_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
             assert(provision.job == .recv);
             const length: i32 = t.result.?.value;
@@ -906,7 +848,56 @@ pub fn Server(
             }
         }
 
-        fn send_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
+        /// Prepares the provision send_job and returns the first send chunk
+        pub fn prepare_send(rt: *Runtime, provision: *Provision, body: []const u8, content_length: ?u32) ![]const u8 {
+            const config = rt.storage.get_const_ptr("config", ServerConfig);
+            const headers = try provision.response.headers_into_buffer(provision.buffer, content_length);
+            var pslice = Pseudoslice.init(headers, body, provision.buffer);
+            const plain_buffer = pslice.get(0, config.size_socket_buffer);
+
+            switch (comptime security) {
+                .tls => {
+                    const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                    const tls_ptr: *TLSType = &tls_slice[provision.index];
+                    assert(tls_ptr.* != null);
+
+                    const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
+                        log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
+                        provision.job = .close;
+                        try rt.net.close(*Provision, close_task, provision, provision.socket);
+                        return error.TLSEncryptFailed;
+                    };
+
+                    provision.job = .{
+                        .send = .{
+                            .slice = pslice,
+                            .count = @intCast(plain_buffer.len),
+                            .security = .{
+                                .tls = .{
+                                    .encrypted = encrypted_buffer,
+                                    .encrypted_count = 0,
+                                },
+                            },
+                        },
+                    };
+
+                    return encrypted_buffer;
+                },
+                .plain => {
+                    provision.job = .{
+                        .send = .{
+                            .slice = pslice,
+                            .count = 0,
+                            .security = .plain,
+                        },
+                    };
+
+                    return plain_buffer;
+                },
+            }
+        }
+
+        pub fn send_task(rt: *Runtime, t: *const Task, provision: *Provision) !void {
             assert(provision.job == .send);
             const length: i32 = t.result.?.value;
 

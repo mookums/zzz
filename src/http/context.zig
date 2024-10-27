@@ -48,10 +48,21 @@ pub fn Context(comptime Server: type) type {
                 },
             };
 
-            self.runtime.spawn(
-                *Provision,
-                Server.trigger_task,
+            const body = options.body orelse "";
+
+            const first_chunk = Server.prepare_send(
+                self.runtime,
                 self.provision,
+                body,
+                @intCast(body.len),
+            ) catch unreachable;
+
+            self.runtime.net.send(
+                *Provision,
+                Server.send_task,
+                self.provision,
+                self.provision.socket,
+                first_chunk,
             ) catch unreachable;
         }
     };
