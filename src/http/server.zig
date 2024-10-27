@@ -461,15 +461,6 @@ pub fn Server(
         pub fn trigger_task(rt: *Runtime, _: *const Task, provision: *Provision) !void {
             switch (provision.job) {
                 else => unreachable,
-                .recv => {
-                    try rt.net.recv(
-                        *Provision,
-                        recv_task,
-                        provision,
-                        provision.socket,
-                        provision.buffer,
-                    );
-                },
                 .send => |*send_job| {
                     const config = rt.storage.get_const_ptr("config", ServerConfig);
                     const plain_buffer = send_job.slice.get(0, config.size_socket_buffer);
@@ -516,7 +507,7 @@ pub fn Server(
                                 send_task,
                                 provision,
                                 provision.socket,
-                                provision.buffer,
+                                plain_buffer,
                             );
                         },
                     }
