@@ -42,6 +42,7 @@ pub const Response = struct {
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
+        self.cookies.deinit();
         self.allocator.free(self.cached_date.buffer);
     }
 
@@ -54,8 +55,7 @@ pub const Response = struct {
     }
 
     pub fn set_cookie(self: *Response, cookie: Cookie) void {
-        self.cookies.append(cookie) catch |err| {
-            std.debug.print("Could not add cookie: {}", .{err});
+        self.cookies.append(cookie) catch {
             return;
         };
     }
@@ -68,6 +68,7 @@ pub const Response = struct {
         self.status = null;
         self.mime = null;
         self.body = null;
+        self.cookies.clearAndFree();
     }
 
     const ResponseSetOptions = struct {
@@ -107,14 +108,6 @@ pub const Response = struct {
         } else {
             return error.MissingStatus;
         }
-
-        for (self.cookies.items) |cookie| {
-            const cookie_str = try CookieMap.formatSetCookie(cookie, self.allocator);
-            defer self.allocator.free(cookie_str);
-            try writer.print("Set-Cookie: {s}\r\n", .{cookie_str});
-        }
-
-        try writer.writeAll("\r\n");
 
         // Standard Headers.
 
@@ -160,6 +153,14 @@ pub const Response = struct {
             try writer.writeAll("Content-Type: ");
             try writer.writeAll(Mime.BIN.content_type);
             try writer.writeAll("\r\n");
+        }
+
+        // Set cookies
+        for (self.cookies.items) |cookie| {
+            const cookie_str = try CookieMap.formatSetCookie(cookie, self.allocator);
+            defer self.allocator.free(cookie_str);
+
+            try writer.print("Set-Cookie: {s}\r\n", .{cookie_str});
         }
 
         try writer.writeAll("Content-Length: ");

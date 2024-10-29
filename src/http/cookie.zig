@@ -12,6 +12,13 @@ pub const Cookie = struct {
     http_only: bool = false,
     same_site: ?SameSite = null,
 
+    pub fn init(name: []const u8, value: []const u8) Cookie {
+        return .{
+            .name = name,
+            .value = value,
+        };
+    }
+
     pub const SameSite = enum(u2) {
         Strict,
         Lax,
