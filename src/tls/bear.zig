@@ -372,19 +372,41 @@ fn choose(
             },
 
             bearssl.BR_SSLKEYX_ECDH_RSA => {
-                // TODO: Implement this.
-                log.debug("Choosing BR_SSLKEYX_ECDH_RSA | TODO!", .{});
-                choices.*.cipher_suite = suites[i][0];
-                return 0;
+                log.debug("Choosing BR_SSLKEYX_ECDH_RSA", .{});
+                switch (policy.pkey) {
+                    .RSA => {
+                        choices.*.cipher_suite = suites[i][0];
+                        if (bearssl.br_ssl_engine_get_version(&ctx.*.eng) < bearssl.BR_TLS12) {
+                            choices.*.algo_id = 0xFF00;
+                            log.debug("Algo ID: {X}", .{choices.*.algo_id});
+                        } else {
+                            const id = choose_hash(hashes);
+                            choices.*.algo_id = 0xFF00 + id;
+                            log.debug("Algo ID: {X}", .{choices.*.algo_id});
+                        }
+                        ok = true;
+                        break;
+                    },
+                    else => continue,
+                }
             },
-
             bearssl.BR_SSLKEYX_ECDH_ECDSA => {
-                // TODO: Implement this.
-                log.debug("Choosing BR_SSLKEYX_ECDH_RECDSA | TODO!", .{});
-                choices.*.cipher_suite = suites[i][0];
-                return 0;
+                log.debug("Choosing BR_SSLKEYX_ECDH_ECDSA", .{});
+                switch (policy.pkey) {
+                    .EC => {
+                        choices.*.cipher_suite = suites[i][0];
+                        if (bearssl.br_ssl_engine_get_version(&ctx.*.eng) < bearssl.BR_TLS12) {
+                            choices.*.algo_id = 0xFF00 + bearssl.br_sha1_ID;
+                        } else {
+                            const id = choose_hash(hashes >> 8);
+                            choices.*.algo_id = 0xFF00 + id;
+                        }
+                        ok = true;
+                        break;
+                    },
+                    else => continue,
+                }
             },
-
             else => {
                 log.debug("Unknown Client Suite: {d}", .{tt >> 12});
                 return 0;
@@ -434,9 +456,32 @@ fn do_sign(
 
     var sig_len: usize = 0;
     switch (policy.pkey) {
-        .RSA => |_| {
-            // TODO: Implement this.
-            @panic("not yet supported!");
+        .RSA => |*inner| {
+            const class = get_hash_impl(algo_inner_id) catch {
+                log.err("unsupported hash function {d}", .{algo_inner_id});
+                return 0;
+            };
+
+            if (len < inner.n_bitlen / 8) {
+                log.err("dailed to rsa-sign, buffer to small for len={d} for {d}-bit key", .{ len, inner.n_bitlen });
+                return 0;
+            }
+
+            // PKCS#1 v1.5 padding
+            sig_len = bearssl.br_rsa_pkcs1_sign_get_default().?(
+                class,
+                &hv,
+                hv_len,
+                inner,
+                data,
+            );
+
+            if (sig_len == 0) {
+                log.err("failed to rsa-sign, sig_len=0", .{});
+                return 0;
+            }
+
+            return sig_len;
         },
 
         .EC => |*inner| {
