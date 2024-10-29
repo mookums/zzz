@@ -2,6 +2,7 @@ const std = @import("std");
 const log = std.log.scoped(.@"zzz/http/request");
 const assert = std.debug.assert;
 
+const CookieMap = @import("cookie.zig").CookieMap;
 const Headers = @import("lib.zig").Headers;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
@@ -21,6 +22,7 @@ pub const Request = struct {
     version: std.http.Version,
     headers: Headers,
     body: []const u8,
+    cookies: CookieMap,
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, options: RequestOptions) !Request {
@@ -36,6 +38,7 @@ pub const Request = struct {
             .uri = undefined,
             .version = undefined,
             .body = undefined,
+            .cookies = CookieMap.init(allocator),
         };
     }
 
@@ -90,6 +93,13 @@ pub const Request = struct {
                 if (value.len == 0) return HTTPError.MalformedRequest;
                 try self.headers.add(key, value);
             }
+        }
+
+        if (self.headers.get("Cookie")) |cookie_header| {
+            self.cookies.parseRequestCookies(cookie_header) catch |err| {
+                log.warn("failed to parse cookies: {}", .{err});
+                return HTTPError.MalformedRequest;
+            };
         }
     }
 

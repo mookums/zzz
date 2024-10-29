@@ -1,3 +1,5 @@
+pub const Cookie = @import("cookie.zig").Cookie;
+pub const CookieMap = @import("cookie.zig").CookieMap;
 pub const Status = @import("status.zig").Status;
 pub const Method = @import("method.zig").Method;
 pub const Request = @import("request.zig").Request;

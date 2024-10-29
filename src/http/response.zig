@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const Cookie = @import("cookie.zig").Cookie;
+const CookieMap = @import("cookie.zig").CookieMap;
 const Headers = @import("lib.zig").Headers;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
@@ -23,6 +25,7 @@ pub const Response = struct {
     body: ?[]const u8 = null,
     headers: Headers,
     cached_date: CachedDate,
+    cookies: std.ArrayList(Cookie),
 
     pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
         return Response{
@@ -33,11 +36,13 @@ pub const Response = struct {
                 .index = 0,
                 .ts = 0,
             },
+            .cookies = std.ArrayList(Cookie).init(allocator),
         };
     }
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
+        self.cookies.deinit();
         self.allocator.free(self.cached_date.buffer);
     }
 
@@ -49,6 +54,12 @@ pub const Response = struct {
         self.mime = mime;
     }
 
+    pub fn set_cookie(self: *Response, cookie: Cookie) void {
+        self.cookies.append(cookie) catch {
+            return;
+        };
+    }
+
     pub fn set_body(self: *Response, body: []const u8) void {
         self.body = body;
     }
@@ -57,6 +68,7 @@ pub const Response = struct {
         self.status = null;
         self.mime = null;
         self.body = null;
+        self.cookies.clearAndFree();
     }
 
     const ResponseSetOptions = struct {
@@ -96,8 +108,7 @@ pub const Response = struct {
         } else {
             return error.MissingStatus;
         }
-
-        try writer.writeAll("\r\n");
+        try writer.writeAll(" ");
 
         // Standard Headers.
 
@@ -143,6 +154,14 @@ pub const Response = struct {
             try writer.writeAll("Content-Type: ");
             try writer.writeAll(Mime.BIN.content_type);
             try writer.writeAll("\r\n");
+        }
+
+        // Set cookies
+        for (self.cookies.items) |cookie| {
+            const cookie_str = try CookieMap.formatSetCookie(cookie, self.allocator);
+            defer self.allocator.free(cookie_str);
+
+            try writer.print("Set-Cookie: {s}\r\n", .{cookie_str});
         }
 
         try writer.writeAll("Content-Length: ");
