@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const Cookie = @import("cookie.zig").Cookie;
+const CookieMap = @import("cookie.zig").CookieMap;
 const Headers = @import("lib.zig").Headers;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
@@ -23,6 +25,7 @@ pub const Response = struct {
     body: ?[]const u8 = null,
     headers: Headers,
     cached_date: CachedDate,
+    cookies: std.ArrayList(Cookie),
 
     pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
         return Response{
@@ -33,6 +36,7 @@ pub const Response = struct {
                 .index = 0,
                 .ts = 0,
             },
+            .cookies = std.ArrayList(Cookie).init(allocator),
         };
     }
 
@@ -47,6 +51,10 @@ pub const Response = struct {
 
     pub fn set_mime(self: *Response, mime: Mime) void {
         self.mime = mime;
+    }
+
+    pub fn set_cookied(self: *Response, cookie: Cookie) void {
+        try self.cookies.append(cookie);
     }
 
     pub fn set_body(self: *Response, body: []const u8) void {
@@ -95,6 +103,12 @@ pub const Response = struct {
             try writer.writeAll(@tagName(status));
         } else {
             return error.MissingStatus;
+        }
+
+        if (self.cookies.items) |cookie| {
+            const cookie_str = try CookieMap.formatSetCookie(cookie, self.allocator);
+            defer self.allocator.free(cookie_str);
+            try writer.print("Set-Cookie: {s}\r\n", .{cookie_str});
         }
 
         try writer.writeAll("\r\n");
