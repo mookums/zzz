@@ -132,9 +132,9 @@ test "Request Cookie Parsing" {
     var cookie_map = CookieMap.init(testing.allocator);
     defer cookie_map.deinit();
 
-    try cookie_map.parseRequestCookies("sessionId=abc123; theme=dark");
+    try cookie_map.parseRequestCookies("sessionId=abc123; java=slop");
     try testing.expectEqualStrings("abc123", cookie_map.get("sessionId").?);
-    try testing.expectEqualStrings("dark", cookie_map.get("theme").?);
+    try testing.expectEqualStrings("slop", cookie_map.get("java").?);
 }
 
 test "Response Cookie Formatting" {
