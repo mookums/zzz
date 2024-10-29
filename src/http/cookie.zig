@@ -12,7 +12,7 @@ pub const Cookie = struct {
     http_only: bool = false,
     same_site: ?SameSite = null,
 
-    pub const SameSite = enum {
+    pub const SameSite = enum(u2) {
         Strict,
         Lax,
         None,
