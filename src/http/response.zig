@@ -53,8 +53,11 @@ pub const Response = struct {
         self.mime = mime;
     }
 
-    pub fn set_cookied(self: *Response, cookie: Cookie) void {
-        try self.cookies.append(cookie);
+    pub fn set_cookie(self: *Response, cookie: Cookie) void {
+        self.cookies.append(cookie) catch |err| {
+            std.debug.print("Could not add cookie: {}", .{err});
+            return;
+        };
     }
 
     pub fn set_body(self: *Response, body: []const u8) void {
@@ -105,7 +108,7 @@ pub const Response = struct {
             return error.MissingStatus;
         }
 
-        if (self.cookies.items) |cookie| {
+        for (self.cookies.items) |cookie| {
             const cookie_str = try CookieMap.formatSetCookie(cookie, self.allocator);
             defer self.allocator.free(cookie_str);
             try writer.print("Set-Cookie: {s}\r\n", .{cookie_str});
