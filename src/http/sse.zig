@@ -20,6 +20,8 @@ pub fn SSE(comptime Server: type) type {
     return struct {
         const Self = @This();
         context: *Context,
+        allocator: std.mem.Allocator,
+        runtime: *Runtime,
 
         pub fn send(
             self: *Self,

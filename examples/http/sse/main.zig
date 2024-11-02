@@ -17,6 +17,9 @@ const Context = Server.Context;
 const Route = Server.Route;
 const SSE = Server.SSE;
 
+// When using SSE, you end up leaving the various abstractions that zzz has setup for you
+// and you begin programming more against the tardy runtime.
+
 const SSEBroadcastContext = struct {
     sse: *SSE,
     channel: *Channel(usize),
@@ -25,14 +28,14 @@ const SSEBroadcastContext = struct {
 fn sse_send(_: *Runtime, value_opt: ?*const usize, ctx: *SSEBroadcastContext) !void {
     if (value_opt) |value| {
         const data = try std.fmt.allocPrint(
-            ctx.sse.context.allocator,
+            ctx.sse.allocator,
             "value: {d}",
             .{value.*},
         );
 
         try ctx.sse.send(.{ .data = data }, ctx, sse_recv);
     } else {
-        const broadcast = ctx.sse.context.runtime.storage.get_ptr("broadcast", Broadcast(usize));
+        const broadcast = ctx.sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
         broadcast.unsubscribe(ctx.channel);
         try ctx.sse.context.close();
     }
@@ -43,7 +46,7 @@ fn sse_recv(_: *Runtime, success: bool, ctx: *SSEBroadcastContext) !void {
         try ctx.channel.recv(ctx, sse_send);
     } else {
         log.debug("channel closed", .{});
-        const broadcast = ctx.sse.context.runtime.storage.get_ptr("broadcast", Broadcast(usize));
+        const broadcast = ctx.sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
         broadcast.unsubscribe(ctx.channel);
     }
 }
@@ -51,13 +54,13 @@ fn sse_recv(_: *Runtime, success: bool, ctx: *SSEBroadcastContext) !void {
 fn sse_init(rt: *Runtime, success: bool, sse: *SSE) !void {
     if (!success) {
         // on failure, it'll auto close after
-        // the sse task.
+        // the sse initalization task runs.
         log.err("sse initalization failed", .{});
         return;
     }
 
-    const broadcast = sse.context.runtime.storage.get_ptr("broadcast", Broadcast(usize));
-    const context = try sse.context.allocator.create(SSEBroadcastContext);
+    const broadcast = sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
+    const context = try sse.allocator.create(SSEBroadcastContext);
     context.* = .{ .sse = sse, .channel = try broadcast.subscribe(rt, 10) };
     try context.channel.recv(context, sse_send);
 }

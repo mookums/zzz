@@ -1,13 +1,17 @@
 const std = @import("std");
-const zzz = @import("zzz");
-const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/multithread");
 
-const Server = http.Server(.plain, .auto);
+const zzz = @import("zzz");
+const http = zzz.HTTP;
 
+const tardy = @import("tardy");
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+const Server = http.Server(.plain);
+const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
-const Router = Server.Router;
 
 fn hi_handler(ctx: *Context) void {
     const name = ctx.captures[0].string;
@@ -35,7 +39,7 @@ fn hi_handler(ctx: *Context) void {
             .status = .@"Internal Server Error",
             .mime = http.Mime.HTML,
             .body = "Out of Memory!",
-        });
+        }) catch unreachable;
         return;
     };
 
@@ -43,7 +47,7 @@ fn hi_handler(ctx: *Context) void {
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
-    });
+    }) catch unreachable;
 }
 
 fn redir_handler(ctx: *Context) void {
@@ -52,7 +56,7 @@ fn redir_handler(ctx: *Context) void {
         .status = .@"Permanent Redirect",
         .mime = http.Mime.HTML,
         .body = "",
-    });
+    }) catch unreachable;
 }
 
 fn post_handler(ctx: *Context) void {
@@ -62,7 +66,7 @@ fn post_handler(ctx: *Context) void {
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
-    });
+    }) catch unreachable;
 }
 
 pub fn main() !void {
@@ -76,6 +80,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
+    var t = try Tardy.init(.{
+        .allocator = allocator,
+        .threading = .auto,
+    });
+    defer t.deinit();
+
     var router = Router.init(allocator);
     defer router.deinit();
 
@@ -84,13 +94,20 @@ pub fn main() !void {
     try router.serve_route("/redirect", Route.init().get(redir_handler));
     try router.serve_route("/post", Route.init().post(post_handler));
 
-    var server = Server.init(.{
-        .router = &router,
-        .allocator = allocator,
-        .threading = .auto,
-    });
-    defer server.deinit();
-
-    try server.bind(host, port);
-    try server.listen();
+    try t.entry(
+        struct {
+            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
+                var server = Server.init(.{ .allocator = alloc });
+                try server.bind(host, port);
+                try server.serve(r, rt);
+            }
+        }.entry,
+        &router,
+        struct {
+            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
+                Server.clean(rt) catch unreachable;
+            }
+        }.exit,
+        {},
+    );
 }

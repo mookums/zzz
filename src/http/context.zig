@@ -57,7 +57,11 @@ pub fn Context(comptime Server: type) type {
             );
 
             const sse = try self.allocator.create(SSE);
-            sse.* = .{ .context = self };
+            sse.* = .{
+                .context = self,
+                .runtime = self.runtime,
+                .allocator = self.allocator,
+            };
 
             const pslice = Pseudoslice.init(headers, "", self.provision.buffer);
 

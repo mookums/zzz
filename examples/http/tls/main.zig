@@ -1,16 +1,19 @@
 const std = @import("std");
-const zzz = @import("zzz");
-const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/tls");
 
-const Server = http.Server(.{
-    .tls = .{
-        .cert = .{ .file = .{ .path = "./examples/http/tls/certs/cert.pem" } },
-        .key = .{ .file = .{ .path = "./examples/http/tls/certs/key.pem" } },
-        .cert_name = "CERTIFICATE",
-        .key_name = "EC PRIVATE KEY",
-    },
-}, .auto);
+const zzz = @import("zzz");
+const http = zzz.HTTP;
+
+const tardy = @import("tardy");
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+const Server = http.Server(.{ .tls = .{
+    .cert = .{ .file = .{ .path = "./examples/http/tls/certs/cert.pem" } },
+    .key = .{ .file = .{ .path = "./examples/http/tls/certs/key.pem" } },
+    .cert_name = "CERTIFICATE",
+    .key_name = "EC PRIVATE KEY",
+} });
 
 const Context = Server.Context;
 const Route = Server.Route;
@@ -49,27 +52,36 @@ pub fn main() !void {
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
-            });
+            }) catch unreachable;
         }
     }.handler_fn));
 
     try router.serve_route("/kill", Route.init().get(struct {
         pub fn handler_fn(ctx: *Context) void {
-            ctx.respond(.{
-                .status = .Kill,
-                .mime = http.Mime.HTML,
-                .body = "",
-            });
+            ctx.runtime.stop();
         }
     }.handler_fn));
 
-    var server = Server.init(.{
-        .router = &router,
+    var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
     });
-    defer server.deinit();
+    defer t.deinit();
 
-    try server.bind(host, port);
-    try server.listen();
+    try t.entry(
+        struct {
+            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
+                var server = Server.init(.{ .allocator = alloc });
+                try server.bind(host, port);
+                try server.serve(r, rt);
+            }
+        }.entry,
+        &router,
+        struct {
+            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
+                Server.clean(rt) catch unreachable;
+            }
+        }.exit,
+        {},
+    );
 }

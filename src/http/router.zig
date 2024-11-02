@@ -48,18 +48,15 @@ pub fn Router(comptime Server: type) type {
             buffer: []u8,
         };
 
-        fn open_file_task(rt: *Runtime, t: *const Task, provision: *FileProvision) !void {
-            errdefer {
-                provision.context.respond(.{
-                    .status = .@"Internal Server Error",
-                    .mime = Mime.HTML,
-                    .body = "",
-                });
-            }
+        fn open_file_task(rt: *Runtime, fd: std.posix.fd_t, provision: *FileProvision) !void {
+            errdefer provision.context.respond(.{
+                .status = .@"Internal Server Error",
+                .mime = Mime.HTML,
+                .body = "",
+            }) catch unreachable;
 
-            const fd = t.result.?.fd;
             if (fd <= -1) {
-                provision.context.respond(.{
+                try provision.context.respond(.{
                     .status = .@"Not Found",
                     .mime = Mime.HTML,
                     .body = "File Not Found",
@@ -69,31 +66,26 @@ pub fn Router(comptime Server: type) type {
             provision.fd = fd;
 
             try rt.fs.read(
-                *FileProvision,
-                read_file_task,
                 provision,
+                read_file_task,
                 fd,
                 provision.buffer,
                 0,
             );
         }
 
-        fn read_file_task(rt: *Runtime, t: *const Task, provision: *FileProvision) !void {
-            errdefer {
-                provision.context.respond(.{
-                    .status = .@"Internal Server Error",
-                    .mime = Mime.HTML,
-                    .body = "",
-                });
-            }
+        fn read_file_task(rt: *Runtime, result: i32, provision: *FileProvision) !void {
+            errdefer provision.context.respond(.{
+                .status = .@"Internal Server Error",
+                .mime = Mime.HTML,
+                .body = "",
+            }) catch unreachable;
 
-            const result: i32 = t.result.?.value;
             if (result <= 0) {
                 // If we are done reading...
                 try rt.fs.close(
-                    *FileProvision,
-                    close_file_task,
                     provision,
+                    close_file_task,
                     provision.fd,
                 );
                 return;
@@ -117,17 +109,16 @@ pub fn Router(comptime Server: type) type {
             provision.offset += length;
 
             try rt.fs.read(
-                *FileProvision,
-                read_file_task,
                 provision,
+                read_file_task,
                 provision.fd,
                 provision.buffer,
                 provision.offset,
             );
         }
 
-        fn close_file_task(_: *Runtime, _: *const Task, provision: *FileProvision) !void {
-            provision.context.respond(.{
+        fn close_file_task(_: *Runtime, _: void, provision: *FileProvision) !void {
+            try provision.context.respond(.{
                 .status = .OK,
                 .mime = provision.mime,
                 .body = provision.list.items[0..],
@@ -146,7 +137,7 @@ pub fn Router(comptime Server: type) type {
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
                             .body = "",
-                        });
+                        }) catch unreachable;
                         return;
                     };
 
@@ -167,7 +158,7 @@ pub fn Router(comptime Server: type) type {
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
                             .body = "",
-                        });
+                        }) catch unreachable;
                         return;
                     };
 
@@ -183,16 +174,15 @@ pub fn Router(comptime Server: type) type {
                     // We also need to support chunked encoding.
                     // It makes a lot more sense for files atleast.
                     ctx.runtime.fs.open(
-                        *FileProvision,
-                        open_file_task,
                         provision,
+                        open_file_task,
                         file_path,
                     ) catch {
                         ctx.respond(.{
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
                             .body = "",
-                        });
+                        }) catch unreachable;
                         return;
                     };
                 }

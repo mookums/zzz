@@ -1,12 +1,17 @@
 const std = @import("std");
-const zzz = @import("zzz");
-const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/minram");
 
-const Server = http.Server(.plain, .auto);
+const zzz = @import("zzz");
+const http = zzz.HTTP;
+
+const tardy = @import("tardy");
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+const Server = http.Server(.plain);
+const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
-const Router = Server.Router;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -17,6 +22,17 @@ pub fn main() !void {
     ){ .requested_memory_limit = 1024 * 300 };
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    const max_conn = 16;
+
+    var t = try Tardy.init(.{
+        .allocator = allocator,
+        .threading = .single,
+        .size_tasks_max = max_conn,
+        .size_aio_jobs_max = max_conn,
+        .size_aio_reap_max = max_conn,
+    });
+    defer t.deinit();
 
     var router = Router.init(allocator);
     defer router.deinit();
@@ -36,26 +52,35 @@ pub fn main() !void {
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
-            });
+            }) catch unreachable;
         }
     }.handler_fn));
 
-    var server = Server.init(.{
-        .router = &router,
-        .allocator = allocator,
-        .threading = .single,
-        .size_backlog = 32,
-        .size_connections_max = 16,
-        .size_connection_arena_retain = 64,
-        .size_completions_reap_max = 8,
-        .size_socket_buffer = 512,
-        .num_header_max = 32,
-        .num_captures_max = 0,
-        .size_request_max = 2048,
-        .size_request_uri_max = 256,
-    });
-    defer server.deinit();
-
-    try server.bind(host, port);
-    try server.listen();
+    try t.entry(
+        struct {
+            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
+                var server = Server.init(.{
+                    .allocator = alloc,
+                    .size_backlog = 32,
+                    .size_connections_max = max_conn,
+                    .size_connection_arena_retain = 64,
+                    .size_completions_reap_max = 8,
+                    .size_socket_buffer = 512,
+                    .num_header_max = 32,
+                    .num_captures_max = 0,
+                    .size_request_max = 2048,
+                    .size_request_uri_max = 256,
+                });
+                try server.bind(host, port);
+                try server.serve(r, rt);
+            }
+        }.entry,
+        &router,
+        struct {
+            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
+                Server.clean(rt) catch unreachable;
+            }
+        }.exit,
+        {},
+    );
 }

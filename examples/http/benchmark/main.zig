@@ -42,7 +42,7 @@ fn hi_handler(ctx: *Context) void {
             .status = .@"Internal Server Error",
             .mime = http.Mime.HTML,
             .body = "Out of Memory!",
-        });
+        }) catch unreachable;
         return;
     };
 
@@ -50,7 +50,7 @@ fn hi_handler(ctx: *Context) void {
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
-    });
+    }) catch unreachable;
 }
 
 pub fn main() !void {

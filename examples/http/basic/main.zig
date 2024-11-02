@@ -22,6 +22,8 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
+    // Creating our Tardy instance that
+    // will spawn our runtimes.
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
@@ -45,14 +47,19 @@ pub fn main() !void {
                 \\ </html>
             ;
 
+            // This is the standard response and what you
+            // will usually be using. This will send to the
+            // client and then continue to await more requests.
             ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
-            });
+            }) catch unreachable;
         }
     }.handler_fn));
 
+    // This provides the entry function into the Tardy runtime. This will run
+    // exactly once inside of each runtime (each thread gets a single runtime).
     try t.entry(
         struct {
             fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {

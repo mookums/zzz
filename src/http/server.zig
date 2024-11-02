@@ -308,14 +308,14 @@ pub fn Server(comptime security: Security) type {
 
         pub fn close_task(rt: *Runtime, _: void, provision: *Provision) !void {
             assert(provision.job == .close);
-            const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
-            const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
-            const config = rt.storage.get_const_ptr("config", ServerConfig);
+            const server_socket = rt.storage.get("__zzz_server_socket", std.posix.socket_t);
+            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
+            const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
             log.info("{d} - closing connection", .{provision.index});
 
             if (comptime security == .tls) {
-                const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
 
                 const tls_ptr: *TLSType = &tls_slice[provision.index];
                 assert(tls_ptr.* != null);
@@ -337,7 +337,7 @@ pub fn Server(comptime security: Security) type {
 
             pool.release(provision.index);
 
-            const accept_queued = rt.storage.get_ptr("accept_queued", bool);
+            const accept_queued = rt.storage.get_ptr("__zzz_accept_queued", bool);
             if (!accept_queued.*) {
                 accept_queued.* = true;
                 try rt.net.accept(
@@ -349,8 +349,8 @@ pub fn Server(comptime security: Security) type {
         }
 
         fn accept_task(rt: *Runtime, child_socket: std.posix.socket_t, socket: std.posix.socket_t) !void {
-            const pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
-            const accept_queued = rt.storage.get_ptr("accept_queued", bool);
+            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
+            const accept_queued = rt.storage.get_ptr("__zzz_accept_queued", bool);
             accept_queued.* = false;
 
             if (rt.scheduler.tasks.clean() >= 2) {
@@ -386,8 +386,8 @@ pub fn Server(comptime security: Security) type {
 
             switch (comptime security) {
                 .tls => |_| {
-                    const tls_ctx = rt.storage.get_const_ptr("tls_ctx", TLSContextType);
-                    const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                    const tls_ctx = rt.storage.get_const_ptr("__zzz_tls_ctx", TLSContextType);
+                    const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
 
                     const tls_ptr: *TLSType = &tls_slice[provision.index];
                     assert(tls_ptr.* == null);
@@ -418,8 +418,8 @@ pub fn Server(comptime security: Security) type {
 
         fn recv_task(rt: *Runtime, length: i32, provision: *Provision) !void {
             assert(provision.job == .recv);
-            const config = rt.storage.get_const_ptr("config", ServerConfig);
-            const router = rt.storage.get_const_ptr("router", Router);
+            const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
+            const router = rt.storage.get_const_ptr("__zzz_router", Router);
 
             const recv_job = &provision.job.recv;
 
@@ -439,7 +439,7 @@ pub fn Server(comptime security: Security) type {
             const recv_buffer = blk: {
                 switch (comptime security) {
                     .tls => |_| {
-                        const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                        const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
                         const tls_ptr: *TLSType = &tls_slice[provision.index];
                         assert(tls_ptr.* != null);
 
@@ -672,7 +672,7 @@ pub fn Server(comptime security: Security) type {
 
                     switch (comptime security) {
                         .tls => |_| {
-                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                            const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
                             const tls_ptr: *TLSType = &tls_slice[provision.index];
                             assert(tls_ptr.* != null);
 
@@ -729,7 +729,7 @@ pub fn Server(comptime security: Security) type {
         fn handshake_task(rt: *Runtime, length: i32, provision: *Provision) !void {
             assert(security == .tls);
             if (comptime security == .tls) {
-                const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
 
                 assert(provision.job == .handshake);
                 const handshake_job = &provision.job.handshake;
@@ -761,7 +761,7 @@ pub fn Server(comptime security: Security) type {
                 } catch |e| {
                     log.err("{d} - tls handshake failed={any}", .{ provision.index, e });
                     provision.job = .close;
-                    try rt.net.close(*Provision, close_task, provision, provision.socket);
+                    try rt.net.close(provision, close_task, provision.socket);
                     return error.TLSHandshakeRecvFailed;
                 };
 
@@ -787,12 +787,12 @@ pub fn Server(comptime security: Security) type {
 
         /// Prepares the provision send_job and returns the first send chunk
         pub fn prepare_send(rt: *Runtime, provision: *Provision, after: AfterType, pslice: Pseudoslice) ![]const u8 {
-            const config = rt.storage.get_const_ptr("config", ServerConfig);
+            const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
             const plain_buffer = pslice.get(0, config.size_socket_buffer);
 
             switch (comptime security) {
                 .tls => {
-                    const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                    const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
                     const tls_ptr: *TLSType = &tls_slice[provision.index];
                     assert(tls_ptr.* != null);
 
@@ -857,7 +857,7 @@ pub fn Server(comptime security: Security) type {
                     return;
                 }
 
-                const config = rt.storage.get_const_ptr("config", ServerConfig);
+                const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
                 log.debug("{d} - queueing a new recv", .{provision.index});
                 _ = provision.arena.reset(.{
@@ -879,7 +879,7 @@ pub fn Server(comptime security: Security) type {
             return struct {
                 fn send_then_inner(rt: *Runtime, length: i32, provision: *Provision) !void {
                     assert(provision.job == .send);
-                    const config = rt.storage.get_const_ptr("config", ServerConfig);
+                    const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
                     // If the socket is closed.
                     if (length <= 0) {
@@ -897,7 +897,7 @@ pub fn Server(comptime security: Security) type {
                         .tls => {
                             assert(send_job.security == .tls);
 
-                            const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                            const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
 
                             const job_tls = &send_job.security.tls;
                             job_tls.encrypted_count += send_count;
@@ -1009,12 +1009,12 @@ pub fn Server(comptime security: Security) type {
                 self.config,
             );
 
-            try rt.storage.store_ptr("router", @constCast(router));
-            try rt.storage.store_ptr("provision_pool", provision_pool);
-            try rt.storage.store_alloc("config", self.config);
+            try rt.storage.store_ptr("__zzz_router", @constCast(router));
+            try rt.storage.store_ptr("__zzz_provision_pool", provision_pool);
+            try rt.storage.store_alloc("__zzz_config", self.config);
 
             if (comptime security == .tls) {
-                const tls_slice = try rt.allocator(
+                const tls_slice = try rt.allocator.alloc(
                     TLSType,
                     self.config.size_connections_max,
                 );
@@ -1025,29 +1025,29 @@ pub fn Server(comptime security: Security) type {
                 }
 
                 // since slices are fat pointers...
-                try rt.storage.store_alloc("tls_slice", tls_slice);
-                try rt.storage.store_ptr("tls_ctx", &self.tls_ctx);
+                try rt.storage.store_alloc("__zzz_tls_slice", tls_slice);
+                try rt.storage.store_alloc("__zzz_tls_ctx", self.tls_ctx);
             }
 
-            try rt.storage.store_alloc("server_socket", socket);
-            try rt.storage.store_alloc("accept_queued", true);
+            try rt.storage.store_alloc("__zzz_server_socket", socket);
+            try rt.storage.store_alloc("__zzz_accept_queued", true);
 
             try rt.net.accept(socket, accept_task, socket);
         }
 
         pub inline fn clean(rt: *Runtime) !void {
             // clean up socket.
-            const server_socket = rt.storage.get("server_socket", std.posix.socket_t);
+            const server_socket = rt.storage.get("__zzz_server_socket", std.posix.socket_t);
             std.posix.close(server_socket);
 
             // clean up provision pool.
-            const provision_pool = rt.storage.get_ptr("provision_pool", Pool(Provision));
+            const provision_pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
             provision_pool.deinit(Provision.deinit_hook, rt.allocator);
             rt.allocator.destroy(provision_pool);
 
             // clean up TLS.
             if (comptime security == .tls) {
-                const tls_slice = rt.storage.get("tls_slice", []TLSType);
+                const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
                 rt.allocator.free(tls_slice);
             }
         }
