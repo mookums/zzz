@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/route");
 const Method = @import("method.zig").Method;
 const Request = @import("request.zig").Request;
@@ -9,8 +10,16 @@ const Context = @import("context.zig").Context;
 pub fn Route(comptime Server: type) type {
     return struct {
         const Self = @This();
-        pub const HandlerFn = *const fn (context: *Context(Server)) void;
-        handlers: [9]?HandlerFn = [_]?HandlerFn{null} ** 9,
+        pub const HandlerFn = *const fn (context: *Context(Server), data: *const anyopaque) anyerror!void;
+        fn TypedHandlerFn(comptime T: type) type {
+            return *const fn (context: *Context(Server), data: T) anyerror!void;
+        }
+        const HandlerWithData = struct {
+            handler: HandlerFn,
+            data: *anyopaque,
+        };
+
+        handlers: [9]?HandlerWithData = [_]?HandlerWithData{null} ** 9,
 
         fn method_to_index(method: Method) u32 {
             return switch (method) {
@@ -27,7 +36,7 @@ pub fn Route(comptime Server: type) type {
         }
 
         pub fn init() Self {
-            return Self{ .handlers = [_]?HandlerFn{null} ** 9 };
+            return Self{ .handlers = [_]?HandlerWithData{null} ** 9 };
         }
 
         /// Returns a comma delinated list of allowed Methods for this route. This
@@ -58,62 +67,65 @@ pub fn Route(comptime Server: type) type {
             }
         }
 
-        pub fn get_handler(self: Self, method: Method) ?HandlerFn {
+        pub fn get_handler(self: Self, method: Method) ?HandlerWithData {
             return self.handlers[method_to_index(method)];
         }
 
-        pub fn get(self: Self, handler_fn: HandlerFn) Self {
+        inline fn inner_route(
+            comptime method: Method,
+            self: Self,
+            data: anytype,
+            handler_fn: TypedHandlerFn(@TypeOf(data)),
+        ) Self {
+            // You can either give a void (if you don't want to pass data through) or a pointer.
+            comptime assert(@typeInfo(@TypeOf(data)) == .Pointer or @typeInfo(@TypeOf(data)) == .Void);
+            const inner_data = switch (comptime @typeInfo(@TypeOf(data))) {
+                .Void => @constCast(&data),
+                .Pointer => data,
+                else => unreachable,
+            };
             var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.GET)] = handler_fn;
+            new_handlers[comptime method_to_index(method)] = .{
+                .handler = @ptrCast(handler_fn),
+                .data = inner_data,
+            };
             return Self{ .handlers = new_handlers };
         }
 
-        pub fn head(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.HEAD)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn get(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.GET, self, data, handler_fn);
         }
 
-        pub fn post(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.POST)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn head(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.HEAD, self, data, handler_fn);
         }
 
-        pub fn put(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.PUT)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn post(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.POST, self, data, handler_fn);
         }
 
-        pub fn delete(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.DELETE)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn put(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.PUT, self, data, handler_fn);
         }
 
-        pub fn connect(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.CONNECT)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn delete(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.DELETE, self, data, handler_fn);
         }
 
-        pub fn options(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.OPTIONS)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn connect(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.CONNECT, self, data, handler_fn);
         }
 
-        pub fn trace(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.TRACE)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn options(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.OPTIONS, self, data, handler_fn);
         }
 
-        pub fn patch(self: Self, handler_fn: HandlerFn) Self {
-            var new_handlers = self.handlers;
-            new_handlers[comptime method_to_index(.PATCH)] = handler_fn;
-            return Self{ .handlers = new_handlers };
+        pub fn trace(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.TRACE, self, data, handler_fn);
+        }
+
+        pub fn patch(self: Self, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Self {
+            return inner_route(.PATCH, self, data, handler_fn);
         }
     };
 }

@@ -16,7 +16,6 @@ const Route = Server.Route;
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
-    const max_conn = 512;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -27,34 +26,36 @@ pub fn main() !void {
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
-        .size_tasks_max = max_conn,
-        .size_aio_jobs_max = max_conn,
-        .size_aio_reap_max = max_conn,
     });
     defer t.deinit();
 
     var router = Router.init(allocator);
     defer router.deinit();
 
-    try router.serve_route("/", Route.init().get(struct {
-        pub fn handler_fn(ctx: *Context) void {
-            const body =
+    const num: i8 = 12;
+
+    try router.serve_route("/", Route.init().get(&num, struct {
+        pub fn handler_fn(ctx: *Context, id: *const i8) !void {
+            const body_fmt =
                 \\ <!DOCTYPE html>
                 \\ <html>
                 \\ <body>
                 \\ <h1>Hello, World!</h1>
+                \\ <p>id: {d}</p>
                 \\ </body>
                 \\ </html>
             ;
 
+            const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id.*});
+
             // This is the standard response and what you
             // will usually be using. This will send to the
             // client and then continue to await more requests.
-            ctx.respond(.{
+            try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
-            }) catch unreachable;
+            });
         }
     }.handler_fn));
 
@@ -63,10 +64,7 @@ pub fn main() !void {
     try t.entry(
         struct {
             fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
-                var server = Server.init(.{
-                    .allocator = alloc,
-                    .size_connections_max = max_conn,
-                });
+                var server = Server.init(.{ .allocator = alloc });
                 try server.bind(host, port);
                 try server.serve(r, rt);
             }

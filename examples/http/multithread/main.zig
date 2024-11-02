@@ -13,11 +13,11 @@ const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
 
-fn hi_handler(ctx: *Context) void {
+fn hi_handler(ctx: *Context, _: void) !void {
     const name = ctx.captures[0].string;
     const greeting = ctx.queries.get("greeting") orelse "Hi";
 
-    const body = std.fmt.allocPrint(ctx.allocator,
+    const body = try std.fmt.allocPrint(ctx.allocator,
         \\ <!DOCTYPE html>
         \\ <html>
         \\ <body>
@@ -34,39 +34,33 @@ fn hi_handler(ctx: *Context) void {
         \\ <input type="button" id="btn" value="Submit" onClick="redirectToHi()"/>
         \\ </body>
         \\ </html>
-    , .{ greeting, name }) catch {
-        ctx.respond(.{
-            .status = .@"Internal Server Error",
-            .mime = http.Mime.HTML,
-            .body = "Out of Memory!",
-        }) catch unreachable;
-        return;
-    };
+    , .{ greeting, name });
 
-    ctx.respond(.{
+    try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
-    }) catch unreachable;
+    });
 }
 
-fn redir_handler(ctx: *Context) void {
-    ctx.response.headers.add("Location", "/hi/redirect") catch unreachable;
-    ctx.respond(.{
+fn redir_handler(ctx: *Context, _: void) !void {
+    try ctx.response.headers.add("Location", "/hi/redirect");
+
+    try ctx.respond(.{
         .status = .@"Permanent Redirect",
         .mime = http.Mime.HTML,
         .body = "",
-    }) catch unreachable;
+    });
 }
 
-fn post_handler(ctx: *Context) void {
+fn post_handler(ctx: *Context, _: void) !void {
     log.debug("Body: {s}", .{ctx.request.body});
 
-    ctx.respond(.{
+    try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
-    }) catch unreachable;
+    });
 }
 
 pub fn main() !void {
@@ -90,9 +84,9 @@ pub fn main() !void {
     defer router.deinit();
 
     try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", Route.init().get(hi_handler));
-    try router.serve_route("/redirect", Route.init().get(redir_handler));
-    try router.serve_route("/post", Route.init().post(post_handler));
+    try router.serve_route("/hi/%s", Route.init().get({}, hi_handler));
+    try router.serve_route("/redirect", Route.init().get({}, redir_handler));
+    try router.serve_route("/post", Route.init().post({}, post_handler));
 
     try t.entry(
         struct {

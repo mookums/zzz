@@ -23,8 +23,8 @@ pub fn main() !void {
     var router = Router.init(allocator);
     defer router.deinit();
 
-    try router.serve_route("/", Route.init().get(struct {
-        pub fn handler_fn(ctx: *Context) void {
+    try router.serve_route("/", Route.init().get({}, struct {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -34,16 +34,16 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            ctx.respond(.{
+            try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
-            }) catch unreachable;
+            });
         }
     }.handler_fn));
 
-    try router.serve_route("/kill", Route.init().get(struct {
-        pub fn handler_fn(ctx: *Context) void {
+    try router.serve_route("/kill", Route.init().get({}, struct {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
             ctx.runtime.stop();
         }
     }.handler_fn));

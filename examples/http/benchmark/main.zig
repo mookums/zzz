@@ -17,10 +17,10 @@ pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(ctx: *Context) void {
+fn hi_handler(ctx: *Context, _: void) !void {
     const name = ctx.captures[0].string;
 
-    const body = std.fmt.allocPrint(ctx.allocator,
+    const body = try std.fmt.allocPrint(ctx.allocator,
         \\ <!DOCTYPE html>
         \\ <html>
         \\ <body>
@@ -37,26 +37,18 @@ fn hi_handler(ctx: *Context) void {
         \\ <input type="button" id="btn" value="Submit" onClick="redirectToHi()"/>
         \\ </body>
         \\ </html>
-    , .{name}) catch {
-        ctx.respond(.{
-            .status = .@"Internal Server Error",
-            .mime = http.Mime.HTML,
-            .body = "Out of Memory!",
-        }) catch unreachable;
-        return;
-    };
+    , .{name});
 
-    ctx.respond(.{
+    try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
-    }) catch unreachable;
+    });
 }
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
-    const max_conn = 1024;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     const allocator = gpa.allocator();
@@ -65,25 +57,18 @@ pub fn main() !void {
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .auto,
-        .size_tasks_max = max_conn,
-        .size_aio_jobs_max = max_conn,
-        .size_aio_reap_max = max_conn,
     });
     defer t.deinit();
 
     var router = Router.init(allocator);
     defer router.deinit();
     try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", Route.init().get(hi_handler));
+    try router.serve_route("/hi/%s", Route.init().get({}, hi_handler));
 
     try t.entry(
         struct {
             fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
-                var server = Server.init(.{
-                    .allocator = alloc,
-                    .size_connections_max = max_conn,
-                });
-
+                var server = Server.init(.{ .allocator = alloc });
                 try server.bind(host, port);
                 try server.serve(r, rt);
             }

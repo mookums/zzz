@@ -163,7 +163,7 @@ pub fn Server(comptime security: Security) type {
                 if (found) |f| {
                     const handler = f.route.get_handler(p.request.method);
 
-                    if (handler) |func| {
+                    if (handler) |h_with_data| {
                         const context: *Context = try p.arena.allocator().create(Context);
                         context.* = .{
                             .allocator = p.arena.allocator(),
@@ -176,7 +176,17 @@ pub fn Server(comptime security: Security) type {
                             .provision = p,
                         };
 
-                        @call(.auto, func, .{context});
+                        @call(.auto, h_with_data.handler, .{ context, h_with_data.data }) catch |e| {
+                            log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            return try raw_respond(p);
+                        };
+
                         return .spawned;
                     } else {
                         // If we match the route but not the method.

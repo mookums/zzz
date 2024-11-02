@@ -65,23 +65,22 @@ fn sse_init(rt: *Runtime, success: bool, sse: *SSE) !void {
     try context.channel.recv(context, sse_send);
 }
 
-fn sse_handler(ctx: *Context) void {
+fn sse_handler(ctx: *Context, _: void) !void {
     log.debug("going into sse mode", .{});
-    ctx.to_sse(sse_init) catch unreachable;
+    try ctx.to_sse(sse_init);
 }
 
-fn msg_handler(ctx: *Context) void {
+fn msg_handler(ctx: *Context, broadcast: *Broadcast(usize)) !void {
     log.debug("message handler", .{});
-    const broadcast = ctx.runtime.storage.get_ptr("broadcast", Broadcast(usize));
-    broadcast.send(0) catch unreachable;
-    ctx.respond(.{
+    try broadcast.send(0);
+    try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
-    }) catch unreachable;
+    });
 }
 
-fn kill_handler(ctx: *Context) void {
+fn kill_handler(ctx: *Context, _: void) !void {
     ctx.runtime.stop();
 }
 
@@ -106,13 +105,13 @@ pub fn main() !void {
     var router = Router.init(allocator);
     defer router.deinit();
 
-    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/kill", Route.init().get(kill_handler));
-    try router.serve_route("/stream", Route.init().get(sse_handler));
-    try router.serve_route("/message", Route.init().post(msg_handler));
-
     var broadcast = try Broadcast(usize).init(allocator, max_conn);
     defer broadcast.deinit();
+
+    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
+    try router.serve_route("/kill", Route.init().get({}, kill_handler));
+    try router.serve_route("/stream", Route.init().get({}, sse_handler));
+    try router.serve_route("/message", Route.init().post(&broadcast, msg_handler));
 
     const EntryParams = struct {
         router: *const Router,

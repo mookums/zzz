@@ -203,20 +203,20 @@ pub fn Router(comptime Server: type) type {
             comptime bytes: []const u8,
         ) !void {
             assert(!self.locked);
-            const route = Route.init().get(struct {
-                pub fn handler_fn(ctx: *Context) void {
+            const route = Route.init().get({}, struct {
+                pub fn handler_fn(ctx: *Context, _: void) !void {
                     if (comptime builtin.mode == .Debug) {
                         // Don't Cache in Debug.
-                        ctx.response.headers.add(
+                        try ctx.response.headers.add(
                             "Cache-Control",
                             "no-cache",
-                        ) catch unreachable;
+                        );
                     } else {
                         // Cache for 30 days.
-                        ctx.response.headers.add(
+                        try ctx.response.headers.add(
                             "Cache-Control",
                             comptime std.fmt.comptimePrint("max-age={d}", .{std.time.s_per_day * 30}),
-                        ) catch unreachable;
+                        );
                     }
 
                     // If our static item is greater than 1KB,
@@ -224,26 +224,26 @@ pub fn Router(comptime Server: type) type {
                     if (comptime bytes.len > 1024) {
                         @setEvalBranchQuota(1_000_000);
                         const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
-                        ctx.response.headers.add("ETag", etag[0..]) catch unreachable;
+                        try ctx.response.headers.add("ETag", etag[0..]);
 
                         if (ctx.request.headers.get("If-None-Match")) |match| {
                             if (std.mem.eql(u8, etag, match)) {
-                                ctx.respond(.{
+                                try ctx.respond(.{
                                     .status = .@"Not Modified",
                                     .mime = Mime.HTML,
                                     .body = "",
-                                }) catch unreachable;
+                                });
 
                                 return;
                             }
                         }
                     }
 
-                    ctx.respond(.{
+                    try ctx.respond(.{
                         .status = .OK,
                         .mime = mime,
                         .body = bytes,
-                    }) catch unreachable;
+                    });
                 }
             }.handler_fn);
 
