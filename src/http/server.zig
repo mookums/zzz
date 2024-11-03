@@ -59,6 +59,7 @@ fn route_and_respond(p: *Provision, router: *const Router) !RecvStatus {
                     p.data.request.uri,
                     f.captures,
                     f.queries,
+                    router.injector,
                 );
 
                 @call(.auto, func, .{ p.data.request, &p.data.response, context });
