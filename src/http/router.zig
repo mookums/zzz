@@ -12,17 +12,25 @@ const Context = @import("context.zig").Context;
 
 const RoutingTrie = @import("routing_trie.zig").RoutingTrie;
 const QueryMap = @import("routing_trie.zig").QueryMap;
+const Injector = @import("injector.zig").Injector;
 
 pub const Router = struct {
     allocator: std.mem.Allocator,
     routes: RoutingTrie,
+    injector: Injector,
     /// This makes the router immutable, also making it
     /// thread-safe when shared.
     locked: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator) Router {
+    pub fn init(allocator: std.mem.Allocator, dep_ctx: anytype) Router {
         const routes = RoutingTrie.init(allocator) catch unreachable;
-        return Router{ .allocator = allocator, .routes = routes, .locked = false };
+        const injector = Injector.init(dep_ctx, null);
+        return Router{
+            .allocator = allocator,
+            .routes = routes,
+            .locked = false,
+            .injector = injector,
+        };
     }
 
     pub fn deinit(self: *Router) void {

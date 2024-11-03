@@ -2,6 +2,13 @@ const std = @import("std");
 const zzz = @import("zzz");
 const http = zzz.HTTP;
 const log = std.log.scoped(.@"examples/tls");
+
+pub const Post = struct {
+    id: u32,
+    title: []const u8,
+    body: []const u8,
+};
+
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
