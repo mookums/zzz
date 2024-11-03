@@ -10,13 +10,13 @@ const Context = @import("context.zig").Context;
 pub fn Route(comptime Server: type) type {
     return struct {
         const Self = @This();
-        pub const HandlerFn = *const fn (context: *Context(Server), data: *const anyopaque) anyerror!void;
+        pub const HandlerFn = *const fn (context: *Context(Server), data: *anyopaque) anyerror!void;
         fn TypedHandlerFn(comptime T: type) type {
             return *const fn (context: *Context(Server), data: T) anyerror!void;
         }
         const HandlerWithData = struct {
             handler: HandlerFn,
-            data: *anyopaque,
+            data: usize,
         };
 
         handlers: [9]?HandlerWithData = [_]?HandlerWithData{null} ** 9,
@@ -80,8 +80,8 @@ pub fn Route(comptime Server: type) type {
             // You can either give a void (if you don't want to pass data through) or a pointer.
             comptime assert(@typeInfo(@TypeOf(data)) == .Pointer or @typeInfo(@TypeOf(data)) == .Void);
             const inner_data = switch (comptime @typeInfo(@TypeOf(data))) {
-                .Void => @constCast(&data),
-                .Pointer => data,
+                .Void => @intFromPtr(&data),
+                .Pointer => @intFromPtr(data),
                 else => unreachable,
             };
             var new_handlers = self.handlers;

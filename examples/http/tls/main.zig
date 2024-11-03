@@ -35,7 +35,7 @@ pub fn main() !void {
     try router.serve_embedded_file("/embed/pico.min.css", http.Mime.CSS, @embedFile("embed/pico.min.css"));
 
     try router.serve_route("/", Route.init().get({}, struct {
-        pub fn handler_fn(ctx: *Context, _: void) void {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -69,19 +69,19 @@ pub fn main() !void {
     defer t.deinit();
 
     try t.entry(
+        &router,
         struct {
-            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = alloc });
+            fn entry(rt: *Runtime, r: *const Router) !void {
+                var server = Server.init(.{ .allocator = rt.allocator });
                 try server.bind(host, port);
                 try server.serve(r, rt);
             }
         }.entry,
-        &router,
+        {},
         struct {
-            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
-                Server.clean(rt) catch unreachable;
+            fn exit(rt: *Runtime, _: void) !void {
+                try Server.clean(rt);
             }
         }.exit,
-        {},
     );
 }

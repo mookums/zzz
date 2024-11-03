@@ -128,18 +128,11 @@ pub fn Router(comptime Server: type) type {
         pub fn serve_fs_dir(self: *Self, comptime url_path: []const u8, comptime dir_path: []const u8) !void {
             assert(!self.locked);
 
-            const route = Route.init().get(struct {
-                pub fn handler_fn(ctx: *Context) void {
+            const route = Route.init().get({}, struct {
+                pub fn handler_fn(ctx: *Context, _: void) !void {
                     const search_path = ctx.captures[0].remaining;
 
-                    const file_path = std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path }) catch {
-                        ctx.respond(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        }) catch unreachable;
-                        return;
-                    };
+                    const file_path = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
 
                     // TODO: Ensure that paths cannot go out of scope and reference data that they shouldn't be allowed to.
                     // Very important.
@@ -153,14 +146,7 @@ pub fn Router(comptime Server: type) type {
                         }
                     };
 
-                    const provision = ctx.allocator.create(FileProvision) catch {
-                        ctx.respond(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        }) catch unreachable;
-                        return;
-                    };
+                    const provision = try ctx.allocator.create(FileProvision);
 
                     provision.* = .{
                         .mime = mime,
@@ -173,18 +159,11 @@ pub fn Router(comptime Server: type) type {
 
                     // We also need to support chunked encoding.
                     // It makes a lot more sense for files atleast.
-                    ctx.runtime.fs.open(
+                    try ctx.runtime.fs.open(
                         provision,
                         open_file_task,
                         file_path,
-                    ) catch {
-                        ctx.respond(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        }) catch unreachable;
-                        return;
-                    };
+                    );
                 }
             }.handler_fn);
 

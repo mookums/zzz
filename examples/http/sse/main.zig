@@ -119,12 +119,13 @@ pub fn main() !void {
     };
 
     try t.entry(
+        EntryParams{ .router = &router, .broadcast = &broadcast },
         struct {
-            fn entry(rt: *Runtime, alloc: std.mem.Allocator, params: EntryParams) !void {
+            fn entry(rt: *Runtime, params: EntryParams) !void {
                 try rt.storage.store_ptr("broadcast", params.broadcast);
 
                 var server = Server.init(.{
-                    .allocator = alloc,
+                    .allocator = rt.allocator,
                     .size_connections_max = max_conn,
                 });
 
@@ -132,12 +133,11 @@ pub fn main() !void {
                 try server.serve(params.router, rt);
             }
         }.entry,
-        EntryParams{ .router = &router, .broadcast = &broadcast },
+        {},
         struct {
-            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
-                Server.clean(rt) catch unreachable;
+            fn exit(rt: *Runtime, _: void) !void {
+                try Server.clean(rt);
             }
         }.exit,
-        {},
     );
 }

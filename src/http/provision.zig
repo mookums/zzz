@@ -21,7 +21,7 @@ pub const Provision = struct {
     response: Response,
     stage: Stage,
 
-    pub fn init_hook(provisions: []Provision, config: anytype) void {
+    pub fn init_hook(provisions: []Provision, config: ServerConfig) void {
         for (provisions) |*provision| {
             provision.job = .empty;
             provision.socket = undefined;
@@ -52,7 +52,7 @@ pub const Provision = struct {
         }
     }
 
-    pub fn deinit_hook(provisions: []Provision, allocator: anytype) void {
+    pub fn deinit_hook(provisions: []Provision, allocator: std.mem.Allocator) void {
         for (provisions) |*provision| {
             allocator.free(provision.buffer);
             provision.recv_buffer.deinit();

@@ -51,7 +51,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    try router.serve_route("/kill", Route.init().get(struct {
+    try router.serve_route("/kill", Route.init().get({}, struct {
         pub fn handler_fn(ctx: *Context, _: void) !void {
             ctx.runtime.stop();
         }
@@ -60,19 +60,19 @@ pub fn main() !void {
     try router.serve_fs_dir("/static", "./examples/http/fs/static");
 
     try t.entry(
+        &router,
         struct {
-            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = alloc });
+            fn entry(rt: *Runtime, r: *const Router) !void {
+                var server = Server.init(.{ .allocator = rt.allocator });
                 try server.bind(host, port);
                 try server.serve(r, rt);
             }
         }.entry,
-        &router,
+        {},
         struct {
-            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
+            fn exit(rt: *Runtime, _: void) !void {
                 Server.clean(rt) catch unreachable;
             }
         }.exit,
-        {},
     );
 }

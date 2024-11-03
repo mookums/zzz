@@ -176,7 +176,10 @@ pub fn Server(comptime security: Security) type {
                             .provision = p,
                         };
 
-                        @call(.auto, h_with_data.handler, .{ context, h_with_data.data }) catch |e| {
+                        @call(.auto, h_with_data.handler, .{
+                            context,
+                            @as(*anyopaque, @ptrFromInt(h_with_data.data)),
+                        }) catch |e| {
                             log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
                             p.response.set(.{
                                 .status = .@"Internal Server Error",
@@ -326,7 +329,6 @@ pub fn Server(comptime security: Security) type {
 
             if (comptime security == .tls) {
                 const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
-
                 const tls_ptr: *TLSType = &tls_slice[provision.index];
                 assert(tls_ptr.* != null);
                 tls_ptr.*.?.deinit();
@@ -1015,8 +1017,8 @@ pub fn Server(comptime security: Security) type {
             provision_pool.* = try Pool(Provision).init(
                 rt.allocator,
                 self.config.size_connections_max,
-                Provision.init_hook,
                 self.config,
+                Provision.init_hook,
             );
 
             try rt.storage.store_ptr("__zzz_router", @constCast(router));
@@ -1052,7 +1054,7 @@ pub fn Server(comptime security: Security) type {
 
             // clean up provision pool.
             const provision_pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
-            provision_pool.deinit(Provision.deinit_hook, rt.allocator);
+            provision_pool.deinit(rt.allocator, Provision.deinit_hook);
             rt.allocator.destroy(provision_pool);
 
             // clean up TLS.

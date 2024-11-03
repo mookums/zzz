@@ -57,10 +57,11 @@ pub fn main() !void {
     }.handler_fn));
 
     try t.entry(
+        &router,
         struct {
-            fn entry(rt: *Runtime, alloc: std.mem.Allocator, r: *const Router) !void {
+            fn entry(rt: *Runtime, r: *const Router) !void {
                 var server = Server.init(.{
-                    .allocator = alloc,
+                    .allocator = rt.allocator,
                     .size_backlog = 32,
                     .size_connections_max = max_conn,
                     .size_connection_arena_retain = 64,
@@ -75,12 +76,11 @@ pub fn main() !void {
                 try server.serve(r, rt);
             }
         }.entry,
-        &router,
+        {},
         struct {
-            fn exit(rt: *Runtime, _: std.mem.Allocator, _: void) void {
-                Server.clean(rt) catch unreachable;
+            fn exit(rt: *Runtime, _: void) !void {
+                try Server.clean(rt);
             }
         }.exit,
-        {},
     );
 }
