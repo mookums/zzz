@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const tag = builtin.os.tag;
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/server");
 
@@ -312,9 +313,10 @@ pub fn Server(comptime security: Security) type {
             assert(port > 0);
 
             self.addr = blk: {
-                switch (comptime builtin.os.tag) {
-                    .windows => break :blk try std.net.Address.parseIp(host, port),
-                    else => break :blk try std.net.Address.resolveIp(host, port),
+                if (comptime tag.isDarwin() or tag.isBSD() or tag == .windows) {
+                    break :blk try std.net.Address.parseIp(host, port);
+                } else {
+                    break :blk try std.net.Address.resolveIp(host, port);
                 }
             };
         }
