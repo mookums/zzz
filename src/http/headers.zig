@@ -6,16 +6,16 @@ const CaseStringMap = @import("case_string_map.zig").CaseStringMap;
 pub const Headers = struct {
     allocator: std.mem.Allocator,
     map: CaseStringMap([]const u8),
-    num_header_max: u32,
+    count: u32,
 
-    pub fn init(allocator: std.mem.Allocator, num_header_max: u32) !Headers {
+    pub fn init(allocator: std.mem.Allocator, count: u32) !Headers {
         var map = CaseStringMap([]const u8).init(allocator);
-        try map.ensureTotalCapacity(num_header_max);
+        try map.ensureTotalCapacity(@intCast(count));
 
         return Headers{
             .allocator = allocator,
             .map = map,
-            .num_header_max = num_header_max,
+            .count = count,
         };
     }
 
@@ -25,11 +25,11 @@ pub const Headers = struct {
 
     pub fn add(self: *Headers, key: []const u8, value: []const u8) HTTPError!void {
         assert(std.mem.indexOfScalar(u8, key, ':') == null);
-        if (self.map.count() == self.num_header_max) return HTTPError.TooManyHeaders;
+        if (self.map.count() == self.count) return HTTPError.TooManyHeaders;
         self.map.putAssumeCapacity(key, value);
     }
 
-    pub fn get(self: Headers, key: []const u8) ?[]const u8 {
+    pub fn get(self: *Headers, key: []const u8) ?[]const u8 {
         return self.map.get(key);
     }
 

@@ -6,51 +6,22 @@ const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
 
-const ResponseOptions = struct {
-    num_headers_max: u32,
-};
-
-const CachedDate = struct {
-    buffer: []u8,
-    ts: i64,
-    index: usize,
-};
-
 pub const Response = struct {
     allocator: std.mem.Allocator,
     status: ?Status = null,
     mime: ?Mime = null,
     body: ?[]const u8 = null,
     headers: Headers,
-    cached_date: CachedDate,
 
-    pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
+    pub fn init(allocator: std.mem.Allocator, num_header_max: u32) !Response {
         return Response{
             .allocator = allocator,
-            .headers = try Headers.init(allocator, options.num_headers_max),
-            .cached_date = CachedDate{
-                .buffer = try allocator.alloc(u8, 32),
-                .index = 0,
-                .ts = 0,
-            },
+            .headers = try Headers.init(allocator, num_header_max),
         };
     }
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
-        self.allocator.free(self.cached_date.buffer);
-    }
-
-    pub fn set_status(self: *Response, status: Status) void {
-        self.status = status;
-    }
-
-    pub fn set_mime(self: *Response, mime: Mime) void {
-        self.mime = mime;
-    }
-
-    pub fn set_body(self: *Response, body: []const u8) void {
-        self.body = body;
     }
 
     pub fn clear(self: *Response) void {
@@ -97,32 +68,8 @@ pub const Response = struct {
             return error.MissingStatus;
         }
 
-        std.mem.copyForwards(u8, buffer[index..], "\r\n");
-        index += 2;
-
-        // Standard Headers
-        // Cache the Date
-        const ts = std.time.timestamp();
-        if (ts != 0) {
-            if (self.cached_date.ts != ts) {
-                const date = Date.init(ts).to_http_date();
-                const buf = try date.into_buf(self.cached_date.buffer);
-                self.cached_date = .{
-                    .ts = ts,
-                    .buffer = self.cached_date.buffer,
-                    .index = buf.len,
-                };
-            }
-            std.mem.copyForwards(u8, buffer[index..], "Date: ");
-            index += 6;
-            std.mem.copyForwards(u8, buffer[index..], self.cached_date.buffer[0..self.cached_date.index]);
-            index += self.cached_date.index;
-            std.mem.copyForwards(u8, buffer[index..], "\r\n");
-            index += 2;
-        }
-
-        std.mem.copyForwards(u8, buffer[index..], "Server: zzz\r\nConnection: keep-alive\r\n");
-        index += 37;
+        std.mem.copyForwards(u8, buffer[index..], "\r\nServer: zzz\r\nConnection: keep-alive\r\n");
+        index += 39;
 
         // Headers
         var iter = self.headers.map.iterator();

@@ -40,15 +40,8 @@ pub const Provision = struct {
             var queries = QueryMap.init(config.allocator);
             queries.ensureTotalCapacity(config.num_queries_max) catch unreachable;
             provision.queries = queries;
-
-            provision.request = Request.init(config.allocator, .{
-                .num_header_max = config.num_header_max,
-                .size_request_max = config.size_request_max,
-                .size_request_uri_max = config.size_request_uri_max,
-            }) catch unreachable;
-            provision.response = Response.init(config.allocator, .{
-                .num_headers_max = config.num_header_max,
-            }) catch unreachable;
+            provision.request = Request.init(config.allocator, config.num_header_max) catch unreachable;
+            provision.response = Response.init(config.allocator, config.num_header_max) catch unreachable;
         }
     }
 

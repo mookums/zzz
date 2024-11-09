@@ -33,38 +33,22 @@ pub fn SSE(comptime Server: type) type {
             const buffer = self.context.provision.buffer;
 
             if (options.id) |id| {
-                const buf = try std.fmt.bufPrint(
-                    buffer[index..],
-                    "id: {s}\n",
-                    .{id},
-                );
+                const buf = try std.fmt.bufPrint(buffer[index..], "id: {s}\n", .{id});
                 index += buf.len;
             }
 
             if (options.event) |event| {
-                const buf = try std.fmt.bufPrint(
-                    buffer[index..],
-                    "event: {s}\n",
-                    .{event},
-                );
+                const buf = try std.fmt.bufPrint(buffer[index..], "event: {s}\n", .{event});
                 index += buf.len;
             }
 
             if (options.data) |data| {
-                const buf = try std.fmt.bufPrint(
-                    buffer[index..],
-                    "data: {s}\n",
-                    .{data},
-                );
+                const buf = try std.fmt.bufPrint(buffer[index..], "data: {s}\n", .{data});
                 index += buf.len;
             }
 
             if (options.retry) |retry| {
-                const buf = try std.fmt.bufPrint(
-                    buffer[index..],
-                    "retry: {d}\n",
-                    .{retry},
-                );
+                const buf = try std.fmt.bufPrint(buffer[index..], "retry: {d}\n", .{retry});
                 index += buf.len;
             }
 

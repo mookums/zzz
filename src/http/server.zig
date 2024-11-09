@@ -102,13 +102,18 @@ pub const ServerConfig = struct {
     /// after an arena is cleared.
     ///
     /// A higher value will increase memory usage but
-    /// should make allocators faster.Tardy
+    /// should make allocators faster.
     ///
     /// A lower value will reduce memory usage but
     /// will make allocators slower.
     ///
     /// Default: 1KB
     size_connection_arena_retain: u32 = 1024,
+    /// Amount of space on the `recv_buffer` retained
+    /// after every send.
+    ///
+    /// Default: 1KB
+    size_recv_buffer_retain: u32 = 1024,
     /// Size of the buffer (in bytes) used for
     /// interacting with the socket.
     ///
@@ -158,90 +163,6 @@ pub fn Server(comptime security: Security) type {
         tls_ctx: TLSContextType,
         router: *const Router,
 
-        fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
-            route: {
-                const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
-                if (found) |f| {
-                    const handler = f.route.get_handler(p.request.method);
-
-                    if (handler) |h_with_data| {
-                        const context: *Context = try p.arena.allocator().create(Context);
-                        context.* = .{
-                            .allocator = p.arena.allocator(),
-                            .runtime = runtime,
-                            .request = &p.request,
-                            .response = &p.response,
-                            .path = p.request.uri,
-                            .captures = f.captures,
-                            .queries = f.queries,
-                            .provision = p,
-                        };
-
-                        @call(.auto, h_with_data.handler, .{
-                            context,
-                            @as(*anyopaque, @ptrFromInt(h_with_data.data)),
-                        }) catch |e| {
-                            log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            return try raw_respond(p);
-                        };
-
-                        return .spawned;
-                    } else {
-                        // If we match the route but not the method.
-                        p.response.set(.{
-                            .status = .@"Method Not Allowed",
-                            .mime = Mime.HTML,
-                            .body = "405 Method Not Allowed",
-                        });
-
-                        // We also need to add to Allow header.
-                        // This uses the connection's arena to allocate 64 bytes.
-                        const allowed = f.route.get_allowed(p.arena.allocator()) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            break :route;
-                        };
-
-                        p.response.headers.add("Allow", allowed) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            break :route;
-                        };
-
-                        break :route;
-                    }
-                }
-
-                // Didn't match any route.
-                p.response.set(.{
-                    .status = .@"Not Found",
-                    .mime = Mime.HTML,
-                    .body = "404 Not Found",
-                });
-                break :route;
-            }
-
-            if (p.response.status == .Kill) {
-                return .kill;
-            }
-
-            return try raw_respond(p);
-        }
-
         pub fn init(config: ServerConfig) Self {
             const tls_ctx = switch (comptime security) {
                 .tls => |inner| TLSContext.init(.{
@@ -264,48 +185,10 @@ pub fn Server(comptime security: Security) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *const Self) void {
             if (comptime security == .tls) {
                 self.tls_ctx.deinit();
             }
-        }
-
-        fn create_socket(self: *const Self) !std.posix.socket_t {
-            const socket: std.posix.socket_t = blk: {
-                const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-                break :blk try std.posix.socket(
-                    self.addr.any.family,
-                    socket_flags,
-                    std.posix.IPPROTO.TCP,
-                );
-            };
-
-            log.debug("socket | t: {s} v: {any}", .{ @typeName(std.posix.socket_t), socket });
-
-            if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEPORT_LB,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEPORT,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            } else {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEADDR,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            }
-
-            return socket;
         }
 
         pub fn bind(self: *Self, host: []const u8, port: u16) !void {
@@ -342,9 +225,8 @@ pub fn Server(comptime security: Security) type {
             _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
             provision.response.clear();
 
-            // TODO: new config setting here!
-            if (provision.recv_buffer.items.len > 1024) {
-                provision.recv_buffer.shrinkRetainingCapacity(1024);
+            if (provision.recv_buffer.items.len > config.size_recv_buffer_retain) {
+                provision.recv_buffer.shrinkRetainingCapacity(config.size_recv_buffer_retain);
             } else {
                 provision.recv_buffer.clearRetainingCapacity();
             }
@@ -468,204 +350,7 @@ pub fn Server(comptime security: Security) type {
                 }
             };
 
-            var status: RecvStatus = status: {
-                var stage = provision.stage;
-                const job = provision.job.recv;
-
-                if (job.count >= config.size_request_max) {
-                    provision.response.set(.{
-                        .status = .@"Content Too Large",
-                        .mime = Mime.HTML,
-                        .body = "Request was too large",
-                    });
-
-                    break :status raw_respond(provision) catch unreachable;
-                }
-
-                switch (stage) {
-                    .header => {
-                        const start = provision.recv_buffer.items.len -| 4;
-                        provision.recv_buffer.appendSlice(recv_buffer) catch unreachable;
-                        const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
-
-                        // Basically, this means we haven't finished processing the header.
-                        if (header_ends == null) {
-                            log.debug("{d} - header doesn't end in this chunk, continue", .{provision.index});
-                            break :status .recv;
-                        }
-
-                        log.debug("{d} - parsing header", .{provision.index});
-                        // The +4 is to account for the slice we match.
-                        const header_end: u32 = @intCast(header_ends.? + 4);
-                        provision.request.parse_headers(provision.recv_buffer.items[0..header_end]) catch |e| {
-                            switch (e) {
-                                HTTPError.ContentTooLarge => {
-                                    provision.response.set(.{
-                                        .status = .@"Content Too Large",
-                                        .mime = Mime.HTML,
-                                        .body = "Request was too large",
-                                    });
-                                },
-                                HTTPError.TooManyHeaders => {
-                                    provision.response.set(.{
-                                        .status = .@"Request Header Fields Too Large",
-                                        .mime = Mime.HTML,
-                                        .body = "Too Many Headers",
-                                    });
-                                },
-                                HTTPError.MalformedRequest => {
-                                    provision.response.set(.{
-                                        .status = .@"Bad Request",
-                                        .mime = Mime.HTML,
-                                        .body = "Malformed Request",
-                                    });
-                                },
-                                HTTPError.URITooLong => {
-                                    provision.response.set(.{
-                                        .status = .@"URI Too Long",
-                                        .mime = Mime.HTML,
-                                        .body = "URI Too Long",
-                                    });
-                                },
-                                HTTPError.InvalidMethod => {
-                                    provision.response.set(.{
-                                        .status = .@"Not Implemented",
-                                        .mime = Mime.HTML,
-                                        .body = "Not Implemented",
-                                    });
-                                },
-                                HTTPError.HTTPVersionNotSupported => {
-                                    provision.response.set(.{
-                                        .status = .@"HTTP Version Not Supported",
-                                        .mime = Mime.HTML,
-                                        .body = "HTTP Version Not Supported",
-                                    });
-                                },
-                            }
-
-                            break :status raw_respond(provision) catch unreachable;
-                        };
-
-                        // Logging information about Request.
-                        log.info("{d} - \"{s} {s}\" {s}", .{
-                            provision.index,
-                            @tagName(provision.request.method),
-                            provision.request.uri,
-                            provision.request.headers.get("User-Agent") orelse "N/A",
-                        });
-
-                        // HTTP/1.1 REQUIRES a Host header to be present.
-                        const is_http_1_1 = provision.request.version == .@"HTTP/1.1";
-                        const is_host_present = provision.request.headers.get("Host") != null;
-                        if (is_http_1_1 and !is_host_present) {
-                            provision.response.set(.{
-                                .status = .@"Bad Request",
-                                .mime = Mime.HTML,
-                                .body = "Missing \"Host\" Header",
-                            });
-
-                            break :status raw_respond(provision) catch unreachable;
-                        }
-
-                        if (!provision.request.expect_body()) {
-                            break :status route_and_respond(rt, provision, router) catch unreachable;
-                        }
-
-                        // Everything after here is a Request that is expecting a body.
-                        const content_length = blk: {
-                            const length_string = provision.request.headers.get("Content-Length") orelse {
-                                break :blk 0;
-                            };
-
-                            break :blk std.fmt.parseInt(u32, length_string, 10) catch {
-                                provision.response.set(.{
-                                    .status = .@"Bad Request",
-                                    .mime = Mime.HTML,
-                                    .body = "",
-                                });
-
-                                break :status raw_respond(provision) catch unreachable;
-                            };
-                        };
-
-                        if (header_end < provision.recv_buffer.items.len) {
-                            const difference = provision.recv_buffer.items.len - header_end;
-                            if (difference == content_length) {
-                                // Whole Body
-                                log.debug("{d} - got whole body with header", .{provision.index});
-                                const body_end = header_end + difference;
-                                provision.request.set_body(provision.recv_buffer.items[header_end..body_end]);
-                                break :status route_and_respond(rt, provision, router) catch unreachable;
-                            } else {
-                                // Partial Body
-                                log.debug("{d} - got partial body with header", .{provision.index});
-                                stage = .{ .body = header_end };
-                                break :status .recv;
-                            }
-                        } else if (header_end == provision.recv_buffer.items.len) {
-                            // Body of length 0 probably or only got header.
-                            if (content_length == 0) {
-                                log.debug("{d} - got body of length 0", .{provision.index});
-                                // Body of Length 0.
-                                provision.request.set_body("");
-                                break :status route_and_respond(rt, provision, router) catch unreachable;
-                            } else {
-                                // Got only header.
-                                log.debug("{d} - got all header aka no body", .{provision.index});
-                                stage = .{ .body = header_end };
-                                break :status .recv;
-                            }
-                        } else unreachable;
-                    },
-
-                    .body => |header_end| {
-                        // We should ONLY be here if we expect there to be a body.
-                        assert(provision.request.expect_body());
-                        log.debug("{d} - body matching trigger_tasked", .{provision.index});
-
-                        const content_length = blk: {
-                            const length_string = provision.request.headers.get("Content-Length") orelse {
-                                provision.response.set(.{
-                                    .status = .@"Length Required",
-                                    .mime = Mime.HTML,
-                                    .body = "",
-                                });
-
-                                break :status raw_respond(provision) catch unreachable;
-                            };
-
-                            break :blk std.fmt.parseInt(u32, length_string, 10) catch {
-                                provision.response.set(.{
-                                    .status = .@"Bad Request",
-                                    .mime = Mime.HTML,
-                                    .body = "",
-                                });
-
-                                break :status raw_respond(provision) catch unreachable;
-                            };
-                        };
-
-                        const request_length = header_end + content_length;
-
-                        // If this body will be too long, abort early.
-                        if (request_length > config.size_request_max) {
-                            provision.response.set(.{
-                                .status = .@"Content Too Large",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-                            break :status raw_respond(provision) catch unreachable;
-                        }
-
-                        if (job.count >= request_length) {
-                            provision.request.set_body(provision.recv_buffer.items[header_end..request_length]);
-                            break :status route_and_respond(rt, provision, router) catch unreachable;
-                        } else {
-                            break :status .recv;
-                        }
-                    },
-                }
-            };
+            const status = try on_recv(recv_buffer, rt, provision, router, config);
 
             switch (status) {
                 .spawned => return,
@@ -681,61 +366,14 @@ pub fn Server(comptime security: Security) type {
                         provision.buffer,
                     );
                 },
-                .send => |*pslice| {
-                    const plain_buffer = pslice.get(0, config.size_socket_buffer);
-
-                    switch (comptime security) {
-                        .tls => |_| {
-                            const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
-                            const tls_ptr: *TLSType = &tls_slice[provision.index];
-                            assert(tls_ptr.* != null);
-
-                            const encrypted_buffer = tls_ptr.*.?.encrypt(plain_buffer) catch |e| {
-                                log.err("{d} - encrypt failed: {any}", .{ provision.index, e });
-                                provision.job = .close;
-                                try rt.net.close(provision, close_task, provision.socket);
-                                return error.TLSEncryptFailed;
-                            };
-
-                            provision.job = .{
-                                .send = .{
-                                    .after = .recv,
-                                    .slice = pslice.*,
-                                    .count = @intCast(plain_buffer.len),
-                                    .security = .{
-                                        .tls = .{
-                                            .encrypted = encrypted_buffer,
-                                            .encrypted_count = 0,
-                                        },
-                                    },
-                                },
-                            };
-
-                            try rt.net.send(
-                                provision,
-                                send_then_recv_task,
-                                provision.socket,
-                                encrypted_buffer,
-                            );
-                        },
-                        .plain => {
-                            provision.job = .{
-                                .send = .{
-                                    .after = .recv,
-                                    .slice = pslice.*,
-                                    .count = 0,
-                                    .security = .plain,
-                                },
-                            };
-
-                            try rt.net.send(
-                                provision,
-                                send_then_recv_task,
-                                provision.socket,
-                                plain_buffer,
-                            );
-                        },
-                    }
+                .send => |pslice| {
+                    const first_buffer = try prepare_send(rt, provision, .recv, pslice);
+                    try rt.net.send(
+                        provision,
+                        send_then_recv_task,
+                        provision.socket,
+                        first_buffer,
+                    );
                 },
             }
         }
@@ -1063,6 +701,324 @@ pub fn Server(comptime security: Security) type {
             if (comptime security == .tls) {
                 const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
                 rt.allocator.free(tls_slice);
+            }
+        }
+
+        fn create_socket(self: *const Self) !std.posix.socket_t {
+            const socket: std.posix.socket_t = blk: {
+                const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
+                break :blk try std.posix.socket(
+                    self.addr.any.family,
+                    socket_flags,
+                    std.posix.IPPROTO.TCP,
+                );
+            };
+
+            log.debug("socket | t: {s} v: {any}", .{ @typeName(std.posix.socket_t), socket });
+
+            if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
+                try std.posix.setsockopt(
+                    socket,
+                    std.posix.SOL.SOCKET,
+                    std.posix.SO.REUSEPORT_LB,
+                    &std.mem.toBytes(@as(c_int, 1)),
+                );
+            } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
+                try std.posix.setsockopt(
+                    socket,
+                    std.posix.SOL.SOCKET,
+                    std.posix.SO.REUSEPORT,
+                    &std.mem.toBytes(@as(c_int, 1)),
+                );
+            } else {
+                try std.posix.setsockopt(
+                    socket,
+                    std.posix.SOL.SOCKET,
+                    std.posix.SO.REUSEADDR,
+                    &std.mem.toBytes(@as(c_int, 1)),
+                );
+            }
+
+            return socket;
+        }
+
+        fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
+            route: {
+                const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
+                if (found) |f| {
+                    const handler = f.route.get_handler(p.request.method);
+
+                    if (handler) |h_with_data| {
+                        const context: *Context = try p.arena.allocator().create(Context);
+                        context.* = .{
+                            .allocator = p.arena.allocator(),
+                            .runtime = runtime,
+                            .request = &p.request,
+                            .response = &p.response,
+                            .path = p.request.uri,
+                            .captures = f.captures,
+                            .queries = f.queries,
+                            .provision = p,
+                        };
+
+                        @call(.auto, h_with_data.handler, .{
+                            context,
+                            @as(*anyopaque, @ptrFromInt(h_with_data.data)),
+                        }) catch |e| {
+                            log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            return try raw_respond(p);
+                        };
+
+                        return .spawned;
+                    } else {
+                        // If we match the route but not the method.
+                        p.response.set(.{
+                            .status = .@"Method Not Allowed",
+                            .mime = Mime.HTML,
+                            .body = "405 Method Not Allowed",
+                        });
+
+                        // We also need to add to Allow header.
+                        // This uses the connection's arena to allocate 64 bytes.
+                        const allowed = f.route.get_allowed(p.arena.allocator()) catch {
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            break :route;
+                        };
+
+                        p.response.headers.add("Allow", allowed) catch {
+                            p.response.set(.{
+                                .status = .@"Internal Server Error",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            break :route;
+                        };
+
+                        break :route;
+                    }
+                }
+
+                // Didn't match any route.
+                p.response.set(.{
+                    .status = .@"Not Found",
+                    .mime = Mime.HTML,
+                    .body = "404 Not Found",
+                });
+                break :route;
+            }
+
+            if (p.response.status == .Kill) {
+                return .kill;
+            }
+
+            return try raw_respond(p);
+        }
+
+        inline fn on_recv(
+            buffer: []const u8,
+            rt: *Runtime,
+            provision: *Provision,
+            router: *const Router,
+            config: *const ServerConfig,
+        ) !RecvStatus {
+            var stage = provision.stage;
+            const job = provision.job.recv;
+
+            if (job.count >= config.size_request_max) {
+                provision.response.set(.{
+                    .status = .@"Content Too Large",
+                    .mime = Mime.HTML,
+                    .body = "Request was too large",
+                });
+
+                return try raw_respond(provision);
+            }
+
+            switch (stage) {
+                .header => {
+                    const start = provision.recv_buffer.items.len -| 4;
+                    try provision.recv_buffer.appendSlice(buffer);
+                    const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
+
+                    // Basically, this means we haven't finished processing the header.
+                    if (header_ends == null) {
+                        log.debug("{d} - header doesn't end in this chunk, continue", .{provision.index});
+                        return .recv;
+                    }
+
+                    log.debug("{d} - parsing header", .{provision.index});
+                    // The +4 is to account for the slice we match.
+                    const header_end: u32 = @intCast(header_ends.? + 4);
+                    provision.request.parse_headers(provision.recv_buffer.items[0..header_end], .{
+                        .size_request_max = config.size_request_max,
+                        .size_request_uri_max = config.size_request_uri_max,
+                    }) catch |e| {
+                        switch (e) {
+                            HTTPError.ContentTooLarge => {
+                                provision.response.set(.{
+                                    .status = .@"Content Too Large",
+                                    .mime = Mime.HTML,
+                                    .body = "Request was too large",
+                                });
+                            },
+                            HTTPError.TooManyHeaders => {
+                                provision.response.set(.{
+                                    .status = .@"Request Header Fields Too Large",
+                                    .mime = Mime.HTML,
+                                    .body = "Too Many Headers",
+                                });
+                            },
+                            HTTPError.MalformedRequest => {
+                                provision.response.set(.{
+                                    .status = .@"Bad Request",
+                                    .mime = Mime.HTML,
+                                    .body = "Malformed Request",
+                                });
+                            },
+                            HTTPError.URITooLong => {
+                                provision.response.set(.{
+                                    .status = .@"URI Too Long",
+                                    .mime = Mime.HTML,
+                                    .body = "URI Too Long",
+                                });
+                            },
+                            HTTPError.InvalidMethod => {
+                                provision.response.set(.{
+                                    .status = .@"Not Implemented",
+                                    .mime = Mime.HTML,
+                                    .body = "Not Implemented",
+                                });
+                            },
+                            HTTPError.HTTPVersionNotSupported => {
+                                provision.response.set(.{
+                                    .status = .@"HTTP Version Not Supported",
+                                    .mime = Mime.HTML,
+                                    .body = "HTTP Version Not Supported",
+                                });
+                            },
+                        }
+
+                        return raw_respond(provision) catch unreachable;
+                    };
+
+                    // Logging information about Request.
+                    log.info("{d} - \"{s} {s}\" {s}", .{
+                        provision.index,
+                        @tagName(provision.request.method),
+                        provision.request.uri,
+                        provision.request.headers.get("User-Agent") orelse "N/A",
+                    });
+
+                    // HTTP/1.1 REQUIRES a Host header to be present.
+                    const is_http_1_1 = provision.request.version == .@"HTTP/1.1";
+                    const is_host_present = provision.request.headers.get("Host") != null;
+                    if (is_http_1_1 and !is_host_present) {
+                        provision.response.set(.{
+                            .status = .@"Bad Request",
+                            .mime = Mime.HTML,
+                            .body = "Missing \"Host\" Header",
+                        });
+
+                        return try raw_respond(provision);
+                    }
+
+                    if (!provision.request.expect_body()) {
+                        return try route_and_respond(rt, provision, router);
+                    }
+
+                    // Everything after here is a Request that is expecting a body.
+                    const content_length = blk: {
+                        const length_string = provision.request.headers.get("Content-Length") orelse {
+                            break :blk 0;
+                        };
+
+                        break :blk try std.fmt.parseInt(u32, length_string, 10);
+                    };
+
+                    if (header_end < provision.recv_buffer.items.len) {
+                        const difference = provision.recv_buffer.items.len - header_end;
+                        if (difference == content_length) {
+                            // Whole Body
+                            log.debug("{d} - got whole body with header", .{provision.index});
+                            const body_end = header_end + difference;
+                            provision.request.set(.{
+                                .body = provision.recv_buffer.items[header_end..body_end],
+                            });
+                            return try route_and_respond(rt, provision, router);
+                        } else {
+                            // Partial Body
+                            log.debug("{d} - got partial body with header", .{provision.index});
+                            stage = .{ .body = header_end };
+                            return .recv;
+                        }
+                    } else if (header_end == provision.recv_buffer.items.len) {
+                        // Body of length 0 probably or only got header.
+                        if (content_length == 0) {
+                            log.debug("{d} - got body of length 0", .{provision.index});
+                            // Body of Length 0.
+                            provision.request.set(.{ .body = "" });
+                            return try route_and_respond(rt, provision, router);
+                        } else {
+                            // Got only header.
+                            log.debug("{d} - got all header aka no body", .{provision.index});
+                            stage = .{ .body = header_end };
+                            return .recv;
+                        }
+                    } else unreachable;
+                },
+
+                .body => |header_end| {
+                    // We should ONLY be here if we expect there to be a body.
+                    assert(provision.request.expect_body());
+                    log.debug("{d} - body matching", .{provision.index});
+
+                    const content_length = blk: {
+                        const length_string = provision.request.headers.get("Content-Length") orelse {
+                            provision.response.set(.{
+                                .status = .@"Length Required",
+                                .mime = Mime.HTML,
+                                .body = "",
+                            });
+
+                            return try raw_respond(provision);
+                        };
+
+                        break :blk try std.fmt.parseInt(u32, length_string, 10);
+                    };
+
+                    const request_length = header_end + content_length;
+
+                    // If this body will be too long, abort early.
+                    if (request_length > config.size_request_max) {
+                        provision.response.set(.{
+                            .status = .@"Content Too Large",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+                        return try raw_respond(provision);
+                    }
+
+                    if (job.count >= request_length) {
+                        provision.request.set(.{
+                            .body = provision.recv_buffer.items[header_end..request_length],
+                        });
+                        return try route_and_respond(rt, provision, router);
+                    } else {
+                        return .recv;
+                    }
+                },
             }
         }
     };
