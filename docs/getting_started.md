@@ -5,7 +5,9 @@ For this guide, we will assume that you are running on a modern Linux platform a
 You will need to match the version of Tardy that zzz is currently using to the version of Tardy you currently use within your program. This will eventually be standardized.
 
 These are the current latest releases and are compatible.
+
 `zig fetch --save git+https://github.com/mookums/zzz#v0.2.0`
+
 `zig fetch --save git+https://github.com/mookums/tardy#v0.1.0`
 
 ## Hello, World!
@@ -69,6 +71,7 @@ pub fn main() !void {
     }.handler_fn));
 
     // This provides the entry function into every Tardy runtime.
+    // This runs once within each runtime that spawns.
     try t.entry(
         &router,
         struct {
