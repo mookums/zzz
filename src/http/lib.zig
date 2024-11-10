@@ -7,6 +7,7 @@ pub const Date = @import("date.zig").Date;
 pub const Headers = @import("../core/case_string_map.zig").CaseStringMap([]const u8);
 
 pub const Server = @import("server.zig").Server;
+pub const Client = @import("client.zig").Client;
 
 pub const HTTPError = error{
     TooManyHeaders,

@@ -5,6 +5,7 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/server");
 
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
+const create_socket = @import("../core/lib.zig").create_socket;
 
 const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
 const TLSContext = @import("../tls/lib.zig").TLSContext;
@@ -167,8 +168,7 @@ pub fn Server(comptime security: Security) type {
 
         pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
             const tls_ctx = switch (comptime security) {
-                .tls => |inner| TLSContext.init(.{
-                    .allocator = allocator,
+                .tls => |inner| TLSContext.init(allocator, .{
                     .cert = inner.cert,
                     .cert_name = inner.cert_name,
                     .key = inner.key,
@@ -735,49 +735,9 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        fn create_socket(addr: std.net.Address) !std.posix.socket_t {
-            const protocol: u32 = if (addr.any.family == std.posix.AF.UNIX)
-                0
-            else
-                std.posix.IPPROTO.TCP;
-
-            const socket = try std.posix.socket(
-                addr.any.family,
-                std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
-                protocol,
-            );
-
-            log.debug("socket | t: {s} v: {any}", .{ @typeName(std.posix.socket_t), socket });
-
-            if (@hasDecl(std.posix.SO, "REUSEPORT_LB")) {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEPORT_LB,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            } else if (@hasDecl(std.posix.SO, "REUSEPORT")) {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEPORT,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            } else {
-                try std.posix.setsockopt(
-                    socket,
-                    std.posix.SOL.SOCKET,
-                    std.posix.SO.REUSEADDR,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-            }
-
-            return socket;
-        }
-
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
-                const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
+                const found = router.get_route_from_host(p.request.path, p.captures, &p.queries);
                 const handler = found.route.get_handler(p.request.method);
 
                 if (handler) |h_with_data| {
@@ -787,7 +747,7 @@ pub fn Server(comptime security: Security) type {
                         .runtime = runtime,
                         .request = &p.request,
                         .response = &p.response,
-                        .path = p.request.uri,
+                        .path = p.request.path,
                         .captures = found.captures,
                         .queries = found.queries,
                         .provision = p,
@@ -797,7 +757,7 @@ pub fn Server(comptime security: Security) type {
                         context,
                         @as(*anyopaque, @ptrFromInt(h_with_data.data)),
                     }) catch |e| {
-                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
+                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.path, e });
                         p.response.set(.{
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
@@ -885,8 +845,8 @@ pub fn Server(comptime security: Security) type {
                     // The +4 is to account for the slice we match.
                     const header_end: usize = header_ends.? + start + 4;
                     provision.request.parse_headers(provision.recv_buffer.as_slice()[0..header_end], .{
-                        .size_request_max = config.request_bytes_max,
-                        .size_request_uri_max = config.request_uri_bytes_max,
+                        .request_bytes_max = config.request_bytes_max,
+                        .request_uri_bytes_max = config.request_uri_bytes_max,
                     }) catch |e| {
                         switch (e) {
                             HTTPError.ContentTooLarge => {
@@ -940,7 +900,7 @@ pub fn Server(comptime security: Security) type {
                     log.info("{d} - \"{s} {s}\" {s}", .{
                         provision.index,
                         @tagName(provision.request.method),
-                        provision.request.uri,
+                        provision.request.path,
                         provision.request.headers.get("User-Agent") orelse "N/A",
                     });
 

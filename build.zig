@@ -38,6 +38,8 @@ pub fn build(b: *std.Build) void {
     add_example(b, "benchmark", false, target, optimize, zzz, tardy);
     add_example(b, "valgrind", true, target, optimize, zzz, tardy);
 
+    add_example(b, "client", false, target, optimize, zzz, tardy);
+
     const tests = b.addTest(.{
         .name = "unit-test",
         .root_source_file = b.path("./src/unit_test.zig"),
