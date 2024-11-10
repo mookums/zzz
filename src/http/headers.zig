@@ -29,7 +29,7 @@ pub const Headers = struct {
         self.map.putAssumeCapacity(key, value);
     }
 
-    pub fn get(self: *Headers, key: []const u8) ?[]const u8 {
+    pub fn get(self: *const Headers, key: []const u8) ?[]const u8 {
         return self.map.get(key);
     }
 

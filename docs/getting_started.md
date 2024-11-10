@@ -1,18 +1,30 @@
 # Getting Started
 zzz is a networking framework that allows for modularity and flexibility in design. For most use cases, this flexibility is not a requirement and so various defaults are provided.
 
-For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP.
+For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP. We will need both `zzz` and `tardy` for this to work.
+You will need to match the version of Tardy that zzz is currently using to the version of Tardy you currently use within your program. This will eventually be standardized.
 
-`zig fetch --save git+https://github.com/mookums/zzz#main`
+These are the current latest releases and are compatible.
+`zig fetch --save git+https://github.com/mookums/zzz#v0.2.0`
+`zig fetch --save git+https://github.com/mookums/tardy#v0.1.0`
 
 ## Hello, World!
 We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `examples/basic` directory.
 
 ```zig
 const std = @import("std");
+
 const zzz = @import("zzz");
 const http = zzz.HTTP;
-const log = std.log.scoped(.@"examples/basic");
+
+const tardy = @import("tardy");
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+const Server = http.Server(.plain);
+const Router = Server.Router;
+const Context = Server.Context;
+const Route = Server.Route;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -22,21 +34,33 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = http.Router.init(allocator);
+    // Creating our Tardy instance that will spawn our runtimes.
+    var t = try Tardy.init(.{
+        .allocator = allocator,
+        .threading = .single,
+    });
+    defer t.deinit();
+
+    var router = Router.init(allocator);
     defer router.deinit();
 
-    try router.serve_route("/", http.Route.init().get(struct {
-        pub fn handler_fn(_: http.Request, response: *http.Response, _: http.Context) void {
-            const body =
+    const num: i8 = 12;
+
+    try router.serve_route("/", Route.init().get(&num, struct {
+        pub fn handler_fn(ctx: *Context, id: *const i8) !void {
+            const body_fmt =
                 \\ <!DOCTYPE html>
                 \\ <html>
                 \\ <body>
                 \\ <h1>Hello, World!</h1>
+                \\ <p>id: {d}</p>
                 \\ </body>
                 \\ </html>
             ;
 
-            response.set(.{
+            const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id.*});
+
+            try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
@@ -44,14 +68,23 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var server = http.Server(.plain, .auto).init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
-    defer server.deinit();
-
-    try server.bind(host, port);
-    try server.listen(.{ .router = &router });
+    // This provides the entry function into every Tardy runtime.
+    try t.entry(
+        &router,
+        struct {
+            fn entry(rt: *Runtime, r: *const Router) !void {
+                var server = Server.init(.{ .allocator = rt.allocator });
+                try server.bind(host, port);
+                try server.serve(r, rt);
+            }
+        }.entry,
+        {},
+        struct {
+            fn exit(rt: *Runtime, _: void) !void {
+                try Server.clean(rt);
+            }
+        }.exit,
+    );
 }
 ```
 
