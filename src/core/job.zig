@@ -1,7 +1,17 @@
 const std = @import("std");
 const Pseudoslice = @import("lib.zig").Pseudoslice;
 
-pub const SendType = struct {
+const TaskFn = @import("tardy").TaskFn;
+
+pub const AfterType = union(enum) {
+    recv,
+    sse: struct {
+        func: *const anyopaque,
+        ctx: *anyopaque,
+    },
+};
+pub const SendInner = struct {
+    after: AfterType,
     slice: Pseudoslice,
     count: usize,
     security: union(enum) {
@@ -24,6 +34,6 @@ pub const Job = union(enum) {
     accept,
     handshake: struct { state: enum { recv, send }, count: usize },
     recv: struct { count: usize },
-    send: SendType,
+    send: SendInner,
     close,
 };

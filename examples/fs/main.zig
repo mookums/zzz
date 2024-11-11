@@ -1,12 +1,5 @@
-# HTTPS
-zzz utilizes [BearSSL](https://bearssl.org/) to provide a safe and performant TLS implementation. This TLS functionality is entirely separated from the I/O for maximum portability.
-
-*Note: TLS Support is not **entirely** complete yet. It's a very rough area that will be getting cleaned up in a future development cycle*
-
-## TLS Example
-This is derived from the example at `examples/tls` and utilizes some certificates that are present within the repository.
-```zig
 const std = @import("std");
+const log = std.log.scoped(.@"examples/fs");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -15,16 +8,10 @@ const tardy = @import("tardy");
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.{ .tls = .{
-    .cert = .{ .file = .{ .path = "./examples/http/tls/certs/cert.pem" } },
-    .key = .{ .file = .{ .path = "./examples/http/tls/certs/key.pem" } },
-    .cert_name = "CERTIFICATE",
-    .key_name = "EC PRIVATE KEY",
-} });
-
+const Server = http.Server(.plain);
+const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
-const Router = Server.Router;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -35,6 +22,12 @@ pub fn main() !void {
     ){ .backing_allocator = std.heap.c_allocator };
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    var t = try Tardy.init(.{
+        .allocator = allocator,
+        .threading = .auto,
+    });
+    defer t.deinit();
 
     var router = Router.init(allocator);
     defer router.deinit();
@@ -58,11 +51,13 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
-    defer t.deinit();
+    try router.serve_route("/kill", Route.init().get({}, struct {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
+            ctx.runtime.stop();
+        }
+    }.handler_fn));
+
+    try router.serve_fs_dir("/static", "./examples/http/fs/static");
 
     try t.entry(
         &router,
@@ -76,11 +71,8 @@ pub fn main() !void {
         {},
         struct {
             fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
+                Server.clean(rt) catch unreachable;
             }
         }.exit,
     );
 }
-```
-This example above passes the `.tls` variant of the enum to the HTTP Server and provides the location of the certificate and key to be used. It also has the functionality to pass in a buffer containing the cert and key data if that is preferable. You must also provide the certificate and key name as the PEM format allows for multiple items to be placed within the same file.
-

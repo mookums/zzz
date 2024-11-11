@@ -4,16 +4,12 @@ zzz's design philosophy results in a lot of knobs that the consumer of the libra
 These performance tips are general and can apply to any protocol implementation. HTTP is used as the general example because it is currently the only completed protocol.
 
 ## Performance Hunting
-zzz now officially runs multithreaded by default. By default, it will utilize `@min(cpu_count / 2 - 1, 1)` threads. This can be tuned by using the `.threading` flag.
+zzz now officially runs multithreaded by default. By default, it will utilize `@min(cpu_count / 2 - 1, 1)` threads. This can be tuned by changing the `.threading` option of the Tardy runtime. 
 
 ```zig
-var server = http.Server(.plain, .auto).init(.{
+var t = try Tardy.init(.{
     .allocator = allocator,
-    .threading = .{ .multi = COUNT },
-    .size_backlog = 32,
-    .size_connections_max = 16,
-    .size_connection_arena_retain = 64,
-    .size_socket_buffer = 512,
+    .threading = .{ .multi = COUNT},
 });
 ```
 
@@ -30,7 +26,7 @@ Other settings of note include:
 When using zzz in certain environments, your goal may be to reduce memory usage. zzz provides a variety of controls for handling how much memory is allocated at start up.
 
 ```zig
-var server = http.Server(.plain, .auto).init(.{
+var server = Server.init(.{
     .allocator = allocator,
     .size_backlog = 32,
     .size_connections_max = 16,

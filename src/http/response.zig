@@ -6,51 +6,22 @@ const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
 
-const ResponseOptions = struct {
-    num_headers_max: u32,
-};
-
-const CachedDate = struct {
-    buffer: []u8,
-    ts: i64,
-    index: usize,
-};
-
 pub const Response = struct {
     allocator: std.mem.Allocator,
     status: ?Status = null,
     mime: ?Mime = null,
     body: ?[]const u8 = null,
     headers: Headers,
-    cached_date: CachedDate,
 
-    pub fn init(allocator: std.mem.Allocator, options: ResponseOptions) !Response {
+    pub fn init(allocator: std.mem.Allocator, num_header_max: u32) !Response {
         return Response{
             .allocator = allocator,
-            .headers = try Headers.init(allocator, options.num_headers_max),
-            .cached_date = CachedDate{
-                .buffer = try allocator.alloc(u8, 32),
-                .index = 0,
-                .ts = 0,
-            },
+            .headers = try Headers.init(allocator, num_header_max),
         };
     }
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
-        self.allocator.free(self.cached_date.buffer);
-    }
-
-    pub fn set_status(self: *Response, status: Status) void {
-        self.status = status;
-    }
-
-    pub fn set_mime(self: *Response, mime: Mime) void {
-        self.mime = mime;
-    }
-
-    pub fn set_body(self: *Response, body: []const u8) void {
-        self.body = body;
     }
 
     pub fn clear(self: *Response) void {
@@ -59,7 +30,7 @@ pub const Response = struct {
         self.body = null;
     }
 
-    const ResponseSetOptions = struct {
+    pub const ResponseSetOptions = struct {
         status: ?Status = null,
         mime: ?Mime = null,
         body: ?[]const u8 = null,
@@ -79,75 +50,66 @@ pub const Response = struct {
         }
     }
 
-    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: u32) ![]u8 {
-        var stream = std.io.fixedBufferStream(buffer);
-        try self.write_headers(stream.writer(), content_length);
-        return stream.getWritten();
-    }
+    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?u32) ![]u8 {
+        var index: usize = 0;
 
-    fn write_headers(self: *Response, writer: anytype, content_length: u32) !void {
         // Status Line
-        try writer.writeAll("HTTP/1.1 ");
+        std.mem.copyForwards(u8, buffer[index..], "HTTP/1.1 ");
+        index += 9;
 
         if (self.status) |status| {
-            try std.fmt.formatInt(@intFromEnum(status), 10, .lower, .{}, writer);
-            try writer.writeAll(" ");
-            try writer.writeAll(@tagName(status));
+            const status_code = @intFromEnum(status);
+            const code = try std.fmt.bufPrint(buffer[index..], "{d} ", .{status_code});
+            index += code.len;
+            const status_name = @tagName(status);
+            std.mem.copyForwards(u8, buffer[index..], status_name);
+            index += status_name.len;
         } else {
             return error.MissingStatus;
         }
 
-        try writer.writeAll("\r\n");
-
-        // Standard Headers.
-
-        // Cache the Date.
-        // Omits the Date header on any platform that doesn't support timestamp().
-        const ts = std.time.timestamp();
-        if (ts != 0) {
-            if (self.cached_date.ts != ts) {
-                const date = Date.init(ts).to_http_date();
-                const buf = try date.into_buf(self.cached_date.buffer);
-                self.cached_date = .{
-                    .ts = ts,
-                    .buffer = self.cached_date.buffer,
-                    .index = buf.len,
-                };
-            }
-
-            assert(self.cached_date.index < self.cached_date.buffer.len);
-            try writer.writeAll("Date: ");
-            try writer.writeAll(self.cached_date.buffer[0..self.cached_date.index]);
-            try writer.writeAll("\r\n");
-        }
-
-        try writer.writeAll("Server: zzz\r\n");
-        try writer.writeAll("Connection: keep-alive\r\n");
+        std.mem.copyForwards(u8, buffer[index..], "\r\nServer: zzz\r\nConnection: keep-alive\r\n");
+        index += 39;
 
         // Headers
         var iter = self.headers.map.iterator();
         while (iter.next()) |entry| {
-            try writer.writeAll(entry.key_ptr.*);
-            try writer.writeAll(": ");
-            try writer.writeAll(entry.value_ptr.*);
-            try writer.writeAll("\r\n");
+            std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
+            index += entry.key_ptr.len;
+            std.mem.copyForwards(u8, buffer[index..], ": ");
+            index += 2;
+            std.mem.copyForwards(u8, buffer[index..], entry.value_ptr.*);
+            index += entry.value_ptr.len;
+            std.mem.copyForwards(u8, buffer[index..], "\r\n");
+            index += 2;
         }
 
-        // If we have an associated MIME type.
+        // Content-Type
+        std.mem.copyForwards(u8, buffer[index..], "Content-Type: ");
+        index += 14;
         if (self.mime) |m| {
-            try writer.writeAll("Content-Type: ");
-            try writer.writeAll(m.content_type);
-            try writer.writeAll("\r\n");
+            std.mem.copyForwards(u8, buffer[index..], m.content_type);
+            index += m.content_type.len;
         } else {
-            // By default, we should just send as an octet-stream for safety.
-            try writer.writeAll("Content-Type: ");
-            try writer.writeAll(Mime.BIN.content_type);
-            try writer.writeAll("\r\n");
+            std.mem.copyForwards(u8, buffer[index..], Mime.BIN.content_type);
+            index += Mime.BIN.content_type.len;
+        }
+        std.mem.copyForwards(u8, buffer[index..], "\r\n");
+        index += 2;
+
+        // Content-Length
+        if (content_length) |length| {
+            std.mem.copyForwards(u8, buffer[index..], "Content-Length: ");
+            index += 16;
+            const length_str = try std.fmt.bufPrint(buffer[index..], "{d}", .{length});
+            index += length_str.len;
+            std.mem.copyForwards(u8, buffer[index..], "\r\n");
+            index += 2;
         }
 
-        try writer.writeAll("Content-Length: ");
-        try std.fmt.formatInt(content_length, 10, .lower, .{}, writer);
-        try writer.writeAll("\r\n");
-        try writer.writeAll("\r\n");
+        std.mem.copyForwards(u8, buffer[index..], "\r\n");
+        index += 2;
+
+        return buffer[0..index];
     }
 };

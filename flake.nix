@@ -1,5 +1,5 @@
 {
-  description = "a high performance communicaton abstraction library";
+  description = "a framework for writing performant and reliable networked services";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/release-24.05";
@@ -33,7 +33,6 @@
             gdb
             valgrind
             # Benchmarking
-            linuxPackages.perf
             wrk
           ];
         };

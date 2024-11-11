@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE Example</title>
+</head>
+<body>
+    <h1>Server-Sent Events Example</h1>
+    <button id="toggle-sse">Start SSE Connection</button>
+    <form id="messageForm">
+        <button type="submit">Send Message</button>
+    </form>
+    <div id="messages"></div>
+
+    <script>
+        let eventSource = null;
+        const button = document.getElementById('toggle-sse');
+        
+        button.addEventListener('click', function() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                button.textContent = 'Start SSE Connection';
+                return;
+            }
+
+            eventSource = new EventSource('/stream');
+            button.textContent = 'Stop SSE Connection';
+
+            eventSource.onmessage = function(event) {
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML += `<p>${event.data}</p>`;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            };
+
+            eventSource.onerror = (err) => {
+                console.error("Error occurred while connecting to SSE:", err);
+                eventSource.close();
+                eventSource = null;
+                button.textContent = 'Start SSE Connection';
+            };
+        });
+
+        // Handle form submission via AJAX
+        document.getElementById('messageForm').addEventListener('submit', function(event) {
+            event.preventDefault(); // Prevent default form submission
+
+            const formData = new FormData(this);
+
+            fetch('/message', {
+                method: 'POST',
+            })
+            .then(response => response.json()) // Adjust based on your server response
+            .then(data => {
+                console.log('Message sent:', data); // Handle successful response
+                this.reset(); // Clear the form
+            })
+            .catch(error => {
+                console.error('Error sending message:', error); // Handle any errors
+            });
+        });
+
+        // Clean up on page unload
+        window.addEventListener('unload', () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+    <style>
+        #messages {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        p {
+            margin: 5px 0;
+        }
+    </style>
+</body>
+</html>
+

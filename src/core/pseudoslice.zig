@@ -21,7 +21,7 @@ pub const Pseudoslice = struct {
 
     /// Operates like a slice. That means it does not capture the end.
     /// Start is an inclusive bound and end is an exclusive bound.
-    pub fn get(self: *Pseudoslice, start: usize, end: usize) []const u8 {
+    pub fn get(self: *const Pseudoslice, start: usize, end: usize) []const u8 {
         assert(end >= start);
         assert(self.shared.len >= end - start);
         const clamped_end = @min(end, self.len);

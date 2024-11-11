@@ -1,12 +1,5 @@
-# HTTPS
-zzz utilizes [BearSSL](https://bearssl.org/) to provide a safe and performant TLS implementation. This TLS functionality is entirely separated from the I/O for maximum portability.
-
-*Note: TLS Support is not **entirely** complete yet. It's a very rough area that will be getting cleaned up in a future development cycle*
-
-## TLS Example
-This is derived from the example at `examples/tls` and utilizes some certificates that are present within the repository.
-```zig
 const std = @import("std");
+const log = std.log.scoped(.@"examples/tls");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -39,11 +32,16 @@ pub fn main() !void {
     var router = Router.init(allocator);
     defer router.deinit();
 
+    try router.serve_embedded_file("/embed/pico.min.css", http.Mime.CSS, @embedFile("embed/pico.min.css"));
+
     try router.serve_route("/", Route.init().get({}, struct {
         pub fn handler_fn(ctx: *Context, _: void) !void {
             const body =
                 \\ <!DOCTYPE html>
                 \\ <html>
+                \\ <head>
+                \\ <link rel="stylesheet" href="/embed/pico.min.css"/>
+                \\ </head>
                 \\ <body>
                 \\ <h1>Hello, World!</h1>
                 \\ </body>
@@ -55,6 +53,12 @@ pub fn main() !void {
                 .mime = http.Mime.HTML,
                 .body = body[0..],
             });
+        }
+    }.handler_fn));
+
+    try router.serve_route("/kill", Route.init().get({}, struct {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
+            ctx.runtime.stop();
         }
     }.handler_fn));
 
@@ -81,6 +85,3 @@ pub fn main() !void {
         }.exit,
     );
 }
-```
-This example above passes the `.tls` variant of the enum to the HTTP Server and provides the location of the certificate and key to be used. It also has the functionality to pass in a buffer containing the cert and key data if that is preferable. You must also provide the certificate and key name as the PEM format allows for multiple items to be placed within the same file.
-

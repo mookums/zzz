@@ -1,20 +1,5 @@
-# Getting Started
-zzz is a networking framework that allows for modularity and flexibility in design. For most use cases, this flexibility is not a requirement and so various defaults are provided.
-
-For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP. We will need both `zzz` and `tardy` for this to work.
-You will need to match the version of Tardy that zzz is currently using to the version of Tardy you currently use within your program. This will eventually be standardized.
-
-These are the current latest releases and are compatible.
-
-`zig fetch --save git+https://github.com/mookums/zzz#v0.2.0`
-
-`zig fetch --save git+https://github.com/mookums/tardy#v0.1.0`
-
-## Hello, World!
-We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `examples/basic` directory.
-
-```zig
 const std = @import("std");
+const log = std.log.scoped(.@"examples/basic");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -36,7 +21,8 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Creating our Tardy instance that will spawn our runtimes.
+    // Creating our Tardy instance that
+    // will spawn our runtimes.
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
@@ -62,6 +48,9 @@ pub fn main() !void {
 
             const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id.*});
 
+            // This is the standard response and what you
+            // will usually be using. This will send to the
+            // client and then continue to await more requests.
             try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
@@ -70,8 +59,8 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    // This provides the entry function into every Tardy runtime.
-    // This runs once within each runtime that spawns.
+    // This provides the entry function into the Tardy runtime. This will run
+    // exactly once inside of each runtime (each thread gets a single runtime).
     try t.entry(
         &router,
         struct {
@@ -89,6 +78,3 @@ pub fn main() !void {
         }.exit,
     );
 }
-```
-
-The snippet above handles all of the basic tasks involved with serving a plaintext route using zzz's HTTP implementation. 

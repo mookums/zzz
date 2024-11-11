@@ -28,14 +28,14 @@ pub fn build(b: *std.Build) void {
 
     zzz.linkLibrary(bearssl);
 
-    add_example(b, "basic", .http, false, target, optimize, zzz);
-    add_example(b, "custom", .http, false, target, optimize, zzz);
-    add_example(b, "tls", .http, true, target, optimize, zzz);
-    add_example(b, "minram", .http, false, target, optimize, zzz);
-    add_example(b, "fs", .http, false, target, optimize, zzz);
-    add_example(b, "multithread", .http, false, target, optimize, zzz);
-    add_example(b, "benchmark", .http, false, target, optimize, zzz);
-    add_example(b, "valgrind", .http, true, target, optimize, zzz);
+    add_example(b, "basic", false, target, optimize, zzz, tardy);
+    add_example(b, "sse", false, target, optimize, zzz, tardy);
+    add_example(b, "tls", true, target, optimize, zzz, tardy);
+    add_example(b, "minram", false, target, optimize, zzz, tardy);
+    add_example(b, "fs", false, target, optimize, zzz, tardy);
+    add_example(b, "multithread", false, target, optimize, zzz, tardy);
+    add_example(b, "benchmark", false, target, optimize, zzz, tardy);
+    add_example(b, "valgrind", true, target, optimize, zzz, tardy);
 
     const tests = b.addTest(.{
         .name = "tests",
@@ -50,22 +50,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_test.step);
 }
 
-const Protocol = enum {
-    http,
-};
-
 fn add_example(
     b: *std.Build,
     name: []const u8,
-    protocol: Protocol,
     link_libc: bool,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
     zzz_module: *std.Build.Module,
+    tardy_module: *std.Build.Module,
 ) void {
     const example = b.addExecutable(.{
-        .name = b.fmt("{s}_{s}", .{ @tagName(protocol), name }),
-        .root_source_file = b.path(b.fmt("./examples/{s}/{s}/main.zig", .{ @tagName(protocol), name })),
+        .name = name,
+        .root_source_file = b.path(b.fmt("./examples/{s}/main.zig", .{name})),
         .target = target,
         .optimize = optimize,
         .strip = false,
@@ -76,17 +72,18 @@ fn add_example(
     }
 
     example.root_module.addImport("zzz", zzz_module);
+    example.root_module.addImport("tardy", tardy_module);
+
     const install_artifact = b.addInstallArtifact(example, .{});
+    b.getInstallStep().dependOn(&install_artifact.step);
 
-    const run_cmd = b.addRunArtifact(example);
-    run_cmd.step.dependOn(&install_artifact.step);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    const build_step = b.step(b.fmt("{s}", .{name}), b.fmt("Build zzz example ({s})", .{name}));
+    build_step.dependOn(&install_artifact.step);
 
-    const run_step = b.step(
-        b.fmt("run_{s}_{s}", .{ @tagName(protocol), name }),
-        b.fmt("Run {s} {s}", .{ @tagName(protocol), name }),
-    );
-    run_step.dependOn(&run_cmd.step);
+    const run_artifact = b.addRunArtifact(example);
+    run_artifact.step.dependOn(&install_artifact.step);
+
+    const run_step = b.step(b.fmt("run_{s}", .{name}), b.fmt("Run zzz example ({s})", .{name}));
+    run_step.dependOn(&install_artifact.step);
+    run_step.dependOn(&run_artifact.step);
 }

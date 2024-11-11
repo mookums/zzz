@@ -6,35 +6,21 @@ const Headers = @import("lib.zig").Headers;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
 
-const RequestOptions = struct {
-    size_request_max: u32,
-    size_request_uri_max: u32,
-    num_header_max: u32,
-};
-
 pub const Request = struct {
     allocator: std.mem.Allocator,
-    size_request_max: u32,
-    size_request_uri_max: u32,
     method: Method,
     uri: []const u8,
-    version: std.http.Version,
+    version: std.http.Version = .@"HTTP/1.1",
     headers: Headers,
     body: []const u8,
 
     /// This is for constructing a Request.
-    pub fn init(allocator: std.mem.Allocator, options: RequestOptions) !Request {
-        // The request size needs to be larger than the max URI size.
-        assert(options.size_request_max > options.size_request_uri_max);
-
+    pub fn init(allocator: std.mem.Allocator, num_header_max: u32) !Request {
         return Request{
             .allocator = allocator,
-            .headers = try Headers.init(allocator, options.num_header_max),
-            .size_request_max = options.size_request_max,
-            .size_request_uri_max = options.size_request_uri_max,
+            .headers = try Headers.init(allocator, num_header_max),
             .method = undefined,
             .uri = undefined,
-            .version = undefined,
             .body = undefined,
         };
     }
@@ -43,7 +29,12 @@ pub const Request = struct {
         self.headers.deinit();
     }
 
-    pub fn parse_headers(self: *Request, bytes: []const u8) HTTPError!void {
+    const RequestParseOptions = struct {
+        size_request_max: u32,
+        size_request_uri_max: u32,
+    };
+
+    pub fn parse_headers(self: *Request, bytes: []const u8, options: RequestParseOptions) HTTPError!void {
         self.headers.clear();
         var total_size: u32 = 0;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
@@ -56,7 +47,7 @@ pub const Request = struct {
         while (lines.next()) |line| {
             total_size += @intCast(line.len);
 
-            if (total_size > self.size_request_max) {
+            if (total_size > options.size_request_max) {
                 return HTTPError.ContentTooLarge;
             }
 
@@ -68,16 +59,14 @@ pub const Request = struct {
                     log.warn("invalid method: {s}", .{method_string});
                     return HTTPError.InvalidMethod;
                 };
-                self.set_method(method);
 
                 const uri_string = chunks.next() orelse return HTTPError.MalformedRequest;
-                if (uri_string.len >= self.size_request_uri_max) return HTTPError.URITooLong;
+                if (uri_string.len >= options.size_request_uri_max) return HTTPError.URITooLong;
                 if (uri_string[0] != '/') return HTTPError.MalformedRequest;
-                self.set_uri(uri_string);
 
                 const version_string = chunks.next() orelse return HTTPError.MalformedRequest;
                 if (!std.mem.eql(u8, version_string, "HTTP/1.1")) return HTTPError.HTTPVersionNotSupported;
-                self.set_version(.@"HTTP/1.1");
+                self.set(.{ .method = method, .uri = uri_string });
 
                 // There shouldn't be anything else.
                 if (chunks.next() != null) return HTTPError.MalformedRequest;
@@ -93,20 +82,24 @@ pub const Request = struct {
         }
     }
 
-    pub fn set_method(self: *Request, method: Method) void {
-        self.method = method;
-    }
+    pub const RequestSetOptions = struct {
+        method: ?Method = null,
+        uri: ?[]const u8 = null,
+        body: ?[]const u8 = null,
+    };
 
-    pub fn set_uri(self: *Request, uri: []const u8) void {
-        self.uri = uri;
-    }
+    pub fn set(self: *Request, options: RequestSetOptions) void {
+        if (options.method) |method| {
+            self.method = method;
+        }
 
-    pub fn set_version(self: *Request, version: std.http.Version) void {
-        self.version = version;
-    }
+        if (options.uri) |uri| {
+            self.uri = uri;
+        }
 
-    pub fn set_body(self: *Request, body: []const u8) void {
-        self.body = body;
+        if (options.body) |body| {
+            self.body = body;
+        }
     }
 
     /// Should this specific Request expect to capture a body.
@@ -128,14 +121,13 @@ test "Parse Request" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    try request.parse_headers(request_text[0..], .{
         .size_request_max = 1024,
         .size_request_uri_max = 256,
     });
-    defer request.deinit();
-
-    try request.parse_headers(request_text[0..]);
 
     try testing.expectEqual(.GET, request.method);
     try testing.expectEqualStrings("/", request.uri);
@@ -155,14 +147,13 @@ test "Expect ContentTooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    const err = request.parse_headers(request_text[0..], .{
         .size_request_max = 128,
         .size_request_uri_max = 64,
     });
-    defer request.deinit();
-
-    const err = request.parse_headers(request_text[0..]);
     try testing.expectError(HTTPError.ContentTooLarge, err);
 }
 
@@ -175,14 +166,13 @@ test "Expect URITooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    const err = request.parse_headers(request_text[0..], .{
         .size_request_max = 1024 * 1024,
         .size_request_uri_max = 2048,
     });
-    defer request.deinit();
-
-    const err = request.parse_headers(request_text[0..]);
     try testing.expectError(HTTPError.URITooLong, err);
 }
 
@@ -195,14 +185,13 @@ test "Expect Malformed when URI missing /" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 256});
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    const err = request.parse_headers(request_text[0..], .{
         .size_request_max = 1024,
         .size_request_uri_max = 512,
     });
-    defer request.deinit();
-
-    const err = request.parse_headers(request_text[0..]);
     try testing.expectError(HTTPError.MalformedRequest, err);
 }
 
@@ -214,14 +203,13 @@ test "Expect Incorrect HTTP Version" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    const err = request.parse_headers(request_text[0..], .{
         .size_request_max = 1024,
         .size_request_uri_max = 512,
     });
-    defer request.deinit();
-
-    const err = request.parse_headers(request_text[0..]);
     try testing.expectError(HTTPError.HTTPVersionNotSupported, err);
 }
 
@@ -233,13 +221,12 @@ test "Malformed Headers" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, .{
-        .num_header_max = 32,
+    var request = try Request.init(testing.allocator, 32);
+    defer request.deinit();
+
+    const err = request.parse_headers(request_text[0..], .{
         .size_request_max = 1024,
         .size_request_uri_max = 512,
     });
-    defer request.deinit();
-
-    const err = request.parse_headers(request_text[0..]);
     try testing.expectError(HTTPError.MalformedRequest, err);
 }
