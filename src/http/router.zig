@@ -72,6 +72,12 @@ pub fn Router(comptime Server: type) type {
             }
             provision.fd = fd;
 
+            // TODO: If we have a If-None-Match by this point, we should fire off a stat request
+            // that way we can check the last modified time and compare that with our ETag.
+            // We generally avoid using the HTTP Date stuff since it can be so slow.
+            //
+            // If we have a matching etag, we can just respond with Not Modified.
+            // If we don't then we continue doing what we normally do.
             try rt.fs.read(
                 provision,
                 read_file_task,
@@ -141,7 +147,11 @@ pub fn Router(comptime Server: type) type {
             slice.* = try std.fs.realpathAlloc(arena, dir_path);
 
             const route = Route.init().get(slice, struct {
-                pub fn handler_fn(ctx: *Context, real_dir: *const []const u8) !void {
+                fn handler_fn(ctx: *Context, real_dir: *const []const u8) !void {
+                    // TODO: Add caching support. We shouldn't need to resend files
+                    // all the time, especially if the user has gotten them before
+                    // and has an ETag.
+
                     if (ctx.captures.len == 0) {
                         try ctx.respond(.{
                             .status = .@"Not Found",
@@ -153,7 +163,7 @@ pub fn Router(comptime Server: type) type {
 
                     const search_path = ctx.captures[0].remaining;
 
-                    const file_path: [:0]u8 = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
+                    const file_path = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
                     const real_path = std.fs.realpathAlloc(ctx.allocator, file_path) catch {
                         try ctx.respond(.{
                             .status = .@"Not Found",
@@ -204,7 +214,7 @@ pub fn Router(comptime Server: type) type {
 
             const url_with_match_all = comptime std.fmt.comptimePrint(
                 "{s}/%r",
-                .{std.mem.trimRight(u8, url_path, &.{'/'})},
+                .{std.mem.trimRight(u8, url_path, "/")},
             );
 
             try self.serve_route(url_with_match_all, route);
@@ -218,7 +228,7 @@ pub fn Router(comptime Server: type) type {
         ) !void {
             assert(!self.locked);
             const route = Route.init().get({}, struct {
-                pub fn handler_fn(ctx: *Context, _: void) !void {
+                fn handler_fn(ctx: *Context, _: void) !void {
                     if (comptime builtin.mode == .Debug) {
                         // Don't Cache in Debug.
                         try ctx.response.headers.add(
