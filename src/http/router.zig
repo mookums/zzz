@@ -27,6 +27,7 @@ pub fn Router(comptime Server: type) type {
         allocator: std.mem.Allocator,
         arena: std.heap.ArenaAllocator,
         routes: RoutingTrie,
+        not_found_route: ?Route = null,
         /// This makes the router immutable, also making it
         /// thread-safe when shared.
         locked: bool = false,
@@ -78,6 +79,7 @@ pub fn Router(comptime Server: type) type {
             //
             // If we have a matching etag, we can just respond with Not Modified.
             // If we don't then we continue doing what we normally do.
+
             try rt.fs.read(
                 provision,
                 read_file_task,
@@ -105,7 +107,6 @@ pub fn Router(comptime Server: type) type {
             }
 
             const length: usize = @intCast(result);
-
             try provision.list.appendSlice(provision.buffer[0..length]);
 
             // TODO: This needs to be a setting you pass in to the router.
@@ -274,13 +275,32 @@ pub fn Router(comptime Server: type) type {
             try self.serve_route(path, route);
         }
 
+        pub fn serve_not_found(self: *Self, route: Route) void {
+            self.not_found_route = route;
+        }
+
         pub fn serve_route(self: *Self, path: []const u8, route: Route) !void {
             assert(!self.locked);
             try self.routes.add_route(path, route);
         }
 
-        pub fn get_route_from_host(self: Self, host: []const u8, captures: []Capture, queries: *QueryMap) ?FoundRoute {
-            return self.routes.get_route(host, captures, queries);
+        fn not_found_handler(ctx: *Context, _: void) !void {
+            try ctx.respond(.{
+                .status = .@"Not Found",
+                .mime = Mime.HTML,
+                .body = "",
+            });
+        }
+
+        pub fn get_route_from_host(self: Self, path: []const u8, captures: []Capture, queries: *QueryMap) FoundRoute {
+            const base_404_route = comptime Route.init().get({}, not_found_handler);
+
+            return self.routes.get_route(path, captures, queries) orelse {
+                if (self.not_found_route) |not_found| {
+                    queries.clearRetainingCapacity();
+                    return FoundRoute{ .route = not_found, .captures = captures[0..0], .queries = queries };
+                } else return FoundRoute{ .route = base_404_route, .captures = captures[0..], .queries = queries };
+            };
         }
     };
 }

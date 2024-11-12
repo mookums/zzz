@@ -35,7 +35,7 @@ pub fn main() !void {
     const num: i8 = 12;
 
     try router.serve_route("/", Route.init().get(&num, struct {
-        pub fn handler_fn(ctx: *Context, id: *const i8) !void {
+        fn handler_fn(ctx: *Context, id: *const i8) !void {
             const body_fmt =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -55,6 +55,16 @@ pub fn main() !void {
                 .status = .OK,
                 .mime = http.Mime.HTML,
                 .body = body[0..],
+            });
+        }
+    }.handler_fn));
+
+    router.serve_not_found(Route.init().get({}, struct {
+        fn handler_fn(ctx: *Context, _: void) !void {
+            try ctx.respond(.{
+                .status = .@"Not Found",
+                .mime = http.Mime.HTML,
+                .body = "Not Found Handler!",
             });
         }
     }.handler_fn));

@@ -745,78 +745,68 @@ pub fn Server(comptime security: Security) type {
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
                 const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
-                if (found) |f| {
-                    const handler = f.route.get_handler(p.request.method);
+                const handler = found.route.get_handler(p.request.method);
 
-                    if (handler) |h_with_data| {
-                        const context: *Context = try p.arena.allocator().create(Context);
-                        context.* = .{
-                            .allocator = p.arena.allocator(),
-                            .runtime = runtime,
-                            .request = &p.request,
-                            .response = &p.response,
-                            .path = p.request.uri,
-                            .captures = f.captures,
-                            .queries = f.queries,
-                            .provision = p,
-                        };
+                if (handler) |h_with_data| {
+                    const context: *Context = try p.arena.allocator().create(Context);
+                    context.* = .{
+                        .allocator = p.arena.allocator(),
+                        .runtime = runtime,
+                        .request = &p.request,
+                        .response = &p.response,
+                        .path = p.request.uri,
+                        .captures = found.captures,
+                        .queries = found.queries,
+                        .provision = p,
+                    };
 
-                        @call(.auto, h_with_data.handler, .{
-                            context,
-                            @as(*anyopaque, @ptrFromInt(h_with_data.data)),
-                        }) catch |e| {
-                            log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            return try raw_respond(p);
-                        };
-
-                        return .spawned;
-                    } else {
-                        // If we match the route but not the method.
+                    @call(.auto, h_with_data.handler, .{
+                        context,
+                        @as(*anyopaque, @ptrFromInt(h_with_data.data)),
+                    }) catch |e| {
+                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
                         p.response.set(.{
-                            .status = .@"Method Not Allowed",
+                            .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
-                            .body = "405 Method Not Allowed",
+                            .body = "",
                         });
 
-                        // We also need to add to Allow header.
-                        // This uses the connection's arena to allocate 64 bytes.
-                        const allowed = f.route.get_allowed(p.arena.allocator()) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
+                        return try raw_respond(p);
+                    };
 
-                            break :route;
-                        };
+                    return .spawned;
+                } else {
+                    // If we match the route but not the method.
+                    p.response.set(.{
+                        .status = .@"Method Not Allowed",
+                        .mime = Mime.HTML,
+                        .body = "405 Method Not Allowed",
+                    });
 
-                        p.response.headers.add("Allow", allowed) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            break :route;
-                        };
+                    // We also need to add to Allow header.
+                    // This uses the connection's arena to allocate 64 bytes.
+                    const allowed = found.route.get_allowed(p.arena.allocator()) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
 
                         break :route;
-                    }
-                }
+                    };
 
-                // Didn't match any route.
-                p.response.set(.{
-                    .status = .@"Not Found",
-                    .mime = Mime.HTML,
-                    .body = "404 Not Found",
-                });
-                break :route;
+                    p.response.headers.add("Allow", allowed) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+
+                        break :route;
+                    };
+
+                    break :route;
+                }
             }
 
             if (p.response.status == .Kill) {
