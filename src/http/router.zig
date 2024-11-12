@@ -25,6 +25,7 @@ pub fn Router(comptime Server: type) type {
         const Route = _Route(Server);
         const Context = _Context(Server);
         allocator: std.mem.Allocator,
+        arena: std.heap.ArenaAllocator,
         routes: RoutingTrie,
         /// This makes the router immutable, also making it
         /// thread-safe when shared.
@@ -32,11 +33,17 @@ pub fn Router(comptime Server: type) type {
 
         pub fn init(allocator: std.mem.Allocator) Self {
             const routes = RoutingTrie.init(allocator) catch unreachable;
-            return Self{ .allocator = allocator, .routes = routes, .locked = false };
+            return Self{
+                .allocator = allocator,
+                .arena = std.heap.ArenaAllocator.init(allocator),
+                .routes = routes,
+                .locked = false,
+            };
         }
 
         pub fn deinit(self: *Self) void {
             self.routes.deinit();
+            self.arena.deinit();
         }
 
         const FileProvision = struct {
@@ -127,15 +134,43 @@ pub fn Router(comptime Server: type) type {
 
         pub fn serve_fs_dir(self: *Self, comptime url_path: []const u8, comptime dir_path: []const u8) !void {
             assert(!self.locked);
+            const arena = self.arena.allocator();
 
-            const route = Route.init().get({}, struct {
-                pub fn handler_fn(ctx: *Context, _: void) !void {
+            const slice = try arena.create([]const u8);
+            // Gets the real path of the directory being served.
+            slice.* = try std.fs.realpathAlloc(arena, dir_path);
+
+            const route = Route.init().get(slice, struct {
+                pub fn handler_fn(ctx: *Context, real_dir: *const []const u8) !void {
+                    if (ctx.captures.len == 0) {
+                        try ctx.respond(.{
+                            .status = .@"Not Found",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+                        return;
+                    }
+
                     const search_path = ctx.captures[0].remaining;
 
-                    const file_path = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
+                    const file_path: [:0]u8 = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
+                    const real_path = std.fs.realpathAlloc(ctx.allocator, file_path) catch {
+                        try ctx.respond(.{
+                            .status = .@"Not Found",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+                        return;
+                    };
 
-                    // TODO: Ensure that paths cannot go out of scope and reference data that they shouldn't be allowed to.
-                    // Very important.
+                    if (!std.mem.startsWith(u8, real_path, real_dir.*)) {
+                        try ctx.respond(.{
+                            .status = .Forbidden,
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+                        return;
+                    }
 
                     const extension_start = std.mem.lastIndexOfScalar(u8, search_path, '.');
                     const mime: Mime = blk: {
