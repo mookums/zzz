@@ -670,10 +670,8 @@ pub fn Server(comptime security: Security) type {
                     TLSType,
                     self.config.size_connections_max,
                 );
-                if (comptime security == .tls) {
-                    for (tls_slice) |*tls| {
-                        tls.* = null;
-                    }
+                for (tls_slice) |*tls| {
+                    tls.* = null;
                 }
 
                 // since slices are fat pointers...

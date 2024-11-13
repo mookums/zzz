@@ -80,7 +80,7 @@ pub fn Route(comptime Server: type) type {
             // You can either give a void (if you don't want to pass data through) or a pointer.
             comptime assert(@typeInfo(@TypeOf(data)) == .Pointer or @typeInfo(@TypeOf(data)) == .Void);
             const inner_data = switch (comptime @typeInfo(@TypeOf(data))) {
-                .Void => undefined,
+                .Void => 1, // Needs to not be 0.
                 .Pointer => @intFromPtr(data),
                 else => unreachable,
             };
