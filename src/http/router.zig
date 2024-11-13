@@ -276,6 +276,7 @@ pub fn Router(comptime Server: type) type {
         }
 
         pub fn serve_not_found(self: *Self, route: Route) void {
+            assert(!self.locked);
             self.not_found_route = route;
         }
 
@@ -299,7 +300,7 @@ pub fn Router(comptime Server: type) type {
                 queries.clearRetainingCapacity();
                 if (self.not_found_route) |not_found| {
                     return FoundRoute{ .route = not_found, .captures = captures[0..0], .queries = queries };
-                } else return FoundRoute{ .route = base_404_route, .captures = captures[0..], .queries = queries };
+                } else return FoundRoute{ .route = base_404_route, .captures = captures[0..0], .queries = queries };
             };
         }
     };
