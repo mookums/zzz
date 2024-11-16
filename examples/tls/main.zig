@@ -9,8 +9,8 @@ const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
 const Server = http.Server(.{ .tls = .{
-    .cert = .{ .file = .{ .path = "./examples/http/tls/certs/cert.pem" } },
-    .key = .{ .file = .{ .path = "./examples/http/tls/certs/key.pem" } },
+    .cert = .{ .file = .{ .path = "./examples/tls/certs/cert.pem" } },
+    .key = .{ .file = .{ .path = "./examples/tls/certs/key.pem" } },
     .cert_name = "CERTIFICATE",
     .key_name = "EC PRIVATE KEY",
 } });

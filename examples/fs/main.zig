@@ -57,7 +57,7 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    try router.serve_fs_dir("/static", "./examples/http/fs/static");
+    try router.serve_fs_dir("/static", "./examples/fs/static");
 
     try t.entry(
         &router,
