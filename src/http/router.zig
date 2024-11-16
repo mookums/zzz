@@ -56,6 +56,7 @@ pub fn Router(comptime Server: type) type {
             fd: std.posix.fd_t,
             file_size: u64,
             rd_offset: usize,
+            current_length: usize,
             buffer: []u8,
         };
 
@@ -79,7 +80,7 @@ pub fn Router(comptime Server: type) type {
             try rt.fs.stat(provision, stat_file_task, fd);
         }
 
-        fn stat_file_task(_: *Runtime, stat: Stat, provision: *FileProvision) !void {
+        fn stat_file_task(rt: *Runtime, stat: Stat, provision: *FileProvision) !void {
             errdefer provision.context.respond(.{
                 .status = .@"Internal Server Error",
                 .mime = Mime.HTML,
@@ -120,35 +121,25 @@ pub fn Router(comptime Server: type) type {
                 }
             }
 
-            try provision.context.respond_headers_only(.{
+            provision.response.set(.{
                 .status = .OK,
                 .mime = provision.mime,
-            }, stat.size, provision, start_stream_file_task);
-        }
+                .body = null,
+            });
 
-        fn start_stream_file_task(rt: *Runtime, success: bool, provision: *FileProvision) !void {
-            errdefer {
-                std.posix.close(provision.fd);
-                provision.context.close() catch unreachable;
-            }
+            const headers = try provision.response.headers_into_buffer(provision.buffer, stat.size);
+            provision.current_length = headers.len;
 
-            if (!success) {
-                log.warn("starting file stream failed!", .{});
-                std.posix.close(provision.fd);
-                return;
-            }
-
-            // start streaming...
             try rt.fs.read(
                 provision,
                 read_file_task,
                 provision.fd,
-                provision.buffer,
+                provision.buffer[provision.current_length..],
                 provision.rd_offset,
             );
         }
 
-        fn read_file_task(_: *Runtime, result: i32, provision: *FileProvision) !void {
+        fn read_file_task(rt: *Runtime, result: i32, provision: *FileProvision) !void {
             errdefer {
                 std.posix.close(provision.fd);
                 provision.context.close() catch unreachable;
@@ -163,9 +154,10 @@ pub fn Router(comptime Server: type) type {
 
             const length: usize = @intCast(result);
             provision.rd_offset += length;
+            provision.current_length += length;
             log.debug("current offset: {d} | fd: {}", .{ provision.rd_offset, provision.fd });
 
-            if (provision.rd_offset >= provision.file_size) {
+            if (provision.rd_offset >= provision.file_size or result == 0) {
                 log.debug("done streaming file | rd off: {d} | f size: {d} | result: {d}", .{
                     provision.rd_offset,
                     provision.file_size,
@@ -173,9 +165,24 @@ pub fn Router(comptime Server: type) type {
                 });
 
                 std.posix.close(provision.fd);
-                try provision.context.send_then_recv(provision.buffer[0..length]);
+                try provision.context.send_then_recv(provision.buffer[0..provision.current_length]);
             } else {
-                try provision.context.send_then(provision.buffer[0..length], provision, send_file_task);
+                assert(provision.current_length <= provision.buffer.len);
+                if (provision.current_length == provision.buffer.len) {
+                    try provision.context.send_then(
+                        provision.buffer[0..provision.current_length],
+                        provision,
+                        send_file_task,
+                    );
+                } else {
+                    try rt.fs.read(
+                        provision,
+                        read_file_task,
+                        provision.fd,
+                        provision.buffer[provision.current_length..],
+                        provision.rd_offset,
+                    );
+                }
             }
         }
 
@@ -190,6 +197,9 @@ pub fn Router(comptime Server: type) type {
                 std.posix.close(provision.fd);
                 return;
             }
+
+            // reset current length
+            provision.current_length = 0;
 
             // continue streaming..
             try rt.fs.read(
@@ -260,6 +270,7 @@ pub fn Router(comptime Server: type) type {
                         .fd = -1,
                         .file_size = 0,
                         .rd_offset = 0,
+                        .current_length = 0,
                         .buffer = ctx.provision.buffer,
                     };
 
