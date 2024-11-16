@@ -50,7 +50,7 @@ pub const Response = struct {
         }
     }
 
-    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?u32) ![]u8 {
+    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?usize) ![]u8 {
         var index: usize = 0;
 
         // Status Line

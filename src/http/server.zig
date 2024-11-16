@@ -486,12 +486,12 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        pub const send_then_sse_task = send_then(struct {
+        pub const send_then_other_task = send_then(struct {
             fn inner(rt: *Runtime, success: bool, provision: *Provision) !void {
                 const send_job = provision.job.send;
-                assert(send_job.after == .sse);
-                const func: TaskFn(bool, *anyopaque) = @ptrCast(@alignCast(send_job.after.sse.func));
-                const ctx: *anyopaque = @ptrCast(@alignCast(send_job.after.sse.ctx));
+                assert(send_job.after == .other);
+                const func: TaskFn(bool, *anyopaque) = @ptrCast(@alignCast(send_job.after.other.func));
+                const ctx: *anyopaque = @ptrCast(@alignCast(send_job.after.other.ctx));
                 try @call(.auto, func, .{ rt, success, ctx });
 
                 if (!success) {
@@ -527,7 +527,7 @@ pub fn Server(comptime security: Security) type {
             }
         }.inner);
 
-        fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
+        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
             return struct {
                 fn send_then_inner(rt: *Runtime, length: i32, provision: *Provision) !void {
                     assert(provision.job == .send);
@@ -586,7 +586,7 @@ pub fn Server(comptime security: Security) type {
 
                                     try rt.net.send(
                                         provision,
-                                        send_then_recv_task,
+                                        send_then_inner,
                                         provision.socket,
                                         job_tls.encrypted,
                                     );
@@ -600,7 +600,7 @@ pub fn Server(comptime security: Security) type {
                                 const remainder = job_tls.encrypted[job_tls.encrypted_count..];
                                 try rt.net.send(
                                     provision,
-                                    send_then_recv_task,
+                                    send_then_inner,
                                     provision.socket,
                                     remainder,
                                 );
@@ -630,9 +630,13 @@ pub fn Server(comptime security: Security) type {
                                     plain_buffer.len + send_job.count,
                                 });
 
+                                // this is the problem.
+                                // we are doing send then recv which is wrong!!
+                                //
+                                // we should be calling ourselves...
                                 try rt.net.send(
                                     provision,
-                                    send_then_recv_task,
+                                    send_then_inner,
                                     provision.socket,
                                     plain_buffer,
                                 );

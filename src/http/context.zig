@@ -38,24 +38,6 @@ pub fn Context(comptime Server: type) type {
         triggered: bool = false,
 
         pub fn to_sse(self: *Self, then: TaskFn(bool, *SSE)) !void {
-            assert(!self.triggered);
-            self.triggered = true;
-
-            self.response.set(.{
-                .status = .OK,
-                .body = "",
-                .mime = Mime{
-                    .extension = ".sse",
-                    .description = "Server-Sent Events",
-                    .content_type = "text/event-stream",
-                },
-            });
-
-            const headers = try self.provision.response.headers_into_buffer(
-                self.provision.buffer,
-                null,
-            );
-
             const sse = try self.allocator.create(SSE);
             sse.* = .{
                 .context = self,
@@ -63,23 +45,19 @@ pub fn Context(comptime Server: type) type {
                 .allocator = self.allocator,
             };
 
-            const pslice = Pseudoslice.init(headers, "", self.provision.buffer);
-
-            const first_chunk = try Server.prepare_send(
-                self.runtime,
-                self.provision,
-                .{ .sse = .{
-                    .func = then,
-                    .ctx = sse,
-                } },
-                pslice,
-            );
-
-            try self.runtime.net.send(
-                self.provision,
-                Server.send_then_sse_task,
-                self.provision.socket,
-                first_chunk,
+            try self.respond_headers_only(
+                .{
+                    .status = .OK,
+                    .body = "",
+                    .mime = Mime{
+                        .extension = ".sse",
+                        .description = "Server-Sent Events",
+                        .content_type = "text/event-stream",
+                    },
+                },
+                null,
+                sse,
+                then,
             );
         }
 
@@ -92,6 +70,77 @@ pub fn Context(comptime Server: type) type {
             );
         }
 
+        pub fn send_then(
+            self: *Self,
+            data: []const u8,
+            ctx: anytype,
+            then: TaskFn(bool, @TypeOf(ctx)),
+        ) !void {
+            const pslice = Pseudoslice.init(data, "", self.provision.buffer);
+
+            const first_chunk = try Server.prepare_send(
+                self.runtime,
+                self.provision,
+                .{
+                    .other = .{
+                        .func = then,
+                        .ctx = ctx,
+                    },
+                },
+                pslice,
+            );
+
+            try self.runtime.net.send(
+                self.provision,
+                Server.send_then_other_task,
+                self.provision.socket,
+                first_chunk,
+            );
+        }
+
+        pub fn send_then_recv(self: *Self, data: []const u8) !void {
+            const pslice = Pseudoslice.init(data, "", self.provision.buffer);
+
+            const first_chunk = try Server.prepare_send(
+                self.runtime,
+                self.provision,
+                .recv,
+                pslice,
+            );
+
+            try self.runtime.net.send(
+                self.provision,
+                Server.send_then_recv_task,
+                self.provision.socket,
+                first_chunk,
+            );
+        }
+
+        // This will respond with the headers only.
+        // You will be in charge of sending the body.
+        pub fn respond_headers_only(
+            self: *Self,
+            options: ResponseSetOptions,
+            content_length: ?usize,
+            ctx: anytype,
+            then: TaskFn(bool, @TypeOf(ctx)),
+        ) !void {
+            assert(!self.triggered);
+            self.triggered = true;
+
+            // the body should not be set.
+            assert(options.body == null);
+            self.response.set(options);
+
+            const headers = try self.provision.response.headers_into_buffer(
+                self.provision.buffer,
+                content_length,
+            );
+
+            try self.send_then(headers, ctx, then);
+        }
+
+        /// This is your standard response.
         pub fn respond(self: *Self, options: ResponseSetOptions) !void {
             assert(!self.triggered);
             self.triggered = true;
