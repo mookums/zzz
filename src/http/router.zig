@@ -88,7 +88,7 @@ pub fn Router(comptime Server: type) type {
 
             // Set file size.
             provision.file_size = stat.size;
-            log.err("file size: {d}", .{provision.file_size});
+            log.debug("file size: {d}", .{provision.file_size});
 
             // generate the etag and attach it to the response.
             var hash = std.hash.Wyhash.init(0);
@@ -134,7 +134,7 @@ pub fn Router(comptime Server: type) type {
 
             if (!success) {
                 log.warn("starting file stream failed!", .{});
-                try provision.context.close();
+                std.posix.close(provision.fd);
                 return;
             }
 
@@ -188,7 +188,6 @@ pub fn Router(comptime Server: type) type {
             if (!success) {
                 log.warn("send file stream failed!", .{});
                 std.posix.close(provision.fd);
-                try provision.context.close();
                 return;
             }
 
