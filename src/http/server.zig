@@ -486,12 +486,12 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        pub const send_then_sse_task = send_then(struct {
+        pub const send_then_other_task = send_then(struct {
             fn inner(rt: *Runtime, success: bool, provision: *Provision) !void {
                 const send_job = provision.job.send;
-                assert(send_job.after == .sse);
-                const func: TaskFn(bool, *anyopaque) = @ptrCast(@alignCast(send_job.after.sse.func));
-                const ctx: *anyopaque = @ptrCast(@alignCast(send_job.after.sse.ctx));
+                assert(send_job.after == .other);
+                const func: TaskFn(bool, *anyopaque) = @ptrCast(@alignCast(send_job.after.other.func));
+                const ctx: *anyopaque = @ptrCast(@alignCast(send_job.after.other.ctx));
                 try @call(.auto, func, .{ rt, success, ctx });
 
                 if (!success) {
@@ -527,7 +527,7 @@ pub fn Server(comptime security: Security) type {
             }
         }.inner);
 
-        fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
+        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
             return struct {
                 fn send_then_inner(rt: *Runtime, length: i32, provision: *Provision) !void {
                     assert(provision.job == .send);
@@ -586,7 +586,7 @@ pub fn Server(comptime security: Security) type {
 
                                     try rt.net.send(
                                         provision,
-                                        send_then_recv_task,
+                                        send_then_inner,
                                         provision.socket,
                                         job_tls.encrypted,
                                     );
@@ -600,7 +600,7 @@ pub fn Server(comptime security: Security) type {
                                 const remainder = job_tls.encrypted[job_tls.encrypted_count..];
                                 try rt.net.send(
                                     provision,
-                                    send_then_recv_task,
+                                    send_then_inner,
                                     provision.socket,
                                     remainder,
                                 );
@@ -630,9 +630,13 @@ pub fn Server(comptime security: Security) type {
                                     plain_buffer.len + send_job.count,
                                 });
 
+                                // this is the problem.
+                                // we are doing send then recv which is wrong!!
+                                //
+                                // we should be calling ourselves...
                                 try rt.net.send(
                                     provision,
-                                    send_then_recv_task,
+                                    send_then_inner,
                                     provision.socket,
                                     plain_buffer,
                                 );
@@ -670,10 +674,8 @@ pub fn Server(comptime security: Security) type {
                     TLSType,
                     self.config.size_connections_max,
                 );
-                if (comptime security == .tls) {
-                    for (tls_slice) |*tls| {
-                        tls.* = null;
-                    }
+                for (tls_slice) |*tls| {
+                    tls.* = null;
                 }
 
                 // since slices are fat pointers...
@@ -745,78 +747,68 @@ pub fn Server(comptime security: Security) type {
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
                 const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
-                if (found) |f| {
-                    const handler = f.route.get_handler(p.request.method);
+                const handler = found.route.get_handler(p.request.method);
 
-                    if (handler) |h_with_data| {
-                        const context: *Context = try p.arena.allocator().create(Context);
-                        context.* = .{
-                            .allocator = p.arena.allocator(),
-                            .runtime = runtime,
-                            .request = &p.request,
-                            .response = &p.response,
-                            .path = p.request.uri,
-                            .captures = f.captures,
-                            .queries = f.queries,
-                            .provision = p,
-                        };
+                if (handler) |h_with_data| {
+                    const context: *Context = try p.arena.allocator().create(Context);
+                    context.* = .{
+                        .allocator = p.arena.allocator(),
+                        .runtime = runtime,
+                        .request = &p.request,
+                        .response = &p.response,
+                        .path = p.request.uri,
+                        .captures = found.captures,
+                        .queries = found.queries,
+                        .provision = p,
+                    };
 
-                        @call(.auto, h_with_data.handler, .{
-                            context,
-                            @as(*anyopaque, @ptrFromInt(h_with_data.data)),
-                        }) catch |e| {
-                            log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            return try raw_respond(p);
-                        };
-
-                        return .spawned;
-                    } else {
-                        // If we match the route but not the method.
+                    @call(.auto, h_with_data.handler, .{
+                        context,
+                        @as(*anyopaque, @ptrFromInt(h_with_data.data)),
+                    }) catch |e| {
+                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
                         p.response.set(.{
-                            .status = .@"Method Not Allowed",
+                            .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
-                            .body = "405 Method Not Allowed",
+                            .body = "",
                         });
 
-                        // We also need to add to Allow header.
-                        // This uses the connection's arena to allocate 64 bytes.
-                        const allowed = f.route.get_allowed(p.arena.allocator()) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
+                        return try raw_respond(p);
+                    };
 
-                            break :route;
-                        };
+                    return .spawned;
+                } else {
+                    // If we match the route but not the method.
+                    p.response.set(.{
+                        .status = .@"Method Not Allowed",
+                        .mime = Mime.HTML,
+                        .body = "405 Method Not Allowed",
+                    });
 
-                        p.response.headers.add("Allow", allowed) catch {
-                            p.response.set(.{
-                                .status = .@"Internal Server Error",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            break :route;
-                        };
+                    // We also need to add to Allow header.
+                    // This uses the connection's arena to allocate 64 bytes.
+                    const allowed = found.route.get_allowed(p.arena.allocator()) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
 
                         break :route;
-                    }
-                }
+                    };
 
-                // Didn't match any route.
-                p.response.set(.{
-                    .status = .@"Not Found",
-                    .mime = Mime.HTML,
-                    .body = "404 Not Found",
-                });
-                break :route;
+                    p.response.headers.add("Allow", allowed) catch {
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+
+                        break :route;
+                    };
+
+                    break :route;
+                }
             }
 
             if (p.response.status == .Kill) {

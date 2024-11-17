@@ -5,7 +5,7 @@ const TaskFn = @import("tardy").TaskFn;
 
 pub const AfterType = union(enum) {
     recv,
-    sse: struct {
+    other: struct {
         func: *const anyopaque,
         ctx: *anyopaque,
     },

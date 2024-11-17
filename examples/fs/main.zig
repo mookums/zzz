@@ -63,7 +63,9 @@ pub fn main() !void {
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = rt.allocator });
+                var server = Server.init(.{
+                    .allocator = rt.allocator,
+                });
                 try server.bind(host, port);
                 try server.serve(r, rt);
             }

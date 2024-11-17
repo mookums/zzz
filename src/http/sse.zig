@@ -55,24 +55,7 @@ pub fn SSE(comptime Server: type) type {
             buffer[index] = '\n';
             index += 1;
 
-            const pslice = Pseudoslice.init(buffer[0..index], "", buffer);
-
-            const first_chunk = Server.prepare_send(
-                self.context.runtime,
-                self.context.provision,
-                .{ .sse = .{
-                    .func = then,
-                    .ctx = then_context,
-                } },
-                pslice,
-            ) catch unreachable;
-
-            self.context.runtime.net.send(
-                self.context.provision,
-                Server.send_then_sse_task,
-                self.context.provision.socket,
-                first_chunk,
-            ) catch unreachable;
+            try self.context.send_then(buffer[0..index], then_context, then);
         }
     };
 }
