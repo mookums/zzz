@@ -12,6 +12,8 @@ const Cross = @import("tardy").Cross;
 const Runtime = @import("tardy").Runtime;
 const TaskFn = @import("tardy").TaskFn;
 
+const wrap = @import("tardy").wrap;
+
 const URLInfo = struct {
     url: []const u8,
     host: []const u8,
@@ -109,7 +111,10 @@ const Stage = union(enum) {
     send: usize,
     recv: union(enum) {
         header,
-        body,
+        body: struct {
+            content_length: usize,
+            header_end: usize,
+        },
     },
 };
 
@@ -117,14 +122,22 @@ const RequestContext = struct {
     allocator: std.mem.Allocator,
     info: URLInfo,
     request: *Request,
+    response: *Response,
     socket: std.posix.socket_t,
     buffer: []u8,
     recv_buffer: std.ArrayListUnmanaged(u8),
     pseudo: Pseudoslice,
     stage: Stage,
+    then: TaskFn(?*const Response, usize),
+    then_ctx: usize,
 };
 
 fn connect_task(rt: *Runtime, socket: std.posix.socket_t, ctx: *RequestContext) !void {
+    errdefer {
+        log.warn("fetch failed at connect", .{});
+        @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+    }
+
     assert(ctx.stage == .connect);
     const stage = &ctx.stage.connect;
 
@@ -168,11 +181,18 @@ fn connect_task(rt: *Runtime, socket: std.posix.socket_t, ctx: *RequestContext) 
 }
 
 fn send_task(rt: *Runtime, result: i32, ctx: *RequestContext) !void {
+    errdefer {
+        log.warn("fetch failed at send", .{});
+        @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+    }
+
     assert(ctx.stage == .send);
     const sent_length = &ctx.stage.send;
 
     if (result <= 0) {
         log.err("send failed!", .{});
+        @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+        try rt.net.close(ctx, close_task, ctx.socket);
         return;
     }
 
@@ -184,51 +204,53 @@ fn send_task(rt: *Runtime, result: i32, ctx: *RequestContext) !void {
         const buffer = ctx.pseudo.get(sent_length.*, sent_length.* + ctx.buffer.len);
         try rt.net.send(ctx, send_task, ctx.socket, buffer);
     } else {
+        ctx.stage = .{ .recv = .header };
         try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
     }
 }
 
 fn recv_task(rt: *Runtime, result: i32, ctx: *RequestContext) !void {
+    errdefer {
+        log.warn("fetch failed at recv", .{});
+        @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+    }
+
     assert(ctx.stage == .recv);
-    const stage = ctx.stage.recv;
+    const stage = &ctx.stage.recv;
+
     if (result <= 0) {
         log.err("recv failed!", .{});
+        @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+        try rt.net.close(ctx, close_task, ctx.socket);
         return;
     }
-    const length: usize = @intCast(result);
 
-    switch (stage) {
+    const length: usize = @intCast(result);
+    try ctx.recv_buffer.appendSlice(ctx.allocator, ctx.buffer[0..length]);
+
+    switch (stage.*) {
         .header => {
-            const start = ctx.recv_buffer.items.len -| 4;
-            try ctx.recv_buffer.appendSlice(ctx.buffer[0..result]);
-            const header_ends = std.mem.lastIndexOf(u8, ctx.recv_buffer.items[start..], "\r\n\r\n");
+            const start = ctx.recv_buffer.items.len -| (length + 4);
+            const header_ends = std.mem.indexOf(u8, ctx.recv_buffer.items[start..], "\r\n\r\n");
 
             // Basically, this means we haven't finished processing the header.
             if (header_ends == null) {
-                log.debug("{d} - header doesn't end in this chunk, continue", .{ctx.index});
-                return .recv;
+                log.debug("{d} - header doesn't end in this chunk, continue", .{99});
+                try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
+                return;
             }
 
-            log.debug("{d} - parsing header", .{ctx.index});
-            // The +4 is to account for the slice we match.
-            const header_end: u32 = @intCast(header_ends.? + 4);
+            log.debug("{d} - parsing header", .{99});
+            const header_end: usize = header_ends.? + start + 4;
 
-            try ctx.response.parse_headers(ctx.recv_buffer.items[0..header_end], .{});
+            try ctx.response.parse_headers(
+                ctx.recv_buffer.items[0 .. header_end - 4],
+                .{ .size_response_max = 1024 * 1024 },
+            );
+            log.debug("status: {s}", .{@tagName(ctx.response.status.?)});
 
-
-            // HTTP/1.1 REQUIRES a Host header to be present.
-            const is_http_1_1 = ctx.request.version == .@"HTTP/1.1";
-            const is_host_present = ctx.request.headers.get("Host") != null;
-
-            if (!ctx.response.expect_body()) {
-            }
-
-            // Everything after here is a Request that is expecting a body.
             const content_length = blk: {
-                const length_string = ctx.request.headers.get("Content-Length") orelse {
-                    break :blk 0;
-                };
-
+                const length_string = ctx.response.headers.get("Content-Length") orelse break :blk 0;
                 break :blk try std.fmt.parseInt(u32, length_string, 10);
             };
 
@@ -236,89 +258,88 @@ fn recv_task(rt: *Runtime, result: i32, ctx: *RequestContext) !void {
                 const difference = ctx.recv_buffer.items.len - header_end;
                 if (difference == content_length) {
                     // Whole Body
-                    log.debug("{d} - got whole body with header", .{ctx.index});
+                    log.debug("{d} - got whole body with header", .{99});
                     const body_end = header_end + difference;
-                    ctx.request.set(.{
+                    ctx.response.set(.{
                         .body = ctx.recv_buffer.items[header_end..body_end],
                     });
-                    return try route_and_respond(rt, ctx, router);
+
+                    try @call(.auto, ctx.then, .{ rt, ctx.response, ctx.then_ctx });
+                    try rt.net.close(ctx, close_task, ctx.socket);
+                    return;
                 } else {
                     // Partial Body
-                    log.debug("{d} - got partial body with header", .{ctx.index});
-                    stage = .{ .body = header_end };
-                    return .recv;
+                    log.debug("{d} - got partial body with header", .{99});
+                    stage.* = .{ .body = .{
+                        .content_length = content_length,
+                        .header_end = header_end,
+                    } };
+
+                    // basically try to recv more?
+                    try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
+                    return;
                 }
             } else if (header_end == ctx.recv_buffer.items.len) {
                 // Body of length 0 probably or only got header.
                 if (content_length == 0) {
-                    log.debug("{d} - got body of length 0", .{ctx.index});
+                    log.debug("{d} - got body of length 0", .{99});
                     // Body of Length 0.
-                    ctx.request.set(.{ .body = "" });
-                    return try route_and_respond(rt, ctx, router);
+                    ctx.response.set(.{ .body = "" });
+
+                    try @call(.auto, ctx.then, .{ rt, ctx.response, ctx.then_ctx });
+                    try rt.net.close(ctx, close_task, ctx.socket);
+                    return;
                 } else {
                     // Got only header.
-                    log.debug("{d} - got all header aka no body", .{ctx.index});
-                    stage = .{ .body = header_end };
-                    return .recv;
+                    log.debug("{d} - got all header aka no body", .{99});
+                    stage.* = .{ .body = .{
+                        .content_length = content_length,
+                        .header_end = header_end,
+                    } };
+
+                    try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
+                    return;
                 }
             } else unreachable;
         },
 
-        .body => |header_end| {
+        .body => |*inner| {
             // We should ONLY be here if we expect there to be a body.
-            assert(ctx.request.expect_body());
-            log.debug("{d} - body matching", .{ctx.index});
+            log.debug("{d} - body matching", .{99});
 
-            const content_length = blk: {
-                const length_string = ctx.request.headers.get("Content-Length") orelse {
-                    ctx.response.set(.{
-                        .status = .@"Length Required",
-                        .mime = Mime.HTML,
-                        .body = "",
-                    });
-
-                    return try raw_respond(ctx);
-                };
-
-                break :blk try std.fmt.parseInt(u32, length_string, 10);
-            };
-
-            const request_length = header_end + content_length;
+            const request_length = inner.header_end + inner.content_length;
 
             // If this body will be too long, abort early.
-            if (request_length > config.size_request_max) {
-                ctx.response.set(.{
-                    .status = .@"Content Too Large",
-                    .mime = Mime.HTML,
-                    .body = "",
-                });
-                return try raw_respond(ctx);
+            if (request_length > 1024 * 1024) {
+                @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+                return;
             }
 
-            if (job.count >= request_length) {
-                ctx.request.set(.{
-                    .body = ctx.recv_buffer.items[header_end..request_length],
+            if (ctx.recv_buffer.items.len >= request_length) {
+                ctx.response.set(.{
+                    .body = ctx.recv_buffer.items[inner.header_end..request_length],
                 });
-                return try route_and_respond(rt, ctx, router);
+
+                try @call(.auto, ctx.then, .{ rt, ctx.response, ctx.then_ctx });
+                try rt.net.close(ctx, close_task, ctx.socket);
+                return;
             } else {
-                return .recv;
+                try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
+                return;
             }
         },
     }
-
-    // read until we find the \r\n\r\n then use the Content-Length field.
-    const header_ends = std.mem.lastIndexOf(u8, ctx.recv_buffer.items[start..], "\r\n\r\n");
-    if (header_ends == null) {
-        log.debug("{s} - header doesn't end in this chunk, continue", .{ctx.info.host});
-        try rt.net.recv(ctx, recv_task, ctx.socket, ctx.buffer);
-    }
-
-    return;
 }
 
-fn close_task(rt: *Runtime, _: void, ctx: *RequestContext) !void {
-    _ = rt;
-    _ = ctx;
+fn close_task(_: *Runtime, _: void, ctx: *RequestContext) !void {
+    ctx.request.deinit();
+    ctx.allocator.destroy(ctx.request);
+    ctx.response.deinit();
+    ctx.allocator.destroy(ctx.response);
+    ctx.allocator.free(ctx.buffer);
+    ctx.recv_buffer.deinit(ctx.allocator);
+
+    ctx.allocator.destroy(ctx);
 }
 
 fn get_ip_from_address(allocator: std.mem.Allocator, address: std.net.Address) ![]u8 {
@@ -353,36 +374,38 @@ fn get_ip_from_address(allocator: std.mem.Allocator, address: std.net.Address) !
     }
 }
 
-const RequestBuilder = struct {
+const ClientRequest = struct {
     allocator: std.mem.Allocator,
     url: []const u8,
     runtime: *Runtime,
     request: *Request,
+    response: *Response,
 
-    pub fn init(allocator: std.mem.Allocator, runtime: *Runtime, url: []const u8) !RequestBuilder {
+    pub fn init(allocator: std.mem.Allocator, runtime: *Runtime, url: []const u8) !ClientRequest {
         const request = try allocator.create(Request);
         request.* = try Request.init(allocator, 32);
-        request.body = "";
+
+        const response = try allocator.create(Response);
+        response.* = try Response.init(allocator, 32);
 
         return .{
             .allocator = allocator,
             .runtime = runtime,
             .request = request,
+            .response = response,
             .url = url,
         };
     }
 
-    pub inline fn header(self: *RequestBuilder, key: []const u8, value: []const u8) *RequestBuilder {
-        self.request.headers.add(key, value) catch unreachable;
-        return self;
+    pub fn add_header(self: *ClientRequest, key: []const u8, value: []const u8) !void {
+        try self.request.headers.add(key, value);
     }
 
-    pub inline fn body(self: *RequestBuilder, value: []const u8) *RequestBuilder {
+    pub fn add_body(self: *ClientRequest, value: []const u8) void {
         self.request.body = value;
-        return self;
     }
 
-    pub fn fetch(self: *RequestBuilder) !void {
+    pub fn fetch(self: *ClientRequest, then_ctx: anytype, then: TaskFn(*const Response, @TypeOf(then_ctx))) !void {
         // create an arena here that will manage this connections allocations
         // when it closes, it will free everything.
         //
@@ -404,7 +427,7 @@ const RequestBuilder = struct {
         const socket = try create_socket(first);
         const ip = try get_ip_from_address(self.allocator, first);
 
-        const buffer = try self.allocator.alloc(u8, 512);
+        const buffer = try self.allocator.alloc(u8, 2048);
         const headers = try self.request.headers_into_buffer(buffer, self.request.body.len);
 
         // create a request context to store all data that MUST persist.
@@ -413,6 +436,7 @@ const RequestBuilder = struct {
             .allocator = self.allocator,
             .info = info,
             .request = self.request,
+            .response = self.response,
             .pseudo = Pseudoslice.init(headers, self.request.body, buffer),
             .stage = .{ .connect = .{
                 .ip = ip,
@@ -423,6 +447,8 @@ const RequestBuilder = struct {
             .socket = socket,
             .buffer = buffer,
             .recv_buffer = try std.ArrayListUnmanaged(u8).initCapacity(self.allocator, 0),
+            .then = @ptrCast(then),
+            .then_ctx = wrap(usize, then_ctx),
         };
 
         log.debug("ip: {s}", .{ip});
@@ -454,8 +480,8 @@ pub const Client = struct {
         _ = self;
     }
 
-    pub fn get(self: *Client, runtime: *Runtime, url: []const u8) !RequestBuilder {
-        var builder = try RequestBuilder.init(self.allocator, runtime, url);
+    pub fn get(self: *Client, runtime: *Runtime, url: []const u8) !ClientRequest {
+        var builder = try ClientRequest.init(self.allocator, runtime, url);
         builder.request.method = .GET;
         return builder;
     }

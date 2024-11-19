@@ -34,8 +34,8 @@ pub fn main() !void {
 
     const num: i8 = 12;
 
-    try router.serve_route("/", Route.init().get(&num, struct {
-        fn handler_fn(ctx: *Context, id: *const i8) !void {
+    try router.serve_route("/", Route.init().get(num, struct {
+        fn handler_fn(ctx: *Context, id: i8) !void {
             const body_fmt =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -46,7 +46,7 @@ pub fn main() !void {
                 \\ </html>
             ;
 
-            const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id.*});
+            const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id});
 
             // This is the standard response and what you
             // will usually be using. This will send to the

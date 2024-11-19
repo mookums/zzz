@@ -755,7 +755,7 @@ pub fn Server(comptime security: Security) type {
 
                     @call(.auto, h_with_data.handler, .{
                         context,
-                        @as(*anyopaque, @ptrFromInt(h_with_data.data)),
+                        h_with_data.data,
                     }) catch |e| {
                         log.err("\"{s}\" handler failed with error: {}", .{ p.request.path, e });
                         p.response.set(.{

@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
     add_example(b, "benchmark", false, target, optimize, zzz, tardy);
     add_example(b, "valgrind", true, target, optimize, zzz, tardy);
 
-    add_example(b, "client", false, target, optimize, zzz, tardy);
+    add_example(b, "proxy", false, target, optimize, zzz, tardy);
 
     const tests = b.addTest(.{
         .name = "unit-test",
