@@ -105,8 +105,15 @@ const Stage = union(enum) {
     connect: struct {
         ip: []const u8,
         port: u16,
-        address_list: *std.net.AddressList,
-        address_index: usize,
+        status: union(enum) {
+            // If uncached, we must find it.
+            uncached: struct {
+                address_list: *std.net.AddressList,
+                address_index: usize,
+            },
+            // If cached, assume the ip/port is correct.
+            cached,
+        },
     },
     send: usize,
     recv: union(enum) {
@@ -121,6 +128,7 @@ const Stage = union(enum) {
 const RequestContext = struct {
     allocator: std.mem.Allocator,
     info: URLInfo,
+    client: *Client,
     request: *Request,
     response: *Response,
     socket: std.posix.socket_t,
@@ -144,35 +152,52 @@ fn connect_task(rt: *Runtime, socket: std.posix.socket_t, ctx: *RequestContext) 
     // Attempts to connect to all of the returned addresses.
     if (!Cross.socket.is_valid(socket)) {
         std.posix.close(ctx.socket);
-        stage.address_index += 1;
 
-        log.debug(
-            "address idx: {d} | address list len: {d}",
-            .{ stage.address_index, stage.address_list.addrs.len },
-        );
-        if (stage.address_index >= stage.address_list.addrs.len) {
-            return;
+        switch (stage.status) {
+            .cached => {
+                // should remove from the cache on failure...
+                // should we fall back to uncached if we have bad data in the cache?
+                _ = ctx.client.cache.remove(ctx.info.host);
+                @call(.auto, ctx.then, .{ rt, null, ctx.then_ctx }) catch unreachable;
+                return;
+            },
+            .uncached => |*inner| {
+                inner.address_index += 1;
+
+                log.debug(
+                    "address idx: {d} | address list len: {d}",
+                    .{ inner.address_index, inner.address_list.addrs.len },
+                );
+                if (inner.address_index >= inner.address_list.addrs.len) {
+                    return;
+                }
+
+                const next = inner.address_list.addrs[inner.address_index];
+                ctx.socket = try create_socket(next);
+                ctx.allocator.free(stage.ip);
+                stage.ip = try get_ip_from_address(ctx.allocator, next);
+                log.debug("next ip: {s}", .{stage.ip});
+
+                try rt.net.connect(
+                    ctx,
+                    connect_task,
+                    ctx.socket,
+                    stage.ip,
+                    stage.port,
+                );
+                return;
+            },
         }
-
-        const next = stage.address_list.addrs[stage.address_index];
-        ctx.socket = try create_socket(next);
-        ctx.allocator.free(stage.ip);
-        stage.ip = try get_ip_from_address(ctx.allocator, next);
-        log.debug("next ip: {s}", .{stage.ip});
-
-        try rt.net.connect(
-            ctx,
-            connect_task,
-            ctx.socket,
-            stage.ip,
-            stage.port,
-        );
-
-        return;
     }
 
-    stage.address_list.deinit();
-    ctx.allocator.free(stage.ip);
+    switch (stage.status) {
+        .cached => {},
+        .uncached => |inner| {
+            inner.address_list.deinit();
+            try ctx.client.cache.put(ctx.info.host, try std.net.Address.parseIp(stage.ip, stage.port));
+            ctx.allocator.free(stage.ip);
+        },
+    }
 
     ctx.stage = .{ .send = 0 };
     log.debug("sending from {d} to {d}", .{ 0, ctx.buffer.len });
@@ -377,11 +402,12 @@ fn get_ip_from_address(allocator: std.mem.Allocator, address: std.net.Address) !
 const ClientRequest = struct {
     allocator: std.mem.Allocator,
     url: []const u8,
+    client: *Client,
     runtime: *Runtime,
     request: *Request,
     response: *Response,
 
-    pub fn init(allocator: std.mem.Allocator, runtime: *Runtime, url: []const u8) !ClientRequest {
+    pub fn init(allocator: std.mem.Allocator, client: *Client, runtime: *Runtime, url: []const u8) !ClientRequest {
         const request = try allocator.create(Request);
         request.* = try Request.init(allocator, 32);
 
@@ -390,6 +416,7 @@ const ClientRequest = struct {
 
         return .{
             .allocator = allocator,
+            .client = client,
             .runtime = runtime,
             .request = request,
             .response = response,
@@ -413,19 +440,50 @@ const ClientRequest = struct {
 
         const info = try parse_url(self.url);
         self.request.path = info.path;
-        try self.request.headers.add("Host", info.host_with_port);
+        self.request.headers.putAssumeCapacity("Host", info.host_with_port);
 
-        const list = if (info.host[0] == '[')
-            // If ipv6, strip the brackets.
-            try std.net.getAddressList(self.allocator, info.host[1 .. info.host.len - 1], info.port)
-        else
-            try std.net.getAddressList(self.allocator, info.host, info.port);
+        var socket: std.posix.fd_t = undefined;
 
-        const first: std.net.Address = list.addrs[0];
-        log.debug("First IP: {}", .{first});
+        const stage: Stage = blk: {
+            const cached = self.client.cache.get(info.host);
+            if (cached) |address| {
+                log.debug("cache hit on {s}", .{info.host});
+                const ip = try get_ip_from_address(self.allocator, address);
+                socket = try create_socket(address);
+                break :blk Stage{
+                    .connect = .{
+                        .ip = ip,
+                        .port = info.port,
+                        .status = .cached,
+                    },
+                };
+            } else {
+                const list = if (info.host[0] == '[')
+                    // If ipv6, strip the brackets.
+                    try std.net.getAddressList(self.allocator, info.host[1 .. info.host.len - 1], info.port)
+                else
+                    try std.net.getAddressList(self.allocator, info.host, info.port);
 
-        const socket = try create_socket(first);
-        const ip = try get_ip_from_address(self.allocator, first);
+                const first: std.net.Address = list.addrs[0];
+                log.debug("First IP: {}", .{first});
+
+                const ip = try get_ip_from_address(self.allocator, first);
+                socket = try create_socket(first);
+
+                break :blk Stage{
+                    .connect = .{
+                        .ip = ip,
+                        .port = info.port,
+                        .status = .{
+                            .uncached = .{
+                                .address_list = list,
+                                .address_index = 0,
+                            },
+                        },
+                    },
+                };
+            }
+        };
 
         const buffer = try self.allocator.alloc(u8, 2048);
         const headers = try self.request.headers_into_buffer(buffer, self.request.body.len);
@@ -435,15 +493,11 @@ const ClientRequest = struct {
         context.* = RequestContext{
             .allocator = self.allocator,
             .info = info,
+            .client = self.client,
             .request = self.request,
             .response = self.response,
             .pseudo = Pseudoslice.init(headers, self.request.body, buffer),
-            .stage = .{ .connect = .{
-                .ip = ip,
-                .port = info.port,
-                .address_list = list,
-                .address_index = 0,
-            } },
+            .stage = stage,
             .socket = socket,
             .buffer = buffer,
             .recv_buffer = try std.ArrayListUnmanaged(u8).initCapacity(self.allocator, 0),
@@ -451,14 +505,14 @@ const ClientRequest = struct {
             .then_ctx = wrap(usize, then_ctx),
         };
 
-        log.debug("ip: {s}", .{ip});
+        log.debug("ip: {s}", .{stage.connect.ip});
 
         // queue connect.
         try self.runtime.net.connect(
             context,
             connect_task,
             socket,
-            ip,
+            stage.connect.ip,
             info.port,
         );
     }
@@ -472,8 +526,21 @@ pub const Client = struct {
     allocator: std.mem.Allocator,
     options: ClientOptions,
 
+    // Client needs to have an internal pool of ClientRequests to pass around.
+
+    // We should also have a cache of connections, meaning that multiple connections
+    // to the same host should use the same connection, instead of creating a ton?
+
+    // This should match the host of the URL to the resolved IP.
+    // Client also needs to have a cache of DNS resolved hostnames...
+    cache: std.StringHashMap(std.net.Address),
+
     pub fn init(allocator: std.mem.Allocator, options: ClientOptions) Client {
-        return .{ .allocator = allocator, .options = options };
+        return .{
+            .allocator = allocator,
+            .options = options,
+            .cache = std.StringHashMap(std.net.Address).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Client) void {
@@ -481,7 +548,7 @@ pub const Client = struct {
     }
 
     pub fn get(self: *Client, runtime: *Runtime, url: []const u8) !ClientRequest {
-        var builder = try ClientRequest.init(self.allocator, runtime, url);
+        var builder = try ClientRequest.init(self.allocator, self, runtime, url);
         builder.request.method = .GET;
         return builder;
     }

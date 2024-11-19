@@ -138,7 +138,7 @@ pub const Request = struct {
         index += 24;
 
         // Headers
-        var iter = self.headers.map.iterator();
+        var iter = self.headers.iterator();
         while (iter.next()) |entry| {
             std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
             index += entry.key_ptr.len;

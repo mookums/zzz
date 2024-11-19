@@ -37,7 +37,7 @@ pub const Response = struct {
     const ResponseParseOptions = struct { size_response_max: u32 };
 
     pub fn parse_headers(self: *Response, bytes: []const u8, options: ResponseParseOptions) !void {
-        self.headers.clear();
+        self.headers.clearRetainingCapacity();
         var total_size: u32 = 0;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
 
@@ -69,7 +69,7 @@ pub const Response = struct {
                 const key = header_iter.next() orelse return error.MalformedResponse;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
                 if (value.len == 0) return error.MalformedResponse;
-                try self.headers.add(key, value);
+                self.headers.putAssumeCapacity(key, value);
             }
         }
 

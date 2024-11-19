@@ -907,6 +907,7 @@ pub fn Server(comptime security: Security) type {
                     // HTTP/1.1 REQUIRES a Host header to be present.
                     const is_http_1_1 = provision.request.version == .@"HTTP/1.1";
                     const is_host_present = provision.request.headers.get("Host") != null;
+
                     if (is_http_1_1 and !is_host_present) {
                         provision.response.set(.{
                             .status = .@"Bad Request",

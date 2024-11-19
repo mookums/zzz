@@ -38,9 +38,10 @@ fn fetch_task(_: *Runtime, response: ?*const http.Response, ctx: *Context) !void
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
-    const port: u16 = 9862;
+    const port: u16 = 9863;
     //const proxy_path = "http://httpforever.com";
-    const proxy_path = "http://http.badssl.com";
+    //const proxy_path = "http://http.badssl.com";
+    const proxy_path = "http://localhost:9862";
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -50,7 +51,7 @@ pub fn main() !void {
     // will spawn our runtimes.
     var t = try Tardy.init(.{
         .allocator = allocator,
-        .threading = .single,
+        .threading = .auto,
     });
     defer t.deinit();
 
@@ -82,8 +83,8 @@ pub fn main() !void {
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = rt.allocator });
-                try server.bind(host, port);
+                var server = Server.init(rt.allocator, .{});
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);
 
                 // this kills it after a set delay, allowing the GPA to report any leaks.
