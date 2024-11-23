@@ -17,39 +17,15 @@ pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(ctx: *Context, _: void) !void {
-    const name = ctx.captures[0].string;
-
-    const body = try std.fmt.allocPrint(ctx.allocator,
-        \\ <!DOCTYPE html>
-        \\ <html>
-        \\ <body>
-        \\ <script>
-        \\ function redirectToHi() {{
-        \\      var textboxValue = document.getElementById('textbox').value;
-        \\      window.location.href = '/hi/' + encodeURIComponent(textboxValue);
-        \\ }}
-        \\ </script>
-        \\ <h1>Hi, {s}!</h1>
-        \\ <a href="/">click to go home!</a>
-        \\ <p>Enter a name to say hi!</p>
-        \\ <input type="text" id="textbox"/>
-        \\ <input type="button" id="btn" value="Submit" onClick="redirectToHi()"/>
-        \\ </body>
-        \\ </html>
-    , .{name});
-
+pub fn root_handler(ctx: *Context, _: void) !void {
     try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
-        .body = body,
+        .body = "This is an HTTP benchmark",
     });
 }
 
 pub fn main() !void {
-    const host: []const u8 = "0.0.0.0";
-    const port: u16 = 9862;
-
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
@@ -62,15 +38,15 @@ pub fn main() !void {
 
     var router = Router.init(allocator);
     defer router.deinit();
-    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", Route.init().get({}, hi_handler));
+
+    try router.serve_route("/", Route.init().get({}, root_handler));
 
     try t.entry(
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
                 var server = Server.init(.{ .allocator = rt.allocator });
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
+                try server.bind(.{ .unix = "/tmp/zzz.sock" });
                 try server.serve(r, rt);
             }
         }.entry,

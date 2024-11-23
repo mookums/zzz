@@ -129,7 +129,7 @@ pub fn main() !void {
                     .size_connections_max = max_conn,
                 });
 
-                try server.bind(host, port);
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(params.router, rt);
             }
         }.entry,

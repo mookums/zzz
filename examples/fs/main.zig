@@ -66,7 +66,7 @@ pub fn main() !void {
                 var server = Server.init(.{
                     .allocator = rt.allocator,
                 });
-                try server.bind(host, port);
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);
             }
         }.entry,

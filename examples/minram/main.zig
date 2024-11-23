@@ -72,7 +72,7 @@ pub fn main() !void {
                     .size_request_max = 2048,
                     .size_request_uri_max = 256,
                 });
-                try server.bind(host, port);
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);
             }
         }.entry,

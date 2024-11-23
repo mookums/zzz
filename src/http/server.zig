@@ -41,7 +41,7 @@ pub const RecvStatus = union(enum) {
     spawned,
 };
 
-/// Security Model to use.chinp acas
+/// Security Model to use.
 ///
 /// Default: .plain (plaintext)
 pub const Security = union(enum) {
@@ -191,15 +191,35 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        pub fn bind(self: *Self, host: []const u8, port: u16) !void {
-            assert(host.len > 0);
-            assert(port > 0);
+        const BindOptions = union(enum) {
+            ip: struct { host: []const u8, port: u16 },
+            unix: []const u8,
+        };
 
+        pub fn bind(self: *Self, options: BindOptions) !void {
             self.addr = blk: {
-                if (comptime tag.isDarwin() or tag.isBSD() or tag == .windows) {
-                    break :blk try std.net.Address.parseIp(host, port);
-                } else {
-                    break :blk try std.net.Address.resolveIp(host, port);
+                switch (options) {
+                    .ip => |inner| {
+                        assert(inner.host.len > 0);
+                        assert(inner.port > 0);
+
+                        if (comptime tag.isDarwin() or tag.isBSD() or tag == .windows) {
+                            break :blk try std.net.Address.parseIp(inner.host, inner.port);
+                        } else {
+                            break :blk try std.net.Address.resolveIp(inner.host, inner.port);
+                        }
+                    },
+                    .unix => |path| {
+                        assert(path.len > 0);
+
+                        // Unlink the existing file if it exists.
+                        _ = std.posix.unlink(path) catch |e| switch (e) {
+                            error.FileNotFound => {},
+                            else => return e,
+                        };
+
+                        break :blk try std.net.Address.initUnix(path);
+                    },
                 }
             };
         }
@@ -270,7 +290,9 @@ pub fn Server(comptime security: Security) type {
             );
             assert(borrowed.item.job == .empty);
 
-            try Cross.socket.disable_nagle(child_socket);
+            if (!rt.storage.get("__zzz_is_unix", bool))
+                try Cross.socket.disable_nagle(child_socket);
+
             try Cross.socket.to_nonblock(child_socket);
 
             const provision = borrowed.item;
@@ -657,6 +679,8 @@ pub fn Server(comptime security: Security) type {
             try std.posix.bind(socket, &self.addr.any, self.addr.getOsSockLen());
             try std.posix.listen(socket, self.config.size_backlog);
 
+            try rt.storage.store_alloc("__zzz_is_unix", self.addr.any.family == std.posix.AF.UNIX);
+
             const provision_pool = try rt.allocator.create(Pool(Provision));
             provision_pool.* = try Pool(Provision).init(
                 rt.allocator,
@@ -707,14 +731,16 @@ pub fn Server(comptime security: Security) type {
         }
 
         fn create_socket(self: *const Self) !std.posix.socket_t {
-            const socket: std.posix.socket_t = blk: {
-                const socket_flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-                break :blk try std.posix.socket(
-                    self.addr.any.family,
-                    socket_flags,
-                    std.posix.IPPROTO.TCP,
-                );
-            };
+            const protocol: u32 = if (self.addr.any.family == std.posix.AF.UNIX)
+                0
+            else
+                std.posix.IPPROTO.TCP;
+
+            const socket = try std.posix.socket(
+                self.addr.any.family,
+                std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
+                protocol,
+            );
 
             log.debug("socket | t: {s} v: {any}", .{ @typeName(std.posix.socket_t), socket });
 
