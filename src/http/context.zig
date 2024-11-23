@@ -48,12 +48,11 @@ pub fn Context(comptime Server: type) type {
             try self.respond_headers_only(
                 .{
                     .status = .OK,
-                    .body = "",
-                    .mime = Mime{
-                        .extension = ".sse",
-                        .description = "Server-Sent Events",
-                        .content_type = "text/event-stream",
-                    },
+                    .mime = Mime.generate(
+                        "text/event-stream",
+                        "sse",
+                        "Server-Sent Events",
+                    ),
                 },
                 null,
                 sse,
