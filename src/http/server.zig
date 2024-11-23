@@ -243,11 +243,10 @@ pub fn Server(comptime security: Security) type {
             _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
             provision.response.clear();
 
-            if (provision.recv_buffer.items.len > config.list_recv_bytes_retain) {
-                provision.recv_buffer.shrinkRetainingCapacity(config.list_recv_bytes_retain);
-            } else {
-                provision.recv_buffer.clearRetainingCapacity();
+            if (provision.recv_buffer.len > config.list_recv_bytes_retain) {
+                provision.recv_buffer.shrink_retaining_capacity(config.list_recv_bytes_retain);
             }
+            provision.recv_buffer.clear_retaining_capacity();
 
             pool.release(provision.index);
 
@@ -352,25 +351,26 @@ pub fn Server(comptime security: Security) type {
             recv_job.count += recv_count;
             const pre_recv_buffer = provision.buffer[0..recv_count];
 
-            const recv_buffer = blk: {
-                switch (comptime security) {
-                    .tls => |_| {
-                        const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
-                        const tls_ptr: *TLSType = &tls_slice[provision.index];
-                        assert(tls_ptr.* != null);
+            if (comptime security == .tls) {
+                const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
+                const tls_ptr: *TLSType = &tls_slice[provision.index];
+                assert(tls_ptr.* != null);
 
-                        break :blk tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
-                            log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
-                            provision.job = .close;
-                            try rt.net.close(provision, close_task, provision.socket);
-                            return error.TLSDecryptFailed;
-                        };
-                    },
-                    .plain => break :blk pre_recv_buffer,
-                }
-            };
+                const decrypted = tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
+                    log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
+                    provision.job = .close;
+                    try rt.net.close(provision, close_task, provision.socket);
+                    return error.TLSDecryptFailed;
+                };
 
-            const status = try on_recv(recv_buffer, rt, provision, router, config);
+                const area = try provision.recv_buffer.get_write_area(decrypted.len);
+                std.mem.copyForwards(u8, area, decrypted);
+                provision.recv_buffer.mark_written(decrypted.len);
+            } else {
+                provision.recv_buffer.mark_written(recv_count);
+            }
+
+            const status = try on_recv(recv_count, rt, provision, router, config);
 
             switch (status) {
                 .spawned => return,
@@ -535,7 +535,8 @@ pub fn Server(comptime security: Security) type {
                 _ = provision.arena.reset(.{
                     .retain_with_limit = config.connection_arena_bytes_retain,
                 });
-                provision.recv_buffer.clearRetainingCapacity();
+
+                provision.recv_buffer.clear_retaining_capacity();
                 provision.job = .{ .recv = .{ .count = 0 } };
 
                 try rt.net.recv(
@@ -845,7 +846,8 @@ pub fn Server(comptime security: Security) type {
         }
 
         inline fn on_recv(
-            buffer: []const u8,
+            // How much we just received
+            recv_count: usize,
             rt: *Runtime,
             provision: *Provision,
             router: *const Router,
@@ -866,9 +868,15 @@ pub fn Server(comptime security: Security) type {
 
             switch (stage) {
                 .header => {
-                    const start = provision.recv_buffer.items.len -| 4;
-                    try provision.recv_buffer.appendSlice(buffer);
-                    const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.items[start..], "\r\n\r\n");
+                    const starting_length = job.count - recv_count;
+                    const start = starting_length -| 4;
+
+                    // Technically, we no longer need to append.
+                    // try provision.recv_buffer.appendSlice(buffer);
+                    provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+
+                    // need to specify end
+                    const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.as_slice()[start..], "\r\n\r\n");
 
                     // Basically, this means we haven't finished processing the header.
                     if (header_ends == null) {
@@ -879,7 +887,7 @@ pub fn Server(comptime security: Security) type {
                     log.debug("{d} - parsing header", .{provision.index});
                     // The +4 is to account for the slice we match.
                     const header_end: u32 = @intCast(header_ends.? + 4);
-                    provision.request.parse_headers(provision.recv_buffer.items[0..header_end], .{
+                    provision.request.parse_headers(provision.recv_buffer.as_slice()[0..header_end], .{
                         .size_request_max = config.request_bytes_max,
                         .size_request_uri_max = config.request_uri_bytes_max,
                     }) catch |e| {
@@ -965,14 +973,14 @@ pub fn Server(comptime security: Security) type {
                         break :blk try std.fmt.parseInt(u32, length_string, 10);
                     };
 
-                    if (header_end < provision.recv_buffer.items.len) {
-                        const difference = provision.recv_buffer.items.len - header_end;
+                    if (header_end < provision.recv_buffer.len) {
+                        const difference = provision.recv_buffer.len - header_end;
                         if (difference == content_length) {
                             // Whole Body
                             log.debug("{d} - got whole body with header", .{provision.index});
                             const body_end = header_end + difference;
                             provision.request.set(.{
-                                .body = provision.recv_buffer.items[header_end..body_end],
+                                .body = provision.recv_buffer.as_slice()[header_end..body_end],
                             });
                             return try route_and_respond(rt, provision, router);
                         } else {
@@ -981,7 +989,7 @@ pub fn Server(comptime security: Security) type {
                             stage = .{ .body = header_end };
                             return .recv;
                         }
-                    } else if (header_end == provision.recv_buffer.items.len) {
+                    } else if (header_end == provision.recv_buffer.len) {
                         // Body of length 0 probably or only got header.
                         if (content_length == 0) {
                             log.debug("{d} - got body of length 0", .{provision.index});
@@ -1030,7 +1038,7 @@ pub fn Server(comptime security: Security) type {
 
                     if (job.count >= request_length) {
                         provision.request.set(.{
-                            .body = provision.recv_buffer.items[header_end..request_length],
+                            .body = provision.recv_buffer.as_slice()[header_end..request_length],
                         });
                         return try route_and_respond(rt, provision, router);
                     } else {

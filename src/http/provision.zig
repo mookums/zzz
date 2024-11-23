@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Job = @import("../core/job.zig").Job;
+const ZeroCopyBuffer = @import("../core/zc_buffer.zig").ZeroCopyBuffer;
 const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
 const Request = @import("request.zig").Request;
@@ -13,7 +14,7 @@ pub const Provision = struct {
     job: Job,
     socket: std.posix.socket_t,
     buffer: []u8,
-    recv_buffer: std.ArrayList(u8),
+    recv_buffer: ZeroCopyBuffer,
     arena: std.heap.ArenaAllocator,
     captures: []Capture,
     queries: QueryMap,
@@ -31,12 +32,12 @@ pub const Provision = struct {
         for (provisions) |*provision| {
             provision.job = .empty;
             provision.socket = undefined;
-            // Create Buffer
-            provision.buffer = ctx.allocator.alloc(u8, config.socket_buffer_bytes) catch {
-                @panic("attempting to statically allocate more memory than available. (Socket Buffer)");
-            };
             // Create Recv Buffer
-            provision.recv_buffer = std.ArrayList(u8).init(ctx.allocator);
+            provision.recv_buffer = ZeroCopyBuffer.init(ctx.allocator, config.socket_buffer_bytes) catch {
+                @panic("attempting to statically allocate more memory than available. (ZeroCopyBuffer)");
+            };
+            // Create Buffer
+            provision.buffer = provision.recv_buffer.get_write_area_assume_space(config.socket_buffer_bytes);
             // Create the Context Arena
             provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
 

@@ -254,6 +254,7 @@ pub fn Router(comptime Server: type) type {
                     const extension_start = std.mem.lastIndexOfScalar(u8, search_path, '.');
                     const mime: Mime = blk: {
                         if (extension_start) |start| {
+                            if (search_path.len - start >= 0) break :blk Mime.BIN;
                             break :blk Mime.from_extension(search_path[start + 1 ..]);
                         } else {
                             break :blk Mime.BIN;
