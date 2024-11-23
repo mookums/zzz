@@ -78,13 +78,11 @@ pub inline fn raw_respond(p: *Provision) !RecvStatus {
 /// This includes various different options and limits
 /// for interacting with the underlying network.
 pub const ServerConfig = struct {
-    /// The allocator that server will use.
-    allocator: std.mem.Allocator,
     /// Kernel Backlog Value.
-    size_backlog: u31 = 512,
+    backlog_count: u31 = 512,
     /// Number of Maximum Concurrent Connections.
     ///
-    /// This is applied PER thread if using multi-threading.
+    /// This is applied PER runtime.
     /// zzz will drop/close any connections greater
     /// than this.
     ///
@@ -92,12 +90,12 @@ pub const ServerConfig = struct {
     /// of maximum connections.
     ///
     /// Default: 1024
-    size_connections_max: u16 = 1024,
+    connection_count_max: u16 = 1024,
     /// Maximum number of completions we can reap
     /// with a single call of reap().
     ///
     /// Default: 256
-    size_completions_reap_max: u16 = 256,
+    completion_reap_max: u16 = 256,
     /// Amount of allocated memory retained
     /// after an arena is cleared.
     ///
@@ -108,43 +106,43 @@ pub const ServerConfig = struct {
     /// will make allocators slower.
     ///
     /// Default: 1KB
-    size_connection_arena_retain: u32 = 1024,
+    connection_arena_bytes_retain: u32 = 1024,
     /// Amount of space on the `recv_buffer` retained
     /// after every send.
     ///
     /// Default: 1KB
-    size_recv_buffer_retain: u32 = 1024,
-    /// Size of the buffer (in bytes) used for
-    /// interacting with the socket.
-    ///
-    /// Default: 4 KB.
-    size_socket_buffer: u32 = 1024 * 4,
+    list_recv_bytes_retain: u32 = 1024,
     /// Maximum size (in bytes) of the Recv buffer.
     /// This is mainly a concern when you are reading in
     /// large requests before responding.
     ///
     /// Default: 2MB.
-    size_recv_buffer_max: u32 = 1024 * 1024 * 2,
+    list_recv_bytes_max: u32 = 1024 * 1024 * 2,
+    /// Size of the buffer (in bytes) used for
+    /// interacting with the socket.
+    ///
+    /// Default: 4 KB.
+    socket_buffer_bytes: u32 = 1024 * 4,
     /// Maximum number of Headers in a Request/Response
     ///
     /// Default: 32
-    num_header_max: u32 = 32,
+    header_count_max: u32 = 32,
     /// Maximum number of Captures in a Route
     ///
     /// Default: 8
-    num_captures_max: u32 = 8,
+    capture_count_max: u32 = 8,
     /// Maximum number of Queries in a URL
     ///
     /// Default: 8
-    num_queries_max: u32 = 8,
+    query_count_max: u32 = 8,
     /// Maximum size (in bytes) of the Request.
     ///
     /// Default: 2MB.
-    size_request_max: u32 = 1024 * 1024 * 2,
+    request_bytes_max: u32 = 1024 * 1024 * 2,
     /// Maximum size (in bytes) of the Request URI.
     ///
     /// Default: 2KB.
-    size_request_uri_max: u32 = 1024 * 2,
+    request_uri_bytes_max: u32 = 1024 * 2,
 };
 
 pub fn Server(comptime security: Security) type {
@@ -159,27 +157,27 @@ pub fn Server(comptime security: Security) type {
         pub const SSE = _SSE(Self);
         allocator: std.mem.Allocator,
         config: ServerConfig,
-        addr: std.net.Address,
+        addr: ?std.net.Address,
         tls_ctx: TLSContextType,
         router: *const Router,
 
-        pub fn init(config: ServerConfig) Self {
+        pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
             const tls_ctx = switch (comptime security) {
                 .tls => |inner| TLSContext.init(.{
-                    .allocator = config.allocator,
+                    .allocator = allocator,
                     .cert = inner.cert,
                     .cert_name = inner.cert_name,
                     .key = inner.key,
                     .key_name = inner.key_name,
-                    .size_tls_buffer_max = config.size_socket_buffer * 2,
+                    .size_tls_buffer_max = config.socket_buffer_bytes * 2,
                 }) catch unreachable,
                 .plain => void{},
             };
 
             return Self{
-                .allocator = config.allocator,
+                .allocator = allocator,
                 .config = config,
-                .addr = undefined,
+                .addr = null,
                 .tls_ctx = tls_ctx,
                 .router = undefined,
             };
@@ -242,11 +240,11 @@ pub fn Server(comptime security: Security) type {
 
             provision.socket = Cross.socket.INVALID_SOCKET;
             provision.job = .empty;
-            _ = provision.arena.reset(.{ .retain_with_limit = config.size_connection_arena_retain });
+            _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
             provision.response.clear();
 
-            if (provision.recv_buffer.items.len > config.size_recv_buffer_retain) {
-                provision.recv_buffer.shrinkRetainingCapacity(config.size_recv_buffer_retain);
+            if (provision.recv_buffer.items.len > config.list_recv_bytes_retain) {
+                provision.recv_buffer.shrinkRetainingCapacity(config.list_recv_bytes_retain);
             } else {
                 provision.recv_buffer.clearRetainingCapacity();
             }
@@ -462,7 +460,7 @@ pub fn Server(comptime security: Security) type {
         /// Prepares the provision send_job and returns the first send chunk
         pub fn prepare_send(rt: *Runtime, provision: *Provision, after: AfterType, pslice: Pseudoslice) ![]const u8 {
             const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
-            const plain_buffer = pslice.get(0, config.size_socket_buffer);
+            const plain_buffer = pslice.get(0, config.socket_buffer_bytes);
 
             switch (comptime security) {
                 .tls => {
@@ -535,7 +533,7 @@ pub fn Server(comptime security: Security) type {
 
                 log.debug("{d} - queueing a new recv", .{provision.index});
                 _ = provision.arena.reset(.{
-                    .retain_with_limit = config.size_connection_arena_retain,
+                    .retain_with_limit = config.connection_arena_bytes_retain,
                 });
                 provision.recv_buffer.clearRetainingCapacity();
                 provision.job = .{ .recv = .{ .count = 0 } };
@@ -588,7 +586,7 @@ pub fn Server(comptime security: Security) type {
 
                                     const inner_slice = send_job.slice.get(
                                         send_job.count,
-                                        send_job.count + config.size_socket_buffer,
+                                        send_job.count + config.socket_buffer_bytes,
                                     );
 
                                     send_job.count += @intCast(inner_slice.len);
@@ -642,10 +640,10 @@ pub fn Server(comptime security: Security) type {
 
                                 const plain_buffer = send_job.slice.get(
                                     send_job.count,
-                                    send_job.count + config.size_socket_buffer,
+                                    send_job.count + config.socket_buffer_bytes,
                                 );
 
-                                log.debug("socket buffer size: {d}", .{config.size_socket_buffer});
+                                log.debug("socket buffer size: {d}", .{config.socket_buffer_bytes});
 
                                 log.debug("{d} - chunk ends at: {d}", .{
                                     provision.index,
@@ -670,22 +668,24 @@ pub fn Server(comptime security: Security) type {
         }
 
         pub inline fn serve(self: *Self, router: *const Router, rt: *Runtime) !void {
+            if (self.addr == null) return error.ServerNotBinded;
+            const addr = self.addr.?;
+            try rt.storage.store_alloc("__zzz_is_unix", addr.any.family == std.posix.AF.UNIX);
+
             self.router = router;
 
             log.info("server listening...", .{});
             log.info("security mode: {s}", .{@tagName(security)});
 
-            const socket = try self.create_socket();
-            try std.posix.bind(socket, &self.addr.any, self.addr.getOsSockLen());
-            try std.posix.listen(socket, self.config.size_backlog);
-
-            try rt.storage.store_alloc("__zzz_is_unix", self.addr.any.family == std.posix.AF.UNIX);
+            const socket = try create_socket(addr);
+            try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
+            try std.posix.listen(socket, self.config.backlog_count);
 
             const provision_pool = try rt.allocator.create(Pool(Provision));
             provision_pool.* = try Pool(Provision).init(
                 rt.allocator,
-                self.config.size_connections_max,
-                self.config,
+                self.config.connection_count_max,
+                Provision.InitContext{ .allocator = self.allocator, .config = self.config },
                 Provision.init_hook,
             );
 
@@ -696,7 +696,7 @@ pub fn Server(comptime security: Security) type {
             if (comptime security == .tls) {
                 const tls_slice = try rt.allocator.alloc(
                     TLSType,
-                    self.config.size_connections_max,
+                    self.config.connection_count_max,
                 );
                 for (tls_slice) |*tls| {
                     tls.* = null;
@@ -730,14 +730,14 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        fn create_socket(self: *const Self) !std.posix.socket_t {
-            const protocol: u32 = if (self.addr.any.family == std.posix.AF.UNIX)
+        fn create_socket(addr: std.net.Address) !std.posix.socket_t {
+            const protocol: u32 = if (addr.any.family == std.posix.AF.UNIX)
                 0
             else
                 std.posix.IPPROTO.TCP;
 
             const socket = try std.posix.socket(
-                self.addr.any.family,
+                addr.any.family,
                 std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
                 protocol,
             );
@@ -854,7 +854,7 @@ pub fn Server(comptime security: Security) type {
             var stage = provision.stage;
             const job = provision.job.recv;
 
-            if (job.count >= config.size_request_max) {
+            if (job.count >= config.request_bytes_max) {
                 provision.response.set(.{
                     .status = .@"Content Too Large",
                     .mime = Mime.HTML,
@@ -880,8 +880,8 @@ pub fn Server(comptime security: Security) type {
                     // The +4 is to account for the slice we match.
                     const header_end: u32 = @intCast(header_ends.? + 4);
                     provision.request.parse_headers(provision.recv_buffer.items[0..header_end], .{
-                        .size_request_max = config.size_request_max,
-                        .size_request_uri_max = config.size_request_uri_max,
+                        .size_request_max = config.request_bytes_max,
+                        .size_request_uri_max = config.request_uri_bytes_max,
                     }) catch |e| {
                         switch (e) {
                             HTTPError.ContentTooLarge => {
@@ -1019,7 +1019,7 @@ pub fn Server(comptime security: Security) type {
                     const request_length = header_end + content_length;
 
                     // If this body will be too long, abort early.
-                    if (request_length > config.size_request_max) {
+                    if (request_length > config.request_bytes_max) {
                         provision.response.set(.{
                             .status = .@"Content Too Large",
                             .mime = Mime.HTML,

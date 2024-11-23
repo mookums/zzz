@@ -60,17 +60,16 @@ pub fn main() !void {
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(.{
-                    .allocator = rt.allocator,
-                    .size_backlog = 32,
-                    .size_connections_max = max_conn,
-                    .size_connection_arena_retain = 64,
-                    .size_completions_reap_max = 8,
-                    .size_socket_buffer = 512,
-                    .num_header_max = 32,
-                    .num_captures_max = 0,
-                    .size_request_max = 2048,
-                    .size_request_uri_max = 256,
+                var server = Server.init(rt.allocator, .{
+                    .backlog_count = 32,
+                    .connection_count_max = max_conn,
+                    .connection_arena_bytes_retain = 64,
+                    .completion_reap_max = 8,
+                    .socket_buffer_bytes = 512,
+                    .header_count_max = 32,
+                    .capture_count_max = 0,
+                    .request_bytes_max = 2048,
+                    .request_uri_bytes_max = 256,
                 });
                 try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);

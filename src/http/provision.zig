@@ -21,27 +21,33 @@ pub const Provision = struct {
     response: Response,
     stage: Stage,
 
-    pub fn init_hook(provisions: []Provision, config: ServerConfig) void {
+    pub const InitContext = struct {
+        allocator: std.mem.Allocator,
+        config: ServerConfig,
+    };
+
+    pub fn init_hook(provisions: []Provision, ctx: InitContext) void {
+        const config = ctx.config;
         for (provisions) |*provision| {
             provision.job = .empty;
             provision.socket = undefined;
             // Create Buffer
-            provision.buffer = config.allocator.alloc(u8, config.size_socket_buffer) catch {
+            provision.buffer = ctx.allocator.alloc(u8, config.socket_buffer_bytes) catch {
                 @panic("attempting to statically allocate more memory than available. (Socket Buffer)");
             };
             // Create Recv Buffer
-            provision.recv_buffer = std.ArrayList(u8).init(config.allocator);
+            provision.recv_buffer = std.ArrayList(u8).init(ctx.allocator);
             // Create the Context Arena
-            provision.arena = std.heap.ArenaAllocator.init(config.allocator);
+            provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
 
             provision.stage = .header;
-            provision.captures = config.allocator.alloc(Capture, config.num_captures_max) catch unreachable;
+            provision.captures = ctx.allocator.alloc(Capture, config.capture_count_max) catch unreachable;
 
-            var queries = QueryMap.init(config.allocator);
-            queries.ensureTotalCapacity(config.num_queries_max) catch unreachable;
+            var queries = QueryMap.init(ctx.allocator);
+            queries.ensureTotalCapacity(config.query_count_max) catch unreachable;
             provision.queries = queries;
-            provision.request = Request.init(config.allocator, config.num_header_max) catch unreachable;
-            provision.response = Response.init(config.allocator, config.num_header_max) catch unreachable;
+            provision.request = Request.init(ctx.allocator, config.header_count_max) catch unreachable;
+            provision.response = Response.init(ctx.allocator, config.header_count_max) catch unreachable;
         }
     }
 

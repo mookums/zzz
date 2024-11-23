@@ -15,6 +15,7 @@ We can write a quick example that serves out "Hello, World" responses to any cli
 
 ```zig
 const std = @import("std");
+const log = std.log.scoped(.@"examples/basic");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -36,7 +37,8 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Creating our Tardy instance that will spawn our runtimes.
+    // Creating our Tardy instance that
+    // will spawn our runtimes.
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
@@ -49,7 +51,7 @@ pub fn main() !void {
     const num: i8 = 12;
 
     try router.serve_route("/", Route.init().get(&num, struct {
-        pub fn handler_fn(ctx: *Context, id: *const i8) !void {
+        fn handler_fn(ctx: *Context, id: *const i8) !void {
             const body_fmt =
                 \\ <!DOCTYPE html>
                 \\ <html>
@@ -62,6 +64,9 @@ pub fn main() !void {
 
             const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id.*});
 
+            // This is the standard response and what you
+            // will usually be using. This will send to the
+            // client and then continue to await more requests.
             try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,
@@ -70,14 +75,24 @@ pub fn main() !void {
         }
     }.handler_fn));
 
-    // This provides the entry function into every Tardy runtime.
-    // This runs once within each runtime that spawns.
+    router.serve_not_found(Route.init().get({}, struct {
+        fn handler_fn(ctx: *Context, _: void) !void {
+            try ctx.respond(.{
+                .status = .@"Not Found",
+                .mime = http.Mime.HTML,
+                .body = "Not Found Handler!",
+            });
+        }
+    }.handler_fn));
+
+    // This provides the entry function into the Tardy runtime. This will run
+    // exactly once inside of each runtime (each thread gets a single runtime).
     try t.entry(
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = rt.allocator });
-                try server.bind(host, port);
+                var server = Server.init(rt.allocator, .{});
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);
             }
         }.entry,

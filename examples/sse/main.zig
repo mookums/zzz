@@ -124,11 +124,9 @@ pub fn main() !void {
             fn entry(rt: *Runtime, params: EntryParams) !void {
                 try rt.storage.store_ptr("broadcast", params.broadcast);
 
-                var server = Server.init(.{
-                    .allocator = rt.allocator,
-                    .size_connections_max = max_conn,
+                var server = Server.init(rt.allocator, .{
+                    .connection_count_max = max_conn,
                 });
-
                 try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(params.router, rt);
             }

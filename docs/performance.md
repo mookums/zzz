@@ -9,7 +9,7 @@ zzz now officially runs multithreaded by default. By default, it will utilize `@
 ```zig
 var t = try Tardy.init(.{
     .allocator = allocator,
-    .threading = .{ .multi = COUNT},
+    .threading = .{ .multi = COUNT },
 });
 ```
 
@@ -19,25 +19,25 @@ Another way to alter the performance is by changing which Async I/O model you us
 depending on your use case.
 
 Other settings of note include:
-- `size_connection_arena_retain` which controls how much memory that has been allocated within a connection's arena will be retained for the next connection.
-- `size_connections_max` which controls the maximum number of connections that each thread can handle.  Any connection after this number will get closed.
+- `connection_arena_bytes_retain` which controls how much memory that has been allocated within a connection's arena will be retained for the next connection.
+- `connections_size_max` which controls the maximum number of connections that each thread can handle.  Any connection after this number will get closed.
 
 ## Minimizing Memory Usage
 When using zzz in certain environments, your goal may be to reduce memory usage. zzz provides a variety of controls for handling how much memory is allocated at start up.
 
 ```zig
-var server = Server.init(.{
-    .allocator = allocator,
-    .size_backlog = 32,
-    .size_connections_max = 16,
-    .size_connection_arena_retain = 64,
-    .size_socket_buffer = 512,
+var server = Server.init(rt.allocator, .{
+    .backlog_count = 32,
+    .connection_count_max = 16,
+    .connections_size_max = 16,
+    .connection_arena_bytes_retain = 64,
+    .socket_buffer_bytes = 512,
 });
 ```
 
 There is no overarching setting here but a selection of ones you can tune to minimize:
 - run in single threaded mode
-- `size_connections_max` can be reduced. This value is used internally as every connection on every thread owns a `Provision`.
-- `size_connection_arena_retain` can be reduced. If you are not doing any allocations within the handler, you can even set this to 0.
-- `size_socket_buffer` can be reduced. There is a lower limit to this value of around 128 bytes. (This will be changed in the future and internal buffers will be separated).
+- `connections_size_max` can be reduced. This value is used internally as every connection on every thread owns a `Provision`.
+- `connection_arena_bytes_retain` can be reduced. If you are not doing any allocations within the handler, you can even set this to 0.
+- `socket_buffer_bytes` can be reduced. There is a lower limit to this value of around 128 bytes. (This will be changed in the future and internal buffers will be separated).
 

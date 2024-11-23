@@ -7,6 +7,7 @@ zzz utilizes [BearSSL](https://bearssl.org/) to provide a safe and performant TL
 This is derived from the example at `examples/tls` and utilizes some certificates that are present within the repository.
 ```zig
 const std = @import("std");
+const log = std.log.scoped(.@"examples/tls");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -58,6 +59,12 @@ pub fn main() !void {
         }
     }.handler_fn));
 
+    try router.serve_route("/kill", Route.init().get({}, struct {
+        pub fn handler_fn(ctx: *Context, _: void) !void {
+            ctx.runtime.stop();
+        }
+    }.handler_fn));
+
     var t = try Tardy.init(.{
         .allocator = allocator,
         .threading = .single,
@@ -68,8 +75,8 @@ pub fn main() !void {
         &router,
         struct {
             fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(.{ .allocator = rt.allocator });
-                try server.bind(host, port);
+                var server = Server.init(rt.allocator, .{});
+                try server.bind(.{ .ip = .{ .host = host, .port = port } });
                 try server.serve(r, rt);
             }
         }.entry,
