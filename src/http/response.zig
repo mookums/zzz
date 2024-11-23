@@ -88,11 +88,15 @@ pub const Response = struct {
         std.mem.copyForwards(u8, buffer[index..], "Content-Type: ");
         index += 14;
         if (self.mime) |m| {
-            std.mem.copyForwards(u8, buffer[index..], m.content_type);
-            index += m.content_type.len;
+            const content_type = switch (m.content_type) {
+                .single => |inner| inner,
+                .multiple => |content_types| content_types[0],
+            };
+            std.mem.copyForwards(u8, buffer[index..], content_type);
+            index += content_type.len;
         } else {
-            std.mem.copyForwards(u8, buffer[index..], Mime.BIN.content_type);
-            index += Mime.BIN.content_type.len;
+            std.mem.copyForwards(u8, buffer[index..], Mime.BIN.content_type.single);
+            index += Mime.BIN.content_type.single.len;
         }
         std.mem.copyForwards(u8, buffer[index..], "\r\n");
         index += 2;
