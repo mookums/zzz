@@ -6,8 +6,12 @@ const Capture = @import("routing_trie.zig").Capture;
 const QueryMap = @import("routing_trie.zig").QueryMap;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
-const Stage = @import("stage.zig").Stage;
 const ServerConfig = @import("server.zig").ServerConfig;
+
+pub const Stage = union(enum) {
+    header,
+    body: usize,
+};
 
 pub const Provision = struct {
     index: usize,

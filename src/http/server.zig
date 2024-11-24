@@ -889,8 +889,10 @@ pub fn Server(comptime security: Security) type {
                     }
 
                     log.debug("{d} - parsing header", .{provision.index});
+                    // We add start to account for the fact that we are searching
+                    // starting at the index of start.
                     // The +4 is to account for the slice we match.
-                    const header_end: u32 = @intCast(header_ends.? + 4);
+                    const header_end: usize = header_ends.? + start + 4;
                     provision.request.parse_headers(provision.recv_buffer.as_slice()[0..header_end], .{
                         .size_request_max = config.request_bytes_max,
                         .size_request_uri_max = config.request_uri_bytes_max,
