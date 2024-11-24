@@ -44,7 +44,7 @@ fn hi_handler(ctx: *Context, _: void) !void {
 }
 
 fn redir_handler(ctx: *Context, _: void) !void {
-    try ctx.response.headers.add("Location", "/hi/redirect");
+    try ctx.response.headers.put("Location", "/hi/redirect");
 
     try ctx.respond(.{
         .status = .@"Permanent Redirect",

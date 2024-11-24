@@ -106,7 +106,7 @@ pub fn Router(comptime Server: type) type {
                 .{etag_hash},
             );
 
-            try provision.response.headers.add("ETag", calc_etag);
+            try provision.response.headers.put("ETag", calc_etag);
 
             // If we have an ETag on the request...
             if (provision.request.headers.get("If-None-Match")) |etag| {
@@ -300,26 +300,25 @@ pub fn Router(comptime Server: type) type {
             assert(!self.locked);
             const route = Route.init().get({}, struct {
                 fn handler_fn(ctx: *Context, _: void) !void {
-                    if (comptime builtin.mode == .Debug) {
-                        // Don't Cache in Debug.
-                        try ctx.response.headers.add(
-                            "Cache-Control",
-                            "no-cache",
+                    const cache_control: []const u8 = if (comptime builtin.mode == .Debug)
+                        "no-cache"
+                    else
+                        comptime std.fmt.comptimePrint(
+                            "max-age={d}",
+                            .{std.time.s_per_day * 30},
                         );
-                    } else {
-                        // Cache for 30 days.
-                        try ctx.response.headers.add(
-                            "Cache-Control",
-                            comptime std.fmt.comptimePrint("max-age={d}", .{std.time.s_per_day * 30}),
-                        );
-                    }
+
+                    try ctx.response.headers.put(
+                        "Cache-Control",
+                        cache_control,
+                    );
 
                     // If our static item is greater than 1KB,
                     // it might be more beneficial to using caching.
                     if (comptime bytes.len > 1024) {
                         @setEvalBranchQuota(1_000_000);
                         const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
-                        try ctx.response.headers.add("ETag", etag[0..]);
+                        try ctx.response.headers.put("ETag", etag[0..]);
 
                         if (ctx.request.headers.get("If-None-Match")) |match| {
                             if (std.mem.eql(u8, etag, match)) {

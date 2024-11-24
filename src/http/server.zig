@@ -67,7 +67,7 @@ pub inline fn raw_respond(p: *Provision) !RecvStatus {
 
     const body = p.response.body orelse "";
     const header_buffer = try p.response.headers_into_buffer(p.buffer, @intCast(body.len));
-    p.response.headers.clear();
+    p.response.headers.clearRetainingCapacity();
     const pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
     return .{ .send = pseudo };
 }
@@ -123,18 +123,22 @@ pub const ServerConfig = struct {
     ///
     /// Default: 4 KB.
     socket_buffer_bytes: u32 = 1024 * 4,
+    /// Maximum length of a Header Key
+    ///
+    /// Default: 64
+    header_key_length_max: u16 = 64,
     /// Maximum number of Headers in a Request/Response
     ///
     /// Default: 32
-    header_count_max: u32 = 32,
+    header_count_max: u16 = 32,
     /// Maximum number of Captures in a Route
     ///
     /// Default: 8
-    capture_count_max: u32 = 8,
+    capture_count_max: u16 = 8,
     /// Maximum number of Queries in a URL
     ///
     /// Default: 8
-    query_count_max: u32 = 8,
+    query_count_max: u16 = 8,
     /// Maximum size (in bytes) of the Request.
     ///
     /// Default: 2MB.
@@ -824,7 +828,7 @@ pub fn Server(comptime security: Security) type {
                         break :route;
                     };
 
-                    p.response.headers.add("Allow", allowed) catch {
+                    p.response.headers.put("Allow", allowed) catch {
                         p.response.set(.{
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,

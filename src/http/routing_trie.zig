@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/routing_trie");
 
-const CaseStringMap = @import("case_string_map.zig").CaseStringMap;
+const CaseStringMap = @import("../core/case_string_map.zig").CaseStringMap;
 const _Route = @import("route.zig").Route;
 
 fn TokenHashMap(comptime V: type) type {
@@ -217,7 +217,6 @@ pub fn RoutingTrie(comptime Server: type) type {
             var capture_idx: usize = 0;
 
             queries.clearRetainingCapacity();
-
             const query_pos = std.mem.indexOfScalar(u8, path, '?');
             var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
             var current = self.root;
@@ -283,9 +282,7 @@ pub fn RoutingTrie(comptime Server: type) type {
                     var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
 
                     while (query_iter.next()) |chunk| {
-                        if (queries.count() >= queries.capacity() / 2) {
-                            return null;
-                        }
+                        if (queries.count() >= queries.capacity() / 2) return null;
 
                         const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse break;
                         if (chunk.len < field_idx + 1) break;
@@ -295,7 +292,6 @@ pub fn RoutingTrie(comptime Server: type) type {
 
                         assert(std.mem.indexOfScalar(u8, key, '=') == null);
                         assert(std.mem.indexOfScalar(u8, value, '=') == null);
-
                         queries.putAssumeCapacity(key, value);
                     }
                 }

@@ -42,13 +42,19 @@ pub const Provision = struct {
             provision.arena = std.heap.ArenaAllocator.init(ctx.allocator);
 
             provision.stage = .header;
-            provision.captures = ctx.allocator.alloc(Capture, config.capture_count_max) catch unreachable;
-
-            var queries = QueryMap.init(ctx.allocator);
-            queries.ensureTotalCapacity(config.query_count_max) catch unreachable;
-            provision.queries = queries;
-            provision.request = Request.init(ctx.allocator, config.header_count_max) catch unreachable;
-            provision.response = Response.init(ctx.allocator, config.header_count_max) catch unreachable;
+            provision.captures = ctx.allocator.alloc(Capture, config.capture_count_max) catch {
+                @panic("attempting to statically allocate more memory than available. (Captures)");
+            };
+            provision.queries = QueryMap.init(ctx.allocator);
+            provision.queries.ensureUnusedCapacity(config.query_count_max) catch {
+                @panic("attempting to statically allocate more memory than available. (QueryMap)");
+            };
+            provision.request = Request.init(ctx.allocator, config.header_count_max) catch {
+                @panic("attempting to statically allocate more memory than available. (Request)");
+            };
+            provision.response = Response.init(ctx.allocator, config.header_count_max) catch {
+                @panic("attempting to statically allocate more memory than available. (Response)");
+            };
         }
     }
 

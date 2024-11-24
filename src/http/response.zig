@@ -13,10 +13,13 @@ pub const Response = struct {
     body: ?[]const u8 = null,
     headers: Headers,
 
-    pub fn init(allocator: std.mem.Allocator, num_header_max: u32) !Response {
+    pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Response {
+        var headers = Headers.init(allocator);
+        try headers.ensureUnusedCapacity(header_count_max);
+
         return Response{
             .allocator = allocator,
-            .headers = try Headers.init(allocator, num_header_max),
+            .headers = headers,
         };
     }
 
@@ -72,7 +75,7 @@ pub const Response = struct {
         index += 39;
 
         // Headers
-        var iter = self.headers.map.iterator();
+        var iter = self.headers.iterator();
         while (iter.next()) |entry| {
             std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
             index += entry.key_ptr.len;
