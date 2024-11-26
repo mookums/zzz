@@ -59,6 +59,17 @@ pub fn main() !void {
         }
     }.handler_fn));
 
+    try router.serve_route("/echo", Route.init().post({}, struct {
+        fn handler_fn(ctx: *Context, _: void) !void {
+            const body = try ctx.allocator.dupe(u8, ctx.request.body);
+            try ctx.respond(.{
+                .status = .OK,
+                .mime = http.Mime.HTML,
+                .body = body[0..],
+            });
+        }
+    }.handler_fn));
+
     router.serve_not_found(Route.init().get({}, struct {
         fn handler_fn(ctx: *Context, _: void) !void {
             try ctx.respond(.{

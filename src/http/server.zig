@@ -244,6 +244,8 @@ pub fn Server(comptime security: Security) type {
             provision.socket = Cross.socket.INVALID_SOCKET;
             provision.job = .empty;
             _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
+
+            provision.request.clear();
             provision.response.clear();
 
             if (provision.recv_buffer.len > config.list_recv_bytes_retain) {
@@ -350,30 +352,39 @@ pub fn Server(comptime security: Security) type {
 
             log.debug("{d} - recv triggered", .{provision.index});
 
+            // recv_count is how many bytes we have read off the socket
             const recv_count: usize = @intCast(length);
-            recv_job.count += recv_count;
-            const pre_recv_buffer = provision.buffer[0..recv_count];
 
-            if (comptime security == .tls) {
-                const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
-                const tls_ptr: *TLSType = &tls_slice[provision.index];
-                assert(tls_ptr.* != null);
+            // this is how many http bytes we have received
+            const http_bytes_count: usize = blk: {
+                if (comptime security == .tls) {
+                    const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
+                    const tls_ptr: *TLSType = &tls_slice[provision.index];
+                    assert(tls_ptr.* != null);
 
-                const decrypted = tls_ptr.*.?.decrypt(pre_recv_buffer) catch |e| {
-                    log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
-                    provision.job = .close;
-                    try rt.net.close(provision, close_task, provision.socket);
-                    return error.TLSDecryptFailed;
-                };
+                    const decrypted = tls_ptr.*.?.decrypt(provision.buffer[0..recv_count]) catch |e| {
+                        log.err("{d} - decrypt failed: {any}", .{ provision.index, e });
+                        provision.job = .close;
+                        try rt.net.close(provision, close_task, provision.socket);
+                        return error.TLSDecryptFailed;
+                    };
 
-                const area = try provision.recv_buffer.get_write_area(decrypted.len);
-                std.mem.copyForwards(u8, area, decrypted);
-                provision.recv_buffer.mark_written(decrypted.len);
-            } else {
-                provision.recv_buffer.mark_written(recv_count);
-            }
+                    // since we haven't marked the write yet, we can get a new write area
+                    // that is directly adjacent to the last write block.
+                    const area = try provision.recv_buffer.get_write_area(decrypted.len);
+                    std.mem.copyForwards(u8, area, decrypted);
+                    break :blk decrypted.len;
+                } else {
+                    break :blk recv_count;
+                }
+            };
 
-            const status = try on_recv(recv_count, rt, provision, router, config);
+            provision.recv_buffer.mark_written(http_bytes_count);
+            provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+            recv_job.count += http_bytes_count;
+
+            const status = try on_recv(http_bytes_count, rt, provision, router, config);
+            assert(provision.buffer.len == config.socket_buffer_bytes);
 
             switch (status) {
                 .spawned => return,
@@ -839,7 +850,7 @@ pub fn Server(comptime security: Security) type {
             return try raw_respond(p);
         }
 
-        inline fn on_recv(
+        fn on_recv(
             // How much we just received
             recv_count: usize,
             rt: *Runtime,
@@ -862,15 +873,15 @@ pub fn Server(comptime security: Security) type {
 
             switch (stage) {
                 .header => {
-                    const starting_length = job.count - recv_count;
+                    // this should never underflow if things are working correctly.
+                    const starting_length = provision.recv_buffer.len - recv_count;
                     const start = starting_length -| 4;
 
-                    // Technically, we no longer need to append.
-                    // try provision.recv_buffer.appendSlice(buffer);
-                    provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
-
-                    // need to specify end
-                    const header_ends = std.mem.lastIndexOf(u8, provision.recv_buffer.as_slice()[start..], "\r\n\r\n");
+                    const header_ends = std.mem.lastIndexOf(
+                        u8,
+                        provision.recv_buffer.subslice(.{ .start = start }),
+                        "\r\n\r\n",
+                    );
 
                     // Basically, this means we haven't finished processing the header.
                     if (header_ends == null) {
@@ -883,10 +894,13 @@ pub fn Server(comptime security: Security) type {
                     // starting at the index of start.
                     // The +4 is to account for the slice we match.
                     const header_end: usize = header_ends.? + start + 4;
-                    provision.request.parse_headers(provision.recv_buffer.as_slice()[0..header_end], .{
-                        .request_bytes_max = config.request_bytes_max,
-                        .request_uri_bytes_max = config.request_uri_bytes_max,
-                    }) catch |e| {
+                    provision.request.parse_headers(
+                        provision.recv_buffer.subslice(.{ .end = header_end }),
+                        .{
+                            .request_bytes_max = config.request_bytes_max,
+                            .request_uri_bytes_max = config.request_uri_bytes_max,
+                        },
+                    ) catch |e| {
                         switch (e) {
                             HTTPError.ContentTooLarge => {
                                 provision.response.set(.{
@@ -976,7 +990,10 @@ pub fn Server(comptime security: Security) type {
                             log.debug("{d} - got whole body with header", .{provision.index});
                             const body_end = header_end + difference;
                             provision.request.set(.{
-                                .body = provision.recv_buffer.as_slice()[header_end..body_end],
+                                .body = provision.recv_buffer.subslice(.{
+                                    .start = header_end,
+                                    .end = body_end,
+                                }),
                             });
                             return try route_and_respond(rt, provision, router);
                         } else {
@@ -1020,6 +1037,7 @@ pub fn Server(comptime security: Security) type {
                         break :blk try std.fmt.parseInt(u32, length_string, 10);
                     };
 
+                    // We factor in the length of the headers.
                     const request_length = header_end + content_length;
 
                     // If this body will be too long, abort early.
@@ -1034,7 +1052,10 @@ pub fn Server(comptime security: Security) type {
 
                     if (job.count >= request_length) {
                         provision.request.set(.{
-                            .body = provision.recv_buffer.as_slice()[header_end..request_length],
+                            .body = provision.recv_buffer.subslice(.{
+                                .start = header_end,
+                                .end = request_length,
+                            }),
                         });
                         return try route_and_respond(rt, provision, router);
                     } else {

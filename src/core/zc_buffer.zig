@@ -25,6 +25,20 @@ pub const ZeroCopyBuffer = struct {
         return self.ptr[0..self.len];
     }
 
+    const SubsliceOptions = struct {
+        start: ?usize = null,
+        end: ?usize = null,
+    };
+
+    pub fn subslice(self: *ZeroCopyBuffer, options: SubsliceOptions) []u8 {
+        const start: usize = options.start orelse 0;
+        const end: usize = options.end orelse self.len;
+        assert(start <= end);
+        assert(end <= self.len);
+
+        return self.ptr[start..end];
+    }
+
     /// This returns a slice that you can write into for zero-copy uses.
     /// This is mostly used when we are passing a buffer to I/O then acting on it.
     ///

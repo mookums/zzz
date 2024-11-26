@@ -32,13 +32,20 @@ pub const Request = struct {
         self.headers.deinit(self.allocator);
     }
 
+    pub fn clear(self: *Request) void {
+        self.method = undefined;
+        self.uri = undefined;
+        self.body = undefined;
+        self.headers.clearRetainingCapacity();
+    }
+
     const RequestParseOptions = struct {
         request_bytes_max: u32,
         request_uri_bytes_max: u32,
     };
 
     pub fn parse_headers(self: *Request, bytes: []const u8, options: RequestParseOptions) HTTPError!void {
-        self.headers.clearRetainingCapacity();
+        self.clear();
         var total_size: u32 = 0;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
 
