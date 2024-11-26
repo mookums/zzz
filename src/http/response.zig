@@ -14,8 +14,8 @@ pub const Response = struct {
     headers: Headers,
 
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Response {
-        var headers = Headers.init(allocator);
-        try headers.ensureUnusedCapacity(header_count_max);
+        var headers = Headers{};
+        try headers.ensureUnusedCapacity(allocator, header_count_max);
 
         return Response{
             .allocator = allocator,
@@ -24,7 +24,7 @@ pub const Response = struct {
     }
 
     pub fn deinit(self: *Response) void {
-        self.headers.deinit();
+        self.headers.deinit(self.allocator);
     }
 
     pub fn clear(self: *Response) void {

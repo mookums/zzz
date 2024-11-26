@@ -106,7 +106,7 @@ pub fn Router(comptime Server: type) type {
                 .{etag_hash},
             );
 
-            try provision.response.headers.put("ETag", calc_etag);
+            provision.response.headers.putAssumeCapacity("ETag", calc_etag);
 
             // If we have an ETag on the request...
             if (provision.request.headers.get("If-None-Match")) |etag| {
@@ -308,17 +308,14 @@ pub fn Router(comptime Server: type) type {
                             .{std.time.s_per_day * 30},
                         );
 
-                    try ctx.response.headers.put(
-                        "Cache-Control",
-                        cache_control,
-                    );
+                    ctx.response.headers.putAssumeCapacity("Cache-Control", cache_control);
 
                     // If our static item is greater than 1KB,
                     // it might be more beneficial to using caching.
                     if (comptime bytes.len > 1024) {
                         @setEvalBranchQuota(1_000_000);
                         const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
-                        try ctx.response.headers.put("ETag", etag[0..]);
+                        ctx.response.headers.putAssumeCapacity("ETag", etag[0..]);
 
                         if (ctx.request.headers.get("If-None-Match")) |match| {
                             if (std.mem.eql(u8, etag, match)) {

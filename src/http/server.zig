@@ -828,16 +828,7 @@ pub fn Server(comptime security: Security) type {
                         break :route;
                     };
 
-                    p.response.headers.put("Allow", allowed) catch {
-                        p.response.set(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        });
-
-                        break :route;
-                    };
-
+                    p.response.headers.putAssumeCapacity("Allow", allowed);
                     break :route;
                 }
             }

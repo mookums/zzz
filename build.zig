@@ -39,10 +39,11 @@ pub fn build(b: *std.Build) void {
     add_example(b, "valgrind", true, target, optimize, zzz, tardy);
 
     const tests = b.addTest(.{
-        .name = "tests",
-        .root_source_file = b.path("./src/test.zig"),
+        .name = "unit-test",
+        .root_source_file = b.path("./src/unit_test.zig"),
     });
     tests.root_module.addImport("tardy", tardy);
+    tests.root_module.linkLibrary(bearssl);
 
     const run_test = b.addRunArtifact(tests);
     run_test.step.dependOn(&tests.step);

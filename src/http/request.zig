@@ -16,8 +16,8 @@ pub const Request = struct {
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Request {
-        var headers = Headers.init(allocator);
-        try headers.ensureUnusedCapacity(header_count_max);
+        var headers = Headers{};
+        try headers.ensureUnusedCapacity(allocator, header_count_max);
 
         return Request{
             .allocator = allocator,
@@ -29,7 +29,7 @@ pub const Request = struct {
     }
 
     pub fn deinit(self: *Request) void {
-        self.headers.deinit();
+        self.headers.deinit(self.allocator);
     }
 
     const RequestParseOptions = struct {

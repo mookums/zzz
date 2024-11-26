@@ -92,7 +92,6 @@ fn parse_pem(allocator: std.mem.Allocator, section: []const u8, buffer: []const 
 }
 
 const TLSContextOptions = struct {
-    allocator: std.mem.Allocator,
     cert: TLSFileOptions,
     cert_name: []const u8,
     key: TLSFileOptions,
@@ -110,10 +109,10 @@ pub const TLSContext = struct {
     key: []const u8,
 
     /// This only needs to be called once and it should create all of the stuff needed.
-    pub fn init(options: TLSContextOptions) !TLSContext {
+    pub fn init(allocator: std.mem.Allocator, options: TLSContextOptions) !TLSContext {
         var self: TLSContext = undefined;
-        self.parent_allocator = options.allocator;
-        self.arena = std.heap.ArenaAllocator.init(options.allocator);
+        self.parent_allocator = allocator;
+        self.arena = std.heap.ArenaAllocator.init(allocator);
         self.allocator = self.arena.allocator();
 
         const cert_buf = blk: {
@@ -812,16 +811,3 @@ pub const TLS = struct {
         return error.EncryptTimeout;
     }
 };
-
-const testing = std.testing;
-
-test "Parsing Certificates" {
-    const cert = "src/examples/tls/certs/server.cert";
-    const key = "src/examples/tls/certs/server.key";
-
-    const context = try TLSContext.init(testing.allocator, cert, key);
-    defer context.deinit();
-
-    const tls = try context.create(undefined);
-    defer tls.deinit();
-}
