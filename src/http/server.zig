@@ -167,8 +167,7 @@ pub fn Server(comptime security: Security) type {
 
         pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
             const tls_ctx = switch (comptime security) {
-                .tls => |inner| TLSContext.init(.{
-                    .allocator = allocator,
+                .tls => |inner| TLSContext.init(allocator, .{
                     .cert = inner.cert,
                     .cert_name = inner.cert_name,
                     .key = inner.key,
@@ -885,8 +884,8 @@ pub fn Server(comptime security: Security) type {
                     // The +4 is to account for the slice we match.
                     const header_end: usize = header_ends.? + start + 4;
                     provision.request.parse_headers(provision.recv_buffer.as_slice()[0..header_end], .{
-                        .size_request_max = config.request_bytes_max,
-                        .size_request_uri_max = config.request_uri_bytes_max,
+                        .request_bytes_max = config.request_bytes_max,
+                        .request_uri_bytes_max = config.request_uri_bytes_max,
                     }) catch |e| {
                         switch (e) {
                             HTTPError.ContentTooLarge => {

@@ -33,8 +33,8 @@ pub const Request = struct {
     }
 
     const RequestParseOptions = struct {
-        size_request_max: u32,
-        size_request_uri_max: u32,
+        request_bytes_max: u32,
+        request_uri_bytes_max: u32,
     };
 
     pub fn parse_headers(self: *Request, bytes: []const u8, options: RequestParseOptions) HTTPError!void {
@@ -50,7 +50,7 @@ pub const Request = struct {
         while (lines.next()) |line| {
             total_size += @intCast(line.len);
 
-            if (total_size > options.size_request_max) {
+            if (total_size > options.request_bytes_max) {
                 return HTTPError.ContentTooLarge;
             }
 
@@ -64,7 +64,7 @@ pub const Request = struct {
                 };
 
                 const uri_string = chunks.next() orelse return HTTPError.MalformedRequest;
-                if (uri_string.len >= options.size_request_uri_max) return HTTPError.URITooLong;
+                if (uri_string.len >= options.request_uri_bytes_max) return HTTPError.URITooLong;
                 if (uri_string[0] != '/') return HTTPError.MalformedRequest;
 
                 const version_string = chunks.next() orelse return HTTPError.MalformedRequest;
@@ -130,8 +130,8 @@ test "Parse Request" {
     defer request.deinit();
 
     try request.parse_headers(request_text[0..], .{
-        .size_request_max = 1024,
-        .size_request_uri_max = 256,
+        .request_bytes_max = 1024,
+        .request_uri_bytes_max = 256,
     });
 
     try testing.expectEqual(.GET, request.method);
@@ -156,8 +156,8 @@ test "Expect ContentTooLong Error" {
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
-        .size_request_max = 128,
-        .size_request_uri_max = 64,
+        .request_bytes_max = 128,
+        .request_uri_bytes_max = 64,
     });
     try testing.expectError(HTTPError.ContentTooLarge, err);
 }
@@ -175,8 +175,8 @@ test "Expect URITooLong Error" {
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
-        .size_request_max = 1024 * 1024,
-        .size_request_uri_max = 2048,
+        .request_bytes_max = 1024 * 1024,
+        .request_uri_bytes_max = 2048,
     });
     try testing.expectError(HTTPError.URITooLong, err);
 }
@@ -194,8 +194,8 @@ test "Expect Malformed when URI missing /" {
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
-        .size_request_max = 1024,
-        .size_request_uri_max = 512,
+        .request_bytes_max = 1024,
+        .request_uri_bytes_max = 512,
     });
     try testing.expectError(HTTPError.MalformedRequest, err);
 }
@@ -212,8 +212,8 @@ test "Expect Incorrect HTTP Version" {
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
-        .size_request_max = 1024,
-        .size_request_uri_max = 512,
+        .request_bytes_max = 1024,
+        .request_uri_bytes_max = 512,
     });
     try testing.expectError(HTTPError.HTTPVersionNotSupported, err);
 }
@@ -230,8 +230,8 @@ test "Malformed Headers" {
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
-        .size_request_max = 1024,
-        .size_request_uri_max = 512,
+        .request_bytes_max = 1024,
+        .request_uri_bytes_max = 512,
     });
     try testing.expectError(HTTPError.MalformedRequest, err);
 }
