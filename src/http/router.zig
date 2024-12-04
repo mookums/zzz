@@ -17,6 +17,7 @@ const QueryMap = @import("routing_trie.zig").QueryMap;
 const Runtime = @import("tardy").Runtime;
 const Task = @import("tardy").Task;
 const Stat = @import("tardy").Stat;
+const Cross = @import("tardy").Cross;
 
 pub fn Router(comptime Server: type) type {
     return struct {
@@ -67,7 +68,7 @@ pub fn Router(comptime Server: type) type {
                 .body = "",
             }) catch unreachable;
 
-            if (fd <= -1) {
+            if (!Cross.fd.is_valid(fd)) {
                 try provision.context.respond(.{
                     .status = .@"Not Found",
                     .mime = Mime.HTML,
@@ -268,7 +269,7 @@ pub fn Router(comptime Server: type) type {
                         .context = ctx,
                         .request = ctx.request,
                         .response = ctx.response,
-                        .fd = -1,
+                        .fd = Cross.fd.INVALID_FD,
                         .file_size = 0,
                         .rd_offset = 0,
                         .current_length = 0,
