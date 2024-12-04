@@ -192,25 +192,35 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        const BindOptions = union(enum) {
-            ip: struct { host: []const u8, port: u16 },
-            unix: []const u8,
+        const BindOptions = switch (builtin.os.tag) {
+            // Currently, don't support unix sockets
+            // on Windows.
+            .windows => union(enum) {
+                ip: struct { host: []const u8, port: u16 },
+            },
+            else => union(enum) {
+                ip: struct { host: []const u8, port: u16 },
+                unix: []const u8,
+            },
         };
 
         pub fn bind(self: *Self, options: BindOptions) !void {
             self.addr = blk: {
-                switch (options) {
-                    .ip => |inner| {
-                        assert(inner.host.len > 0);
-                        assert(inner.port > 0);
+                if (options == .ip) {
+                    const inner = options.ip;
+                    assert(inner.host.len > 0);
+                    assert(inner.port > 0);
 
-                        if (comptime tag.isDarwin() or tag.isBSD() or tag == .windows) {
-                            break :blk try std.net.Address.parseIp(inner.host, inner.port);
-                        } else {
-                            break :blk try std.net.Address.resolveIp(inner.host, inner.port);
-                        }
-                    },
-                    .unix => |path| {
+                    if (comptime builtin.os.tag == .linux) {
+                        break :blk try std.net.Address.resolveIp(inner.host, inner.port);
+                    } else {
+                        break :blk try std.net.Address.parseIp(inner.host, inner.port);
+                    }
+                } else unreachable;
+
+                if (@hasDecl(BindOptions, "unix")) {
+                    if (options == .unix) {
+                        const path = options.unix;
                         assert(path.len > 0);
 
                         // Unlink the existing file if it exists.
@@ -220,8 +230,10 @@ pub fn Server(comptime security: Security) type {
                         };
 
                         break :blk try std.net.Address.initUnix(path);
-                    },
+                    }
                 }
+
+                unreachable;
             };
         }
 

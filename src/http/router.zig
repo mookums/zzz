@@ -128,7 +128,7 @@ pub fn Router(comptime Server: type) type {
                 .body = null,
             });
 
-            const headers = try provision.response.headers_into_buffer(provision.buffer, stat.size);
+            const headers = try provision.response.headers_into_buffer(provision.buffer, @intCast(stat.size));
             provision.current_length = headers.len;
 
             try rt.fs.read(
