@@ -29,7 +29,6 @@ pub fn build(b: *std.Build) void {
     zzz.linkLibrary(bearssl);
 
     add_example(b, "basic", false, target, optimize, zzz, tardy);
-    add_example(b, "unix", false, target, optimize, zzz, tardy);
     add_example(b, "sse", false, target, optimize, zzz, tardy);
     add_example(b, "tls", true, target, optimize, zzz, tardy);
     add_example(b, "minram", false, target, optimize, zzz, tardy);
@@ -37,6 +36,10 @@ pub fn build(b: *std.Build) void {
     add_example(b, "multithread", false, target, optimize, zzz, tardy);
     add_example(b, "benchmark", false, target, optimize, zzz, tardy);
     add_example(b, "valgrind", true, target, optimize, zzz, tardy);
+
+    if (target.result.os.tag != .windows) {
+        add_example(b, "unix", false, target, optimize, zzz, tardy);
+    }
 
     const tests = b.addTest(.{
         .name = "unit-test",

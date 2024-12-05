@@ -216,9 +216,9 @@ pub fn Server(comptime security: Security) type {
                     } else {
                         break :blk try std.net.Address.parseIp(inner.host, inner.port);
                     }
-                } else unreachable;
+                }
 
-                if (@hasDecl(BindOptions, "unix")) {
+                if (comptime @hasField(BindOptions, "unix")) {
                     if (options == .unix) {
                         const path = options.unix;
                         assert(path.len > 0);
