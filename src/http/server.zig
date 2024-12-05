@@ -564,6 +564,7 @@ pub fn Server(comptime security: Security) type {
 
                 provision.recv_buffer.clear_retaining_capacity();
                 provision.job = .{ .recv = .{ .count = 0 } };
+                provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
 
                 try rt.net.recv(
                     provision,
