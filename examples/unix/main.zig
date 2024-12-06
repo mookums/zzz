@@ -4,7 +4,7 @@ const log = std.log.scoped(.@"examples/benchmark");
 const zzz = @import("zzz");
 const http = zzz.HTTP;
 
-const tardy = @import("tardy");
+const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 

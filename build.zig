@@ -28,17 +28,17 @@ pub fn build(b: *std.Build) void {
 
     zzz.linkLibrary(bearssl);
 
-    add_example(b, "basic", false, target, optimize, zzz, tardy);
-    add_example(b, "sse", false, target, optimize, zzz, tardy);
-    add_example(b, "tls", true, target, optimize, zzz, tardy);
-    add_example(b, "minram", false, target, optimize, zzz, tardy);
-    add_example(b, "fs", false, target, optimize, zzz, tardy);
-    add_example(b, "multithread", false, target, optimize, zzz, tardy);
-    add_example(b, "benchmark", false, target, optimize, zzz, tardy);
-    add_example(b, "valgrind", true, target, optimize, zzz, tardy);
+    add_example(b, "basic", false, target, optimize, zzz);
+    add_example(b, "sse", false, target, optimize, zzz);
+    add_example(b, "tls", true, target, optimize, zzz);
+    add_example(b, "minram", false, target, optimize, zzz);
+    add_example(b, "fs", false, target, optimize, zzz);
+    add_example(b, "multithread", false, target, optimize, zzz);
+    add_example(b, "benchmark", false, target, optimize, zzz);
+    add_example(b, "valgrind", true, target, optimize, zzz);
 
     if (target.result.os.tag != .windows) {
-        add_example(b, "unix", false, target, optimize, zzz, tardy);
+        add_example(b, "unix", false, target, optimize, zzz);
     }
 
     const tests = b.addTest(.{
@@ -62,7 +62,6 @@ fn add_example(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
     zzz_module: *std.Build.Module,
-    tardy_module: *std.Build.Module,
 ) void {
     const example = b.addExecutable(.{
         .name = name,
@@ -77,7 +76,6 @@ fn add_example(
     }
 
     example.root_module.addImport("zzz", zzz_module);
-    example.root_module.addImport("tardy", tardy_module);
 
     const install_artifact = b.addInstallArtifact(example, .{});
     b.getInstallStep().dependOn(&install_artifact.step);
