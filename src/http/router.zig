@@ -128,7 +128,10 @@ pub fn Router(comptime Server: type) type {
                 .body = null,
             });
 
-            const headers = try provision.response.headers_into_buffer(provision.buffer, @intCast(stat.size));
+            const headers = try provision.response.headers_into_buffer(
+                provision.buffer,
+                @intCast(stat.size),
+            );
             provision.current_length = headers.len;
 
             try rt.fs.read(
@@ -232,7 +235,6 @@ pub fn Router(comptime Server: type) type {
                     }
 
                     const search_path = ctx.captures[0].remaining;
-
                     const file_path = try std.fmt.allocPrintZ(ctx.allocator, "{s}/{s}", .{ dir_path, search_path });
                     const real_path = std.fs.realpathAlloc(ctx.allocator, file_path) catch {
                         try ctx.respond(.{
@@ -255,7 +257,7 @@ pub fn Router(comptime Server: type) type {
                     const extension_start = std.mem.lastIndexOfScalar(u8, search_path, '.');
                     const mime: Mime = blk: {
                         if (extension_start) |start| {
-                            if (search_path.len - start >= 0) break :blk Mime.BIN;
+                            if (search_path.len - start == 0) break :blk Mime.BIN;
                             break :blk Mime.from_extension(search_path[start + 1 ..]);
                         } else {
                             break :blk Mime.BIN;
