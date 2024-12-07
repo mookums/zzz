@@ -157,11 +157,7 @@ pub fn RoutingTrie(comptime Server: type) type {
         pub fn init(allocator: std.mem.Allocator) !Self {
             return Self{
                 .allocator = allocator,
-                .root = try Node.init(
-                    allocator,
-                    Token{ .fragment = "" },
-                    Route.init(),
-                ),
+                .root = try Node.init(allocator, .{ .fragment = "" }, null),
             };
         }
 
