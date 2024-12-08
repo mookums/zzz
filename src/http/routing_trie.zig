@@ -121,6 +121,7 @@ pub fn RoutingTrie(comptime Server: type) type {
             captures: []Capture,
             queries: *QueryMap,
         };
+
         pub const Node = struct {
             allocator: std.mem.Allocator,
             token: Token,
@@ -165,28 +166,29 @@ pub fn RoutingTrie(comptime Server: type) type {
             self.root.deinit();
         }
 
-        fn print_node(root: *Node) void {
+        fn print_node(root: *const Node) void {
             var iter = root.children.iterator();
 
             while (iter.next()) |entry| {
                 const node_ptr = entry.value_ptr.*;
-                std.io.getStdOut().writer().print(
-                    "Token: {any}\n",
-                    .{node_ptr.token},
-                ) catch return;
+                switch (node_ptr.token) {
+                    .fragment => |inner| std.debug.print("Token: {s}\n", .{inner}),
+                    .match => |match| std.debug.print("Token: Match {s}\n", .{@tagName(match)}),
+                }
                 print_node(entry.value_ptr.*);
             }
         }
 
-        fn print(self: *Self) void {
+        pub fn print(self: *const Self) void {
+            std.debug.print("Root: \n", .{});
             print_node(self.root);
         }
 
         pub fn add_route(self: *Self, path: []const u8, route: Route) !void {
             // This is where we will parse out the path.
             var iter = std.mem.tokenizeScalar(u8, path, '/');
-
             var current = self.root;
+
             while (iter.next()) |chunk| {
                 const token: Token = Token.parse_chunk(chunk);
                 if (current.children.get(token)) |child| {
@@ -209,12 +211,13 @@ pub fn RoutingTrie(comptime Server: type) type {
             path: []const u8,
             captures: []Capture,
             queries: *QueryMap,
-        ) ?FoundRoute {
+        ) !?FoundRoute {
             var capture_idx: usize = 0;
 
             queries.clearRetainingCapacity();
             const query_pos = std.mem.indexOfScalar(u8, path, '?');
             var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
+
             var current = self.root;
 
             slash_loop: while (iter.next()) |chunk| {
@@ -243,12 +246,14 @@ pub fn RoutingTrie(comptime Server: type) type {
                             } else |_| continue,
                             .string => captures[capture_idx] = Capture{ .string = chunk },
                             // This ends the matching sequence and claims everything.
-                            // Does not match the query statement!
+                            // Does not claim the query values.
                             .remaining => {
                                 const rest = iter.buffer[(iter.index - chunk.len)..];
                                 captures[capture_idx] = Capture{ .remaining = rest };
-                                current.route = child.route.?;
+
+                                current = child;
                                 capture_idx += 1;
+
                                 break :slash_loop;
                             },
                         }
@@ -256,18 +261,12 @@ pub fn RoutingTrie(comptime Server: type) type {
                         current = child;
                         capture_idx += 1;
 
-                        if (capture_idx > captures.len) {
-                            // Should return an error here but for now,
-                            // itll just be a null.
-                            return null;
-                        }
-
+                        if (capture_idx > captures.len) return error.TooManyCaptures;
                         break;
                     }
                 }
 
-                // If we failed to match,
-                // this is an invalid route.
+                // If we failed to match, this is an invalid route.
                 if (!matched) {
                     return null;
                 }
@@ -293,9 +292,8 @@ pub fn RoutingTrie(comptime Server: type) type {
                 }
             }
 
-            const route = current.route orelse return null;
             return FoundRoute{
-                .route = route,
+                .route = current.route orelse return null,
                 .captures = captures[0..capture_idx],
                 .queries = queries,
             };

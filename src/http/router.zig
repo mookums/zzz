@@ -354,7 +354,7 @@ pub fn Router(comptime Server: type) type {
             try self.routes.add_route(path, route);
         }
 
-        pub fn get_route_from_host(self: Self, path: []const u8, captures: []Capture, queries: *QueryMap) FoundRoute {
+        pub fn get_route_from_host(self: Self, path: []const u8, captures: []Capture, queries: *QueryMap) !FoundRoute {
             const base_404_route = comptime Route.init().get({}, struct {
                 fn not_found_handler(ctx: *Context, _: void) !void {
                     try ctx.respond(.{
@@ -365,7 +365,7 @@ pub fn Router(comptime Server: type) type {
                 }
             }.not_found_handler);
 
-            return self.routes.get_route(path, captures, queries) orelse {
+            return try self.routes.get_route(path, captures, queries) orelse {
                 queries.clearRetainingCapacity();
                 if (self.not_found_route) |not_found| {
                     return FoundRoute{ .route = not_found, .captures = captures[0..0], .queries = queries };

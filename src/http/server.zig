@@ -800,7 +800,7 @@ pub fn Server(comptime security: Security) type {
 
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
-                const found = router.get_route_from_host(p.request.uri, p.captures, &p.queries);
+                const found = try router.get_route_from_host(p.request.uri, p.captures, &p.queries);
                 const handler = found.route.get_handler(p.request.method);
 
                 if (handler) |h_with_data| {
