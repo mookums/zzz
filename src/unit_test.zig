@@ -26,6 +26,9 @@ test "zzz unit tests" {
     testing.refAllDecls(@import("./http/sse.zig"));
     testing.refAllDecls(@import("./http/status.zig"));
 
+    // Router
+    testing.refAllDecls(@import("./http/router/token_hash_map.zig"));
+
     // TLS
     testing.refAllDecls(@import("./tls/bear.zig"));
 }
