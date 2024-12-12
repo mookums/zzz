@@ -44,7 +44,7 @@ pub fn TokenHashMap(V: type) type {
         const Self = @This();
 
         /// Type of a key-value tuple.
-        const KV = struct {
+        pub const KV = struct {
             Token,
             V,
         };
@@ -93,8 +93,8 @@ pub fn TokenHashMap(V: type) type {
                     index += 1;
                 }
 
-                // Sort the hashes.
-                sort(&result.hashes, 0, kvs.len - 1);
+                // Sort the hashes, if there is something to sort.
+                if (kvs.len > 0) sort(&result.hashes, 0, kvs.len - 1);
 
                 break :kvs result;
             };
@@ -134,6 +134,11 @@ pub fn TokenHashMap(V: type) type {
         pub fn get(self: *const Self, key: Token) MapGetErrors!V {
             return self.values[try self.getIndex(key)];
         }
+
+        /// Try to get the value of a given token key, return NULL if it doesn't exists.
+        pub fn getOptional(self: *const Self, key: Token) ?V {
+            return self.get(key) catch null;
+        }
     };
 }
 
@@ -148,4 +153,5 @@ test TokenHashMap {
     try std.testing.expectEqualStrings("id", try map.get(Token{ .match = .unsigned }));
     try std.testing.expectEqualStrings("remaining", try map.get(Token{ .match = .remaining }));
     try std.testing.expectError(MapGetErrors.NotFound, map.get(Token{ .fragment = "not_found" }));
+    try std.testing.expectEqual(null, map.getOptional(Token{ .fragment = "not_found" }));
 }
