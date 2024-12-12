@@ -303,230 +303,238 @@ pub fn RoutingTrie(comptime Server: type) type {
 
 const testing = std.testing;
 
-//test "Chunk Parsing (Fragment)" {
-//    const chunk = "thisIsAFragment";
-//    const token: Token = Token.parse_chunk(chunk);
-//
-//    switch (token) {
-//        .fragment => |inner| try testing.expectEqualStrings(chunk, inner),
-//        .match => return error.IncorrectTokenParsing,
-//    }
-//}
-//
-//test "Chunk Parsing (Match)" {
-//    const chunks: [5][]const u8 = .{
-//        "%i",
-//        "%d",
-//        "%u",
-//        "%f",
-//        "%s",
-//    };
-//
-//    const matches = [_]TokenMatch{
-//        TokenMatch.signed,
-//        TokenMatch.signed,
-//        TokenMatch.unsigned,
-//        TokenMatch.float,
-//        TokenMatch.string,
-//    };
-//
-//    for (chunks, matches) |chunk, match| {
-//        const token: Token = Token.parse_chunk(chunk);
-//
-//        switch (token) {
-//            .fragment => return error.IncorrectTokenParsing,
-//            .match => |inner| try testing.expectEqual(match, inner),
-//        }
-//    }
-//}
-//
-//test "Path Parsing (Mixed)" {
-//    const path = "/item/%i/description";
-//
-//    const parsed: [3]Token = .{
-//        .{ .fragment = "item" },
-//        .{ .match = .signed },
-//        .{ .fragment = "description" },
-//    };
-//
-//    var iter = std.mem.tokenizeScalar(u8, path, '/');
-//
-//    for (parsed) |expected| {
-//        const token = Token.parse_chunk(iter.next().?);
-//        switch (token) {
-//            .fragment => |inner| try testing.expectEqualStrings(expected.fragment, inner),
-//            .match => |inner| try testing.expectEqual(expected.match, inner),
-//        }
-//    }
-//}
-//
-//test "Custom Hashing" {
-//    var s = TokenHashMap(bool).init(testing.allocator);
-//    {
-//        try s.put(.{ .fragment = "item" }, true);
-//        try s.put(.{ .fragment = "thisisfalse" }, false);
-//
-//        const state = s.get(.{ .fragment = "item" }).?;
-//        try testing.expect(state);
-//
-//        const should_be_false = s.get(.{ .fragment = "thisisfalse" }).?;
-//        try testing.expect(!should_be_false);
-//    }
-//
-//    {
-//        try s.put(.{ .match = .unsigned }, true);
-//        try s.put(.{ .match = .float }, false);
-//        try s.put(.{ .match = .string }, false);
-//
-//        const state = s.get(.{ .match = .unsigned }).?;
-//        try testing.expect(state);
-//
-//        const should_be_false = s.get(.{ .match = .float }).?;
-//        try testing.expect(!should_be_false);
-//
-//        const string_state = s.get(.{ .match = .string }).?;
-//        try testing.expect(!string_state);
-//    }
-//
-//    defer s.deinit();
-//}
-//
-//test "Constructing Routing from Path" {
-//    var s = try RoutingTrie.init(testing.allocator);
-//    defer s.deinit();
-//
-//    try s.add_route("/item", Route.init());
-//    try s.add_route("/item/%i/description", Route.init());
-//    try s.add_route("/item/%i/hello", Route.init());
-//    try s.add_route("/item/%f/price_float", Route.init());
-//    try s.add_route("/item/name/%s", Route.init());
-//    try s.add_route("/item/list", Route.init());
-//
-//    try testing.expectEqual(1, s.root.children.count());
-//}
-//
-//test "Routing with Paths" {
-//    var s = try RoutingTrie.init(testing.allocator);
-//    defer s.deinit();
-//
-//    var q = QueryMap.init(testing.allocator);
-//    try q.ensureTotalCapacity(8);
-//    defer q.deinit();
-//
-//    var captures: [8]Capture = [_]Capture{undefined} ** 8;
-//
-//    try s.add_route("/item", Route.init());
-//    try s.add_route("/item/%i/description", Route.init());
-//    try s.add_route("/item/%i/hello", Route.init());
-//    try s.add_route("/item/%f/price_float", Route.init());
-//    try s.add_route("/item/name/%s", Route.init());
-//    try s.add_route("/item/list", Route.init());
-//
-//    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
-//
-//    {
-//        const captured = s.get_route("/item/name/HELLO", captures[0..], &q).?;
-//
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqualStrings("HELLO", captured.captures[0].string);
-//    }
-//
-//    {
-//        const captured = s.get_route("/item/2112.22121/price_float", captures[0..], &q).?;
-//
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqual(2112.22121, captured.captures[0].float);
-//    }
-//}
-//
-//test "Routing with Remaining" {
-//    var s = try RoutingTrie.init(testing.allocator);
-//    defer s.deinit();
-//
-//    var q = QueryMap.init(testing.allocator);
-//    try q.ensureTotalCapacity(8);
-//    defer q.deinit();
-//
-//    var captures: [8]Capture = [_]Capture{undefined} ** 8;
-//
-//    try s.add_route("/item", Route.init());
-//    try s.add_route("/item/%f/price_float", Route.init());
-//    try s.add_route("/item/name/%r", Route.init());
-//    try s.add_route("/item/%i/price/%f", Route.init());
-//
-//    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
-//
-//    {
-//        const captured = s.get_route("/item/name/HELLO", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
-//    }
-//    {
-//        const captured = s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
-//    }
-//
-//    {
-//        const captured = s.get_route("/item/2112.22121/price_float", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqual(2112.22121, captured.captures[0].float);
-//    }
-//
-//    {
-//        const captured = s.get_route("/item/100/price/283.21", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqual(100, captured.captures[0].signed);
-//        try testing.expectEqual(283.21, captured.captures[1].float);
-//    }
-//}
-//
-//test "Routing with Queries" {
-//    var s = try RoutingTrie.init(testing.allocator);
-//    defer s.deinit();
-//
-//    var q = QueryMap.init(testing.allocator);
-//    try q.ensureTotalCapacity(8);
-//    defer q.deinit();
-//
-//    var captures: [8]Capture = [_]Capture{undefined} ** 8;
-//
-//    try s.add_route("/item", Route.init());
-//    try s.add_route("/item/%f/price_float", Route.init());
-//    try s.add_route("/item/name/%r", Route.init());
-//    try s.add_route("/item/%i/price/%f", Route.init());
-//
-//    try testing.expectEqual(null, s.get_route("/item/name", captures[0..], &q));
-//
-//    {
-//        const captured = s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
-//        try testing.expectEqual(2, q.count());
-//        try testing.expectEqualStrings("muki", q.get("name").?);
-//        try testing.expectEqualStrings("waffle", q.get("food").?);
-//    }
-//
-//    {
-//        // Purposefully bad format with no keys or values.
-//        const captured = s.get_route("/item/2112.22121/price_float?", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqual(2112.22121, captured.captures[0].float);
-//        try testing.expectEqual(0, q.count());
-//    }
-//
-//    {
-//        // Purposefully bad format with incomplete key/value pair.
-//        const captured = s.get_route("/item/100/price/283.21?help", captures[0..], &q).?;
-//        try testing.expectEqual(Route.init(), captured.route);
-//        try testing.expectEqual(100, captured.captures[0].signed);
-//        try testing.expectEqual(283.21, captured.captures[1].float);
-//        try testing.expectEqual(0, q.count());
-//    }
-//
-//    {
-//        // Purposefully have too many queries.
-//        const captured = s.get_route("/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11", captures[0..], &q);
-//        try testing.expectEqual(null, captured);
-//    }
-//}
+test "Chunk Parsing (Fragment)" {
+    const chunk = "thisIsAFragment";
+    const token: Token = Token.parse_chunk(chunk);
+
+    switch (token) {
+        .fragment => |inner| try testing.expectEqualStrings(chunk, inner),
+        .match => return error.IncorrectTokenParsing,
+    }
+}
+
+test "Chunk Parsing (Match)" {
+    const chunks: [5][]const u8 = .{
+        "%i",
+        "%d",
+        "%u",
+        "%f",
+        "%s",
+    };
+
+    const matches = [_]TokenMatch{
+        TokenMatch.signed,
+        TokenMatch.signed,
+        TokenMatch.unsigned,
+        TokenMatch.float,
+        TokenMatch.string,
+    };
+
+    for (chunks, matches) |chunk, match| {
+        const token: Token = Token.parse_chunk(chunk);
+
+        switch (token) {
+            .fragment => return error.IncorrectTokenParsing,
+            .match => |inner| try testing.expectEqual(match, inner),
+        }
+    }
+}
+
+test "Path Parsing (Mixed)" {
+    const path = "/item/%i/description";
+
+    const parsed: [3]Token = .{
+        .{ .fragment = "item" },
+        .{ .match = .signed },
+        .{ .fragment = "description" },
+    };
+
+    var iter = std.mem.tokenizeScalar(u8, path, '/');
+
+    for (parsed) |expected| {
+        const token = Token.parse_chunk(iter.next().?);
+        switch (token) {
+            .fragment => |inner| try testing.expectEqualStrings(expected.fragment, inner),
+            .match => |inner| try testing.expectEqual(expected.match, inner),
+        }
+    }
+}
+
+test "Custom Hashing" {
+    var s = TokenHashMap(bool).init(testing.allocator);
+    {
+        try s.put(.{ .fragment = "item" }, true);
+        try s.put(.{ .fragment = "thisisfalse" }, false);
+
+        const state = s.get(.{ .fragment = "item" }).?;
+        try testing.expect(state);
+
+        const should_be_false = s.get(.{ .fragment = "thisisfalse" }).?;
+        try testing.expect(!should_be_false);
+    }
+
+    {
+        try s.put(.{ .match = .unsigned }, true);
+        try s.put(.{ .match = .float }, false);
+        try s.put(.{ .match = .string }, false);
+
+        const state = s.get(.{ .match = .unsigned }).?;
+        try testing.expect(state);
+
+        const should_be_false = s.get(.{ .match = .float }).?;
+        try testing.expect(!should_be_false);
+
+        const string_state = s.get(.{ .match = .string }).?;
+        try testing.expect(!string_state);
+    }
+
+    defer s.deinit();
+}
+
+test "Constructing Routing from Path" {
+    const Route = _Route(void);
+
+    var s = try RoutingTrie(void).init(testing.allocator);
+    defer s.deinit();
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%i/description", Route.init());
+    try s.add_route("/item/%i/hello", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%s", Route.init());
+    try s.add_route("/item/list", Route.init());
+
+    try testing.expectEqual(1, s.root.children.count());
+}
+
+test "Routing with Paths" {
+    const Route = _Route(void);
+
+    var s = try RoutingTrie(void).init(testing.allocator);
+    defer s.deinit();
+
+    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
+    try q.ensureTotalCapacity(testing.allocator, 8);
+    defer q.deinit(testing.allocator);
+
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%i/description", Route.init());
+    try s.add_route("/item/%i/hello", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%s", Route.init());
+    try s.add_route("/item/list", Route.init());
+
+    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+
+    {
+        const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].string);
+    }
+
+    {
+        const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
+
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
+    }
+}
+
+test "Routing with Remaining" {
+    const Route = _Route(void);
+
+    var s = try RoutingTrie(void).init(testing.allocator);
+    defer s.deinit();
+
+    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
+    try q.ensureTotalCapacity(testing.allocator, 8);
+    defer q.deinit(testing.allocator);
+
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%r", Route.init());
+    try s.add_route("/item/%i/price/%f", Route.init());
+
+    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+
+    {
+        const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
+    }
+    {
+        const captured = (try s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
+    }
+
+    {
+        const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
+    }
+
+    {
+        const captured = (try s.get_route("/item/100/price/283.21", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(100, captured.captures[0].signed);
+        try testing.expectEqual(283.21, captured.captures[1].float);
+    }
+}
+
+test "Routing with Queries" {
+    const Route = _Route(void);
+
+    var s = try RoutingTrie(void).init(testing.allocator);
+    defer s.deinit();
+
+    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
+    try q.ensureTotalCapacity(testing.allocator, 8);
+    defer q.deinit(testing.allocator);
+
+    var captures: [8]Capture = [_]Capture{undefined} ** 8;
+
+    try s.add_route("/item", Route.init());
+    try s.add_route("/item/%f/price_float", Route.init());
+    try s.add_route("/item/name/%r", Route.init());
+    try s.add_route("/item/%i/price/%f", Route.init());
+
+    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+
+    {
+        const captured = (try s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
+        try testing.expectEqual(2, q.count());
+        try testing.expectEqualStrings("muki", q.get("name").?);
+        try testing.expectEqualStrings("waffle", q.get("food").?);
+    }
+
+    {
+        // Purposefully bad format with no keys or values.
+        const captured = (try s.get_route("/item/2112.22121/price_float?", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(2112.22121, captured.captures[0].float);
+        try testing.expectEqual(0, q.count());
+    }
+
+    {
+        // Purposefully bad format with incomplete key/value pair.
+        const captured = (try s.get_route("/item/100/price/283.21?help", captures[0..], &q)).?;
+        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(100, captured.captures[0].signed);
+        try testing.expectEqual(283.21, captured.captures[1].float);
+        try testing.expectEqual(0, q.count());
+    }
+
+    {
+        // Purposefully have too many queries.
+        const captured = try s.get_route("/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11", captures[0..], &q);
+        try testing.expectEqual(null, captured);
+    }
+}
