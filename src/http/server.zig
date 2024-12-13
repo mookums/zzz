@@ -34,6 +34,10 @@ pub const AsyncIOType = @import("tardy").AsyncIOType;
 const TardyCreator = @import("tardy").Tardy;
 const Cross = @import("tardy").Cross;
 
+const AcceptResult = @import("tardy").AcceptResult;
+const RecvResult = @import("tardy").RecvResult;
+const SendResult = @import("tardy").SendResult;
+
 pub const RecvStatus = union(enum) {
     kill,
     recv,
@@ -278,19 +282,22 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        fn accept_task(rt: *Runtime, child_socket: std.posix.socket_t, socket: std.posix.socket_t) !void {
-            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
+        fn accept_task(rt: *Runtime, result: AcceptResult, socket: std.posix.socket_t) !void {
             const accept_queued = rt.storage.get_ptr("__zzz_accept_queued", bool);
+
+            const child_socket = result.unwrap() catch |e| {
+                log.err("socket accept failed | {}", .{e});
+                accept_queued.* = true;
+                try rt.net.accept(socket, accept_task, socket);
+                return;
+            };
+
+            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
             accept_queued.* = false;
 
             if (rt.scheduler.tasks.clean() >= 2) {
                 accept_queued.* = true;
                 try rt.net.accept(socket, accept_task, socket);
-            }
-
-            if (!Cross.socket.is_valid(child_socket)) {
-                log.err("socket accept failed", .{});
-                return error.AcceptFailed;
             }
 
             // This should never fail. It means that we have a dangling item.
@@ -348,19 +355,23 @@ pub fn Server(comptime security: Security) type {
             }
         }
 
-        fn recv_task(rt: *Runtime, length: i32, provision: *Provision) !void {
+        fn recv_task(rt: *Runtime, result: RecvResult, provision: *Provision) !void {
             assert(provision.job == .recv);
+
+            // If the socket is closed.
+            const length = result.unwrap() catch |e| {
+                if (e != error.Closed) {
+                    log.warn("socket recv failed | {}", .{e});
+                }
+                provision.job = .close;
+                try rt.net.close(provision, close_task, provision.socket);
+                return;
+            };
+
             const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
             const router = rt.storage.get_const_ptr("__zzz_router", Router);
 
             const recv_job = &provision.job.recv;
-
-            // If the socket is closed.
-            if (length <= 0) {
-                provision.job = .close;
-                try rt.net.close(provision, close_task, provision.socket);
-                return;
-            }
 
             log.debug("{d} - recv triggered", .{provision.index});
 
@@ -484,7 +495,12 @@ pub fn Server(comptime security: Security) type {
         }
 
         /// Prepares the provision send_job and returns the first send chunk
-        pub fn prepare_send(rt: *Runtime, provision: *Provision, after: AfterType, pslice: Pseudoslice) ![]const u8 {
+        pub fn prepare_send(
+            rt: *Runtime,
+            provision: *Provision,
+            after: AfterType,
+            pslice: Pseudoslice,
+        ) ![]const u8 {
             const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
             const plain_buffer = pslice.get(0, config.socket_buffer_bytes);
 
@@ -575,17 +591,21 @@ pub fn Server(comptime security: Security) type {
             }
         }.inner);
 
-        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
+        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(SendResult, *Provision) {
             return struct {
-                fn send_then_inner(rt: *Runtime, length: i32, provision: *Provision) !void {
+                fn send_then_inner(rt: *Runtime, result: SendResult, provision: *Provision) !void {
                     assert(provision.job == .send);
                     const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
                     // If the socket is closed.
-                    if (length <= 0) {
-                        try @call(.always_inline, func, .{ rt, false, provision });
+                    const length = result.unwrap() catch |e| {
+                        if (e != error.ConnectionReset) {
+                            log.warn("socket send failed | {}", .{e});
+                        }
+
+                        try @call(.auto, func, .{ rt, false, provision });
                         return;
-                    }
+                    };
 
                     const send_job = &provision.job.send;
 
@@ -604,7 +624,7 @@ pub fn Server(comptime security: Security) type {
 
                             if (job_tls.encrypted_count >= job_tls.encrypted.len) {
                                 if (send_job.count >= send_job.slice.len) {
-                                    try @call(.always_inline, func, .{ rt, true, provision });
+                                    try @call(.auto, func, .{ rt, true, provision });
                                 } else {
                                     // Queue a new chunk up for sending.
                                     log.debug(
@@ -659,7 +679,7 @@ pub fn Server(comptime security: Security) type {
                             send_job.count += send_count;
 
                             if (send_job.count >= send_job.slice.len) {
-                                try @call(.always_inline, func, .{ rt, true, provision });
+                                try @call(.auto, func, .{ rt, true, provision });
                             } else {
                                 log.debug(
                                     "{d} - sending next chunk starting at index {d}",
@@ -695,7 +715,7 @@ pub fn Server(comptime security: Security) type {
             }.send_then_inner;
         }
 
-        pub inline fn serve(self: *Self, router: *const Router, rt: *Runtime) !void {
+        pub fn serve(self: *Self, router: *const Router, rt: *Runtime) !void {
             if (self.addr == null) return error.ServerNotBinded;
             const addr = self.addr.?;
             try rt.storage.store_alloc("__zzz_is_unix", addr.any.family == std.posix.AF.UNIX);
@@ -741,7 +761,7 @@ pub fn Server(comptime security: Security) type {
             try rt.net.accept(socket, accept_task, socket);
         }
 
-        pub inline fn clean(rt: *Runtime) !void {
+        pub fn clean(rt: *Runtime) !void {
             // clean up socket.
             const server_socket = rt.storage.get("__zzz_server_socket", std.posix.socket_t);
             std.posix.close(server_socket);
