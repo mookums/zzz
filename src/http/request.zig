@@ -35,7 +35,7 @@ pub const Request = struct {
     pub fn clear(self: *Request) void {
         self.method = undefined;
         self.uri = undefined;
-        self.body = undefined;
+        self.body = "";
         self.headers.clearRetainingCapacity();
     }
 
