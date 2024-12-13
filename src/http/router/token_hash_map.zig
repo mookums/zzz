@@ -107,6 +107,52 @@ pub fn TokenHashMap(V: type) type {
             };
         }
 
+        /// Get raw key-value tuples of the current map.
+        pub fn getKvs(self: *const Self) []const KV {
+            var kvs: [self.keys.len]KV = undefined;
+            for (&kvs, self.keys, self.values) |*kv, key, value| {
+                kv.* = .{key, value};
+            }
+            return &kvs;
+        }
+
+        /// Initialize a cloned token hash map with the provided new key-value tuples.
+        pub fn withKvs(self: *const Self, comptime newKvs: []const KV) Self {
+            // Get key-value tuples to remove from clones: they are overridden by new key-value tuples.
+            const kvsToRemove = comptime kvsToRemove: {
+                var kvs: []const usize = &[0]usize{};
+
+                for (newKvs) |kv| {
+                    const index: ?usize = self.getIndex(kv[0]) catch null;
+                    if (index) |idx| {
+                        kvs = kvs ++ .{idx};
+                    }
+                }
+
+                break :kvsToRemove kvs;
+            };
+
+            // Get key-value tuples to clone: all key-value tuples of the current map, without the overridden ones.
+            const kvsToClone = if (kvsToRemove.len > 0) comptime kvs: {
+                var kvs: []KV = &[0]KV{};
+
+                var kvsToRemoveIndex = 0;
+                var i = 0;
+                for (self.getKvs()) |kv| {
+                    if (kvsToRemoveIndex < kvsToRemove.len and i != kvsToRemove[kvsToRemoveIndex]) {
+                        kvs = kvs ++ .{kv};
+                    } else {
+                        kvsToRemoveIndex += 1;
+                    }
+                    i += 1;
+                }
+
+                break :kvs kvs;
+            } else self.getKvs();
+
+            return Self.initComptime(kvsToClone ++ newKvs);
+        }
+
         /// Get the index in keys / values array from the provided token key.
         pub fn getIndex(self: *const Self, key: Token) MapGetErrors!usize {
             // Get the current key hash.
