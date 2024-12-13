@@ -4,46 +4,7 @@ const log = std.log.scoped(.@"zzz/http/routing_trie");
 
 const CaseStringMap = @import("../core/case_string_map.zig").CaseStringMap;
 const _Route = @import("route.zig").Route;
-
-fn TokenHashMap(comptime V: type) type {
-    return std.HashMap(Token, V, struct {
-        pub fn hash(self: @This(), input: Token) u64 {
-            _ = self;
-
-            const bytes = blk: {
-                switch (input) {
-                    .fragment => |inner| break :blk inner,
-                    .match => |inner| break :blk @tagName(inner),
-                }
-            };
-
-            return std.hash.Wyhash.hash(0, bytes);
-        }
-
-        pub fn eql(self: @This(), first: Token, second: Token) bool {
-            _ = self;
-
-            const result = blk: {
-                switch (first) {
-                    .fragment => |f_inner| {
-                        switch (second) {
-                            .fragment => |s_inner| break :blk std.mem.eql(u8, f_inner, s_inner),
-                            else => break :blk false,
-                        }
-                    },
-                    .match => |f_inner| {
-                        switch (second) {
-                            .match => |s_inner| break :blk f_inner == s_inner,
-                            else => break :blk false,
-                        }
-                    },
-                }
-            };
-
-            return result;
-        }
-    }, 80);
-}
+const TokenHashMap = @import("router/token_hash_map.zig").TokenHashMap;
 
 // These tokens are for the Routes when assembling the
 // Routing Trie. This allows for every sub-path to be
@@ -116,94 +77,115 @@ pub fn RoutingTrie(comptime Server: type) type {
         const Self = @This();
         const Route = _Route(Server);
 
+        /// Structure of a matched route.
         pub const FoundRoute = struct {
             route: Route,
             captures: []Capture,
             queries: *QueryMap,
         };
 
+        /// Structure of a node of the trie.
         pub const Node = struct {
-            allocator: std.mem.Allocator,
+            pub const ChildrenMap = TokenHashMap(*const Node);
+
             token: Token,
             route: ?Route = null,
-            children: TokenHashMap(*Node),
+            children: ChildrenMap,
 
-            pub fn init(allocator: std.mem.Allocator, token: Token, route: ?Route) !*Node {
-                const node_ptr: *Node = try allocator.create(Node);
-                node_ptr.* = Node{
-                    .allocator = allocator,
+            /// Initialize a new empty node.
+            pub fn init(token: Token, route: ?Route) Node {
+                return Node{
                     .token = token,
                     .route = route,
-                    .children = TokenHashMap(*Node).init(allocator),
+                    .children = ChildrenMap.initComptime(&[0]ChildrenMap.KV{}),
                 };
-
-                return node_ptr;
             }
 
-            pub fn deinit(self: *Node) void {
-                var iter = self.children.valueIterator();
-
-                while (iter.next()) |node| {
-                    node.*.deinit();
-                }
-
-                self.children.deinit();
-                self.allocator.destroy(self);
+            /// Initialize a cloned node with a new child for the provided token.
+            pub fn withChild(self: *const Node, token: Token, node: *const Node) Node {
+                return Node{
+                    .token = self.token,
+                    .route = self.route,
+                    .children = self.children.withKvs(&[_]ChildrenMap.KV{.{ token, node }})
+                };
             }
         };
 
-        allocator: std.mem.Allocator,
-        root: *Node,
+        root: Node = Node.init(.{ .fragment = "" }, null),
 
-        pub fn init(allocator: std.mem.Allocator) !Self {
-            return Self{
-                .allocator = allocator,
-                .root = try Node.init(allocator, .{ .fragment = "" }, null),
-            };
+        /// Initialize the routing tree with the given routes.
+        pub fn init(comptime routes: []const Route) Self {
+            return (Self{}).withRoutes(routes);
         }
 
-        pub fn deinit(self: *Self) void {
-            self.root.deinit();
-        }
-
-        fn print_node(root: *const Node) void {
-            var iter = root.children.iterator();
-
-            while (iter.next()) |entry| {
-                const node_ptr = entry.value_ptr.*;
-                switch (node_ptr.token) {
-                    .fragment => |inner| std.debug.print("Token: {s}\n", .{inner}),
-                    .match => |match| std.debug.print("Token: Match {s}\n", .{@tagName(match)}),
+        fn print_node(root: *const Node, depth: usize) void {
+            for (root.children.values) |node| {
+                var i: usize = 0;
+                while (i < depth) : (i += 1) {
+                    std.debug.print(" │  ", .{});
                 }
-                print_node(entry.value_ptr.*);
+
+                std.debug.print(" ├ ", .{});
+
+                switch (node.token) {
+                    .fragment => |inner| std.debug.print("Token: {s}", .{inner}),
+                    .match => |match| std.debug.print("Token: Match {s}", .{@tagName(match)}),
+                }
+                if (node.route != null) {
+                    std.debug.print("  ⃝", .{});
+                }
+                std.debug.print("\n", .{});
+
+
+                print_node(node, depth + 1);
             }
         }
 
         pub fn print(self: *const Self) void {
             std.debug.print("Root: \n", .{});
-            print_node(self.root);
+            print_node(&(self.root), 0);
         }
 
-        pub fn add_route(self: *Self, path: []const u8, route: Route) !void {
-            // This is where we will parse out the path.
-            var iter = std.mem.tokenizeScalar(u8, path, '/');
-            var current = self.root;
-
-            while (iter.next()) |chunk| {
+        /// Initialize new trie node for the next token.
+        fn _withRoute(comptime node: *const Node, comptime iterator: *std.mem.TokenIterator(u8, .scalar), comptime route: Route) Node {
+            if (iterator.next()) |chunk| {
+                // Parse the current chunk.
                 const token: Token = Token.parse_chunk(chunk);
-                if (current.children.get(token)) |child| {
-                    current = child;
-                } else {
-                    try current.children.put(
-                        token,
-                        try Node.init(self.allocator, token, null),
-                    );
-
-                    current = current.children.get(token).?;
-                }
+                // Alter the child of the current node.
+                return node.withChild(token, &(_withRoute(
+                    node.children.getOptional(token) orelse &(Node.init(token, null)),
+                    iterator,
+                    route,
+                )));
+            } else {
+                // We reached the last node, returning it with the provided route.
+                return Node{
+                    .token = node.token,
+                    .route = route,
+                    .children = node.children,
+                };
             }
+        }
 
-            current.route = route;
+        /// Copy the current routing trie to add the provided route.
+        pub fn withRoute(comptime self: *const Self, comptime route: Route) Self {
+            @setEvalBranchQuota(10000);
+
+            // This is where we will parse out the path.
+            comptime var iterator = std.mem.tokenizeScalar(u8, route.path, '/');
+
+            return Self{
+                .root = _withRoute(&(self.root), &iterator, route),
+            };
+        }
+
+        /// Copy the current routing trie to add all the provided routes.
+        pub fn withRoutes(comptime self: *const Self, comptime routes: []const Route) Self {
+            comptime var current = self.*;
+            inline for (routes) |route| {
+                current = current.withRoute(route);
+            }
+            return current;
         }
 
         pub fn get_route(
@@ -224,15 +206,15 @@ pub fn RoutingTrie(comptime Server: type) type {
                 const fragment = Token{ .fragment = chunk };
 
                 // If it is the fragment, match it here.
-                if (current.children.get(fragment)) |child| {
-                    current = child;
+                if (current.children.getOptional(fragment)) |child| {
+                    current = child.*;
                     continue;
                 }
 
                 var matched = false;
                 for (std.meta.tags(TokenMatch)) |token_type| {
                     const token = Token{ .match = token_type };
-                    if (current.children.get(token)) |child| {
+                    if (current.children.getOptional(token)) |child| {
                         matched = true;
                         switch (token_type) {
                             .signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
@@ -251,14 +233,14 @@ pub fn RoutingTrie(comptime Server: type) type {
                                 const rest = iter.buffer[(iter.index - chunk.len)..];
                                 captures[capture_idx] = Capture{ .remaining = rest };
 
-                                current = child;
+                                current = child.*;
                                 capture_idx += 1;
 
                                 break :slash_loop;
                             },
                         }
 
-                        current = child;
+                        current = child.*;
                         capture_idx += 1;
 
                         if (capture_idx > captures.len) return error.TooManyCaptures;
@@ -360,58 +342,32 @@ test "Path Parsing (Mixed)" {
     }
 }
 
-test "Custom Hashing" {
-    var s = TokenHashMap(bool).init(testing.allocator);
-    {
-        try s.put(.{ .fragment = "item" }, true);
-        try s.put(.{ .fragment = "thisisfalse" }, false);
-
-        const state = s.get(.{ .fragment = "item" }).?;
-        try testing.expect(state);
-
-        const should_be_false = s.get(.{ .fragment = "thisisfalse" }).?;
-        try testing.expect(!should_be_false);
-    }
-
-    {
-        try s.put(.{ .match = .unsigned }, true);
-        try s.put(.{ .match = .float }, false);
-        try s.put(.{ .match = .string }, false);
-
-        const state = s.get(.{ .match = .unsigned }).?;
-        try testing.expect(state);
-
-        const should_be_false = s.get(.{ .match = .float }).?;
-        try testing.expect(!should_be_false);
-
-        const string_state = s.get(.{ .match = .string }).?;
-        try testing.expect(!string_state);
-    }
-
-    defer s.deinit();
-}
-
 test "Constructing Routing from Path" {
     const Route = _Route(void);
 
-    var s = try RoutingTrie(void).init(testing.allocator);
-    defer s.deinit();
+    const s = comptime RoutingTrie(void).init(&[_]Route{
+        Route.init("/item"),
+        Route.init("/item/%i/description"),
+        Route.init("/item/%i/hello"),
+        Route.init("/item/%f/price_float"),
+        Route.init("/item/name/%s"),
+        Route.init("/item/list"),
+    });
 
-    try s.add_route("/item", Route.init());
-    try s.add_route("/item/%i/description", Route.init());
-    try s.add_route("/item/%i/hello", Route.init());
-    try s.add_route("/item/%f/price_float", Route.init());
-    try s.add_route("/item/name/%s", Route.init());
-    try s.add_route("/item/list", Route.init());
-
-    try testing.expectEqual(1, s.root.children.count());
+    try testing.expectEqual(1, s.root.children.keys.len);
 }
 
 test "Routing with Paths" {
     const Route = _Route(void);
 
-    var s = try RoutingTrie(void).init(testing.allocator);
-    defer s.deinit();
+    const s = comptime RoutingTrie(void).init(&[_]Route{
+        Route.init("/item"),
+        Route.init("/item/%i/description"),
+        Route.init("/item/%i/hello"),
+        Route.init("/item/%f/price_float"),
+        Route.init("/item/name/%s"),
+        Route.init("/item/list"),
+    });
 
     var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
     try q.ensureTotalCapacity(testing.allocator, 8);
@@ -419,26 +375,19 @@ test "Routing with Paths" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try s.add_route("/item", Route.init());
-    try s.add_route("/item/%i/description", Route.init());
-    try s.add_route("/item/%i/hello", Route.init());
-    try s.add_route("/item/%f/price_float", Route.init());
-    try s.add_route("/item/name/%s", Route.init());
-    try s.add_route("/item/list", Route.init());
-
     try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
 
     {
         const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
 
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/name/%s"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
         const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
 
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 }
@@ -446,8 +395,12 @@ test "Routing with Paths" {
 test "Routing with Remaining" {
     const Route = _Route(void);
 
-    var s = try RoutingTrie(void).init(testing.allocator);
-    defer s.deinit();
+    const s = comptime RoutingTrie(void).init(&[_]Route{
+        Route.init("/item"),
+        Route.init("/item/%f/price_float"),
+        Route.init("/item/name/%r"),
+        Route.init("/item/%i/price/%f"),
+    });
 
     var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
     try q.ensureTotalCapacity(testing.allocator, 8);
@@ -455,33 +408,28 @@ test "Routing with Remaining" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try s.add_route("/item", Route.init());
-    try s.add_route("/item/%f/price_float", Route.init());
-    try s.add_route("/item/name/%r", Route.init());
-    try s.add_route("/item/%i/price/%f", Route.init());
-
     try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
 
     {
         const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
         const captured = (try s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
     {
         const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
     {
         const captured = (try s.get_route("/item/100/price/283.21", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
     }
@@ -490,8 +438,12 @@ test "Routing with Remaining" {
 test "Routing with Queries" {
     const Route = _Route(void);
 
-    var s = try RoutingTrie(void).init(testing.allocator);
-    defer s.deinit();
+    const s = comptime RoutingTrie(void).init(&[_]Route{
+        Route.init("/item"),
+        Route.init("/item/%f/price_float"),
+        Route.init("/item/name/%r"),
+        Route.init("/item/%i/price/%f"),
+    });
 
     var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
     try q.ensureTotalCapacity(testing.allocator, 8);
@@ -499,16 +451,11 @@ test "Routing with Queries" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try s.add_route("/item", Route.init());
-    try s.add_route("/item/%f/price_float", Route.init());
-    try s.add_route("/item/name/%r", Route.init());
-    try s.add_route("/item/%i/price/%f", Route.init());
-
     try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
 
     {
         const captured = (try s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
         try testing.expectEqual(2, q.count());
         try testing.expectEqualStrings("muki", q.get("name").?);
@@ -518,7 +465,7 @@ test "Routing with Queries" {
     {
         // Purposefully bad format with no keys or values.
         const captured = (try s.get_route("/item/2112.22121/price_float?", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
         try testing.expectEqual(0, q.count());
     }
@@ -526,7 +473,7 @@ test "Routing with Queries" {
     {
         // Purposefully bad format with incomplete key/value pair.
         const captured = (try s.get_route("/item/100/price/283.21?help", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init(), captured.route);
+        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
         try testing.expectEqual(0, q.count());

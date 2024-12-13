@@ -7,6 +7,7 @@ const Response = @import("response.zig").Response;
 
 const Context = @import("context.zig").Context;
 
+/// Structure of a server route definition.
 pub fn Route(comptime Server: type) type {
     return struct {
         const Self = @This();
@@ -19,6 +20,10 @@ pub fn Route(comptime Server: type) type {
             data: usize,
         };
 
+        /// Defined route path.
+        path: []const u8,
+
+        /// Route handlers.
         handlers: [9]?HandlerWithData = [_]?HandlerWithData{null} ** 9,
 
         fn method_to_index(method: Method) u32 {
@@ -35,8 +40,12 @@ pub fn Route(comptime Server: type) type {
             };
         }
 
-        pub fn init() Self {
-            return Self{ .handlers = [_]?HandlerWithData{null} ** 9 };
+        /// Initialize a route for the given path.
+        pub fn init(_path: []const u8) Self {
+            return Self{
+                .path = _path,
+                .handlers = [_]?HandlerWithData{null} ** 9,
+            };
         }
 
         /// Returns a comma delinated list of allowed Methods for this route. This
