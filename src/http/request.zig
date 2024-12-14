@@ -142,7 +142,7 @@ test "Parse Request" {
     });
 
     try testing.expectEqual(.GET, request.method);
-    try testing.expectEqualStrings("/", request.uri);
+    try testing.expectEqualStrings("/", request.uri.?);
     try testing.expectEqual(.@"HTTP/1.1", request.version);
 
     try testing.expectEqualStrings("localhost:9862", request.headers.get("Host").?);
