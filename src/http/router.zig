@@ -46,7 +46,7 @@ pub fn Router(comptime Server: type, comptime UserState: type) type {
         }
 
         pub fn get_route_from_host(self: Self, path: []const u8, captures: []Capture, queries: *QueryMap) !FoundRoute {
-            const base_404_route = comptime Route.init("/notfound").get(struct {
+            const base_404_route = comptime Route.init("").get(struct {
                 fn not_found_handler(ctx: *Context) !void {
                     try ctx.respond(.{
                         .status = .@"Not Found",

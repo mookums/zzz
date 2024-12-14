@@ -89,7 +89,7 @@ pub fn main() !void {
         }.handler_fn),
     });
 
-    router.serve_not_found(Route.init("/notfound").get(struct {
+    router.serve_not_found(Route.init("").get(struct {
         fn handler_fn(ctx: *Context) !void {
             try ctx.respond(.{
                 .status = .@"Not Found",
