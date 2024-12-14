@@ -2,9 +2,9 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/routing_trie");
 
-const CaseStringMap = @import("../core/case_string_map.zig").CaseStringMap;
+const CaseStringMap = @import("../../core/case_string_map.zig").CaseStringMap;
 const _Route = @import("route.zig").Route;
-const TokenHashMap = @import("router/token_hash_map.zig").TokenHashMap;
+const TokenHashMap = @import("token_hash_map.zig").TokenHashMap;
 
 // These tokens are for the Routes when assembling the
 // Routing Trie. This allows for every sub-path to be
@@ -72,10 +72,10 @@ pub const Capture = union(TokenMatch) {
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
-pub fn RoutingTrie(comptime Server: type) type {
+pub fn RoutingTrie(comptime Server: type, comptime UserState: type) type {
     return struct {
         const Self = @This();
-        const Route = _Route(Server);
+        const Route = _Route(Server, UserState);
 
         /// Structure of a matched route.
         pub const FoundRoute = struct {
@@ -343,9 +343,9 @@ test "Path Parsing (Mixed)" {
 }
 
 test "Constructing Routing from Path" {
-    const Route = _Route(void);
+    const Route = _Route(void, void);
 
-    const s = comptime RoutingTrie(void).init(&[_]Route{
+    const s = comptime RoutingTrie(void, void).init(&[_]Route{
         Route.init("/item"),
         Route.init("/item/%i/description"),
         Route.init("/item/%i/hello"),
@@ -358,9 +358,9 @@ test "Constructing Routing from Path" {
 }
 
 test "Routing with Paths" {
-    const Route = _Route(void);
+    const Route = _Route(void, void);
 
-    const s = comptime RoutingTrie(void).init(&[_]Route{
+    const s = comptime RoutingTrie(void, void).init(&[_]Route{
         Route.init("/item"),
         Route.init("/item/%i/description"),
         Route.init("/item/%i/hello"),
@@ -393,9 +393,9 @@ test "Routing with Paths" {
 }
 
 test "Routing with Remaining" {
-    const Route = _Route(void);
+    const Route = _Route(void, void);
 
-    const s = comptime RoutingTrie(void).init(&[_]Route{
+    const s = comptime RoutingTrie(void, void).init(&[_]Route{
         Route.init("/item"),
         Route.init("/item/%f/price_float"),
         Route.init("/item/name/%r"),
@@ -436,9 +436,9 @@ test "Routing with Remaining" {
 }
 
 test "Routing with Queries" {
-    const Route = _Route(void);
+    const Route = _Route(void, void);
 
-    const s = comptime RoutingTrie(void).init(&[_]Route{
+    const s = comptime RoutingTrie(void, void).init(&[_]Route{
         Route.init("/item"),
         Route.init("/item/%f/price_float"),
         Route.init("/item/name/%r"),

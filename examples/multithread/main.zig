@@ -8,12 +8,12 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain);
+const Server = http.Server(.plain, void);
 const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
 
-fn hi_handler(ctx: *Context, _: void) !void {
+fn hi_handler(ctx: *Context) !void {
     const name = ctx.captures[0].string;
     const greeting = ctx.queries.get("greeting") orelse "Hi";
 
@@ -43,7 +43,7 @@ fn hi_handler(ctx: *Context, _: void) !void {
     });
 }
 
-fn redir_handler(ctx: *Context, _: void) !void {
+fn redir_handler(ctx: *Context) !void {
     ctx.response.headers.putAssumeCapacity("Location", "/hi/redirect");
 
     try ctx.respond(.{
@@ -53,7 +53,7 @@ fn redir_handler(ctx: *Context, _: void) !void {
     });
 }
 
-fn post_handler(ctx: *Context, _: void) !void {
+fn post_handler(ctx: *Context) !void {
     log.debug("Body: {s}", .{ctx.request.body orelse ""});
 
     try ctx.respond(.{
@@ -80,13 +80,12 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
-
-    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", Route.init().get({}, hi_handler));
-    try router.serve_route("/redirect", Route.init().get({}, redir_handler));
-    try router.serve_route("/post", Route.init().post({}, post_handler));
+    var router = try Router.init({}, &[_]Route{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
+        Route.init("/hi/%s").get(hi_handler),
+        Route.init("/redirect").get(redir_handler),
+        Route.init("/post").post(post_handler),
+    });
 
     try t.entry(
         &router,

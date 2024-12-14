@@ -8,7 +8,7 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain);
+const Server = http.Server(.plain, void);
 const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
@@ -29,35 +29,34 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
+    var router = try Router.init({}, &[_]Route{
+        Route.init("/").get(struct {
+            pub fn handler_fn(ctx: *Context) !void {
+                const body =
+                    \\ <!DOCTYPE html>
+                    \\ <html>
+                    \\ <body>
+                    \\ <h1>Hello, World!</h1>
+                    \\ </body>
+                    \\ </html>
+                ;
 
-    try router.serve_route("/", Route.init().get({}, struct {
-        pub fn handler_fn(ctx: *Context, _: void) !void {
-            const body =
-                \\ <!DOCTYPE html>
-                \\ <html>
-                \\ <body>
-                \\ <h1>Hello, World!</h1>
-                \\ </body>
-                \\ </html>
-            ;
+                try ctx.respond(.{
+                    .status = .OK,
+                    .mime = http.Mime.HTML,
+                    .body = body[0..],
+                });
+            }
+        }.handler_fn),
 
-            try ctx.respond(.{
-                .status = .OK,
-                .mime = http.Mime.HTML,
-                .body = body[0..],
-            });
-        }
-    }.handler_fn));
+        Route.init("/kill").get(struct {
+            pub fn handler_fn(ctx: *Context) !void {
+                ctx.runtime.stop();
+            }
+        }.handler_fn),
 
-    try router.serve_route("/kill", Route.init().get({}, struct {
-        pub fn handler_fn(ctx: *Context, _: void) !void {
-            ctx.runtime.stop();
-        }
-    }.handler_fn));
-
-    try router.serve_fs_dir("/static", "./examples/fs/static");
+        Route.init("/static").serve_fs_dir("./examples/fs/static"),
+    });
 
     try t.entry(
         &router,

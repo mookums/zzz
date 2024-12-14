@@ -1,5 +1,5 @@
 const std = @import("std");
-const Token = @import("../routing_trie.zig").Token;
+const Token = @import("routing_trie.zig").Token;
 
 /// Errors of get function.
 pub const MapGetErrors = error {

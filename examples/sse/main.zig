@@ -11,7 +11,7 @@ const Task = tardy.Task;
 const Broadcast = tardy.Broadcast;
 const Channel = tardy.Channel;
 
-const Server = http.Server(.plain);
+const Server = http.Server(.plain, *Broadcast(usize));
 const Router = Server.Router;
 const Context = Server.Context;
 const Route = Server.Route;
@@ -65,14 +65,14 @@ fn sse_init(rt: *Runtime, success: bool, sse: *SSE) !void {
     try context.channel.recv(context, sse_send);
 }
 
-fn sse_handler(ctx: *Context, _: void) !void {
+fn sse_handler(ctx: *Context) !void {
     log.debug("going into sse mode", .{});
     try ctx.to_sse(sse_init);
 }
 
-fn msg_handler(ctx: *Context, broadcast: *Broadcast(usize)) !void {
+fn msg_handler(ctx: *Context) !void {
     log.debug("message handler", .{});
-    try broadcast.send(0);
+    try ctx.state.send(0);
     try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
@@ -80,7 +80,7 @@ fn msg_handler(ctx: *Context, broadcast: *Broadcast(usize)) !void {
     });
 }
 
-fn kill_handler(ctx: *Context, _: void) !void {
+fn kill_handler(ctx: *Context) !void {
     ctx.runtime.stop();
 }
 
@@ -102,16 +102,15 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
-
     var broadcast = try Broadcast(usize).init(allocator, max_conn);
     defer broadcast.deinit();
 
-    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/kill", Route.init().get({}, kill_handler));
-    try router.serve_route("/stream", Route.init().get({}, sse_handler));
-    try router.serve_route("/message", Route.init().post(&broadcast, msg_handler));
+    var router = try Router.init(&broadcast, &[_]Route{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
+        Route.init("/kill").get(kill_handler),
+        Route.init("/stream").get(sse_handler),
+        Route.init("/message").post(msg_handler),
+    });
 
     const EntryParams = struct {
         router: *const Router,

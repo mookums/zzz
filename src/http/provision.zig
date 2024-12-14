@@ -2,8 +2,8 @@ const std = @import("std");
 
 const Job = @import("../core/job.zig").Job;
 const ZeroCopyBuffer = @import("../core/zc_buffer.zig").ZeroCopyBuffer;
-const Capture = @import("routing_trie.zig").Capture;
-const QueryMap = @import("routing_trie.zig").QueryMap;
+const Capture = @import("router/routing_trie.zig").Capture;
+const QueryMap = @import("router/routing_trie.zig").QueryMap;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const ServerConfig = @import("server.zig").ServerConfig;

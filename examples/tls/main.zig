@@ -13,7 +13,7 @@ const Server = http.Server(.{ .tls = .{
     .key = .{ .file = .{ .path = "./examples/tls/certs/key.pem" } },
     .cert_name = "CERTIFICATE",
     .key_name = "EC PRIVATE KEY",
-} });
+} }, void);
 
 const Context = Server.Context;
 const Route = Server.Route;
@@ -29,38 +29,37 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
+    var router = try Router.init({}, &[_]Route{
+        Route.init("/embed/pico.min.css").serve_embedded_file(http.Mime.CSS, @embedFile("embed/pico.min.css")),
 
-    try router.serve_embedded_file("/embed/pico.min.css", http.Mime.CSS, @embedFile("embed/pico.min.css"));
+        Route.init("/").get(struct {
+            pub fn handler_fn(ctx: *Context) !void {
+                const body =
+                    \\ <!DOCTYPE html>
+                    \\ <html>
+                    \\ <head>
+                    \\ <link rel="stylesheet" href="/embed/pico.min.css"/>
+                    \\ </head>
+                    \\ <body>
+                    \\ <h1>Hello, World!</h1>
+                    \\ </body>
+                    \\ </html>
+                ;
 
-    try router.serve_route("/", Route.init().get({}, struct {
-        pub fn handler_fn(ctx: *Context, _: void) !void {
-            const body =
-                \\ <!DOCTYPE html>
-                \\ <html>
-                \\ <head>
-                \\ <link rel="stylesheet" href="/embed/pico.min.css"/>
-                \\ </head>
-                \\ <body>
-                \\ <h1>Hello, World!</h1>
-                \\ </body>
-                \\ </html>
-            ;
+                try ctx.respond(.{
+                    .status = .OK,
+                    .mime = http.Mime.HTML,
+                    .body = body[0..],
+                });
+            }
+        }.handler_fn),
 
-            try ctx.respond(.{
-                .status = .OK,
-                .mime = http.Mime.HTML,
-                .body = body[0..],
-            });
-        }
-    }.handler_fn));
-
-    try router.serve_route("/kill", Route.init().get({}, struct {
-        pub fn handler_fn(ctx: *Context, _: void) !void {
-            ctx.runtime.stop();
-        }
-    }.handler_fn));
+        Route.init("/kill").get(struct {
+            pub fn handler_fn(ctx: *Context) !void {
+                ctx.runtime.stop();
+            }
+        }.handler_fn),
+    });
 
     var t = try Tardy.init(.{
         .allocator = allocator,

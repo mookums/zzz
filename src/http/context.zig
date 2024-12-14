@@ -4,8 +4,9 @@ const log = std.log.scoped(.@"zzz/http/context");
 
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 
-const Capture = @import("routing_trie.zig").Capture;
-const QueryMap = @import("routing_trie.zig").QueryMap;
+const Capture = @import("router/routing_trie.zig").Capture;
+const QueryMap = @import("router/routing_trie.zig").QueryMap;
+const Route = @import("router/route.zig").Route;
 const Provision = @import("provision.zig").Provision;
 
 const Request = @import("request.zig").Request;
@@ -15,18 +16,21 @@ const Mime = @import("mime.zig").Mime;
 const _SSE = @import("sse.zig").SSE;
 
 const Runtime = @import("tardy").Runtime;
-const Task = @import("tardy").Task;
 const TaskFn = @import("tardy").TaskFn;
 
 const raw_respond = @import("server.zig").raw_respond;
 
 // Context is dependent on the server that gets created.
-pub fn Context(comptime Server: type) type {
+pub fn Context(comptime Server: type, comptime UserState: type) type {
     return struct {
         const Self = @This();
-        const SSE = _SSE(Server);
+        const SSE = _SSE(Server, UserState);
         allocator: std.mem.Allocator,
         runtime: *Runtime,
+        /// Custom user-data state.
+        state: UserState,
+        /// The matched route instance.
+        route: *const Route(Server, UserState),
         /// The Request that triggered this handler.
         request: *const Request,
         /// The Response that will be returned.
