@@ -8,11 +8,11 @@ const Method = @import("lib.zig").Method;
 
 pub const Request = struct {
     allocator: std.mem.Allocator,
-    method: Method,
-    uri: []const u8,
-    version: std.http.Version = .@"HTTP/1.1",
+    method: ?Method = null,
+    uri: ?[]const u8 = null,
+    version: ?std.http.Version = .@"HTTP/1.1",
     headers: Headers,
-    body: []const u8,
+    body: ?[]const u8 = null,
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Request {
@@ -22,9 +22,9 @@ pub const Request = struct {
         return Request{
             .allocator = allocator,
             .headers = headers,
-            .method = undefined,
-            .uri = undefined,
-            .body = undefined,
+            .method = null,
+            .uri = null,
+            .body = null,
         };
     }
 
@@ -33,9 +33,9 @@ pub const Request = struct {
     }
 
     pub fn clear(self: *Request) void {
-        self.method = undefined;
-        self.uri = undefined;
-        self.body = undefined;
+        self.method = null;
+        self.uri = null;
+        self.body = null;
         self.headers.clearRetainingCapacity();
     }
 
@@ -116,7 +116,7 @@ pub const Request = struct {
 
     /// Should this specific Request expect to capture a body.
     pub fn expect_body(self: Request) bool {
-        return switch (self.method) {
+        return switch (self.method orelse return false) {
             .POST, .PUT, .PATCH => true,
             .GET, .HEAD, .DELETE, .CONNECT, .OPTIONS, .TRACE => false,
         };

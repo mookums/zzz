@@ -31,7 +31,6 @@ pub fn Context(comptime Server: type) type {
         request: *const Request,
         /// The Response that will be returned.
         response: *Response,
-        path: []const u8,
         captures: []Capture,
         queries: *QueryMap,
         provision: *Provision,

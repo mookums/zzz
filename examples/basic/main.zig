@@ -61,7 +61,11 @@ pub fn main() !void {
 
     try router.serve_route("/echo", Route.init().post({}, struct {
         fn handler_fn(ctx: *Context, _: void) !void {
-            const body = try ctx.allocator.dupe(u8, ctx.request.body);
+            const body = if (ctx.request.body) |b|
+                try ctx.allocator.dupe(u8, b)
+            else
+                "";
+
             try ctx.respond(.{
                 .status = .OK,
                 .mime = http.Mime.HTML,

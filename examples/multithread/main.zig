@@ -54,7 +54,7 @@ fn redir_handler(ctx: *Context, _: void) !void {
 }
 
 fn post_handler(ctx: *Context, _: void) !void {
-    log.debug("Body: {s}", .{ctx.request.body});
+    log.debug("Body: {s}", .{ctx.request.body orelse ""});
 
     try ctx.respond(.{
         .status = .OK,

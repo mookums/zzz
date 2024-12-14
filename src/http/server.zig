@@ -800,8 +800,8 @@ pub fn Server(comptime security: Security) type {
 
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
-                const found = try router.get_route_from_host(p.request.uri, p.captures, &p.queries);
-                const handler = found.route.get_handler(p.request.method);
+                const found = try router.get_route_from_host(p.request.uri.?, p.captures, &p.queries);
+                const handler = found.route.get_handler(p.request.method.?);
 
                 if (handler) |h_with_data| {
                     const context: *Context = try p.arena.allocator().create(Context);
@@ -810,7 +810,6 @@ pub fn Server(comptime security: Security) type {
                         .runtime = runtime,
                         .request = &p.request,
                         .response = &p.response,
-                        .path = p.request.uri,
                         .captures = found.captures,
                         .queries = found.queries,
                         .provision = p,
@@ -820,7 +819,7 @@ pub fn Server(comptime security: Security) type {
                         context,
                         @as(*anyopaque, @ptrFromInt(h_with_data.data)),
                     }) catch |e| {
-                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri, e });
+                        log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri.?, e });
                         p.response.set(.{
                             .status = .@"Internal Server Error",
                             .mime = Mime.HTML,
@@ -965,8 +964,8 @@ pub fn Server(comptime security: Security) type {
                     // Logging information about Request.
                     log.info("{d} - \"{s} {s}\" {s}", .{
                         provision.index,
-                        @tagName(provision.request.method),
-                        provision.request.uri,
+                        @tagName(provision.request.method.?),
+                        provision.request.uri.?,
                         provision.request.headers.get("User-Agent") orelse "N/A",
                     });
 
