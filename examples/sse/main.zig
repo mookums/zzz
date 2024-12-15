@@ -105,7 +105,7 @@ pub fn main() !void {
     var broadcast = try Broadcast(usize).init(allocator, max_conn);
     defer broadcast.deinit();
 
-    var router = try Router.init(&broadcast, &[_]Route{
+    var router = Router.init(&broadcast, &[_]Route{
         Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
         Route.init("/kill").get(kill_handler),
         Route.init("/stream").get(sse_handler),

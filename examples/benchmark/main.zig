@@ -60,7 +60,7 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = try Router.init({}, &[_]Route{
+    var router = Router.init({}, &[_]Route{
         Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
         Route.init("/hi/%s").get(hi_handler),
     });

@@ -29,7 +29,7 @@ pub fn Router(comptime Server: type, comptime UserState: type) type {
         /// thread-safe when shared.
         locked: bool = false,
 
-        pub fn init(state: UserState, comptime _routes: []const Route) !Self {
+        pub fn init(state: UserState, comptime _routes: []const Route) Self {
             const self = Self{
                 // Initialize the routing tree from the given routes.
                 .routes = comptime RoutingTrie.init(_routes),

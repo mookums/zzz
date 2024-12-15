@@ -29,7 +29,7 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = try Router.init({}, &[_]Route{
+    var router = Router.init({}, &[_]Route{
         Route.init("/").get(struct {
             pub fn handler_fn(ctx: *Context) !void {
                 const body =

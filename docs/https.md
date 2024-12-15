@@ -37,7 +37,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var router = try Router.init({}, &[_]Route{
+    var router = Router.init({}, &[_]Route{
         Route.init("/embed/pico.min.css").serve_embedded_file(http.Mime.CSS, @embedFile("embed/pico.min.css")),
 
         Route.init("/").get(struct {

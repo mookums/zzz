@@ -47,7 +47,7 @@ pub fn main() !void {
 
     const num: i8 = 12;
 
-    var router = try Router.init(&num, &[_]Route{
+    var router = Router.init(&num, &[_]Route{
         Route.init("/").get(struct {
             fn handler_fn(ctx: *Context) !void {
                 const body_fmt =
