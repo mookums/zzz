@@ -72,10 +72,10 @@ pub const Capture = union(TokenMatch) {
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
-pub fn RoutingTrie(comptime Server: type, comptime UserState: type) type {
+pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
     return struct {
         const Self = @This();
-        const Route = _Route(Server, UserState);
+        const Route = _Route(Server, AppState);
 
         /// Structure of a matched route.
         pub const FoundRoute = struct {

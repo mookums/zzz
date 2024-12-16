@@ -14,22 +14,22 @@ const _RoutingTrie = @import("router/routing_trie.zig").RoutingTrie;
 const QueryMap = @import("router/routing_trie.zig").QueryMap;
 
 /// Initialize a router with the given routes.
-pub fn Router(comptime Server: type, comptime UserState: type) type {
+pub fn Router(comptime Server: type, comptime AppState: type) type {
     return struct {
         const Self = @This();
-        const RoutingTrie = _RoutingTrie(Server, UserState);
+        const RoutingTrie = _RoutingTrie(Server, AppState);
         const FoundRoute = RoutingTrie.FoundRoute;
-        const Route = _Route(Server, UserState);
-        const Context = _Context(Server, UserState);
+        const Route = _Route(Server, AppState);
+        const Context = _Context(Server, AppState);
 
         routes: RoutingTrie,
         not_found_route: ?Route = null,
-        state: UserState,
+        state: AppState,
         /// This makes the router immutable, also making it
         /// thread-safe when shared.
         locked: bool = false,
 
-        pub fn init(state: UserState, comptime _routes: []const Route) Self {
+        pub fn init(state: AppState, comptime _routes: []const Route) Self {
             const self = Self{
                 // Initialize the routing tree from the given routes.
                 .routes = comptime RoutingTrie.init(_routes),

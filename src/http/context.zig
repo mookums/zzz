@@ -21,16 +21,16 @@ const TaskFn = @import("tardy").TaskFn;
 const raw_respond = @import("server.zig").raw_respond;
 
 // Context is dependent on the server that gets created.
-pub fn Context(comptime Server: type, comptime UserState: type) type {
+pub fn Context(comptime Server: type, comptime AppState: type) type {
     return struct {
         const Self = @This();
-        const SSE = _SSE(Server, UserState);
+        const SSE = _SSE(Server, AppState);
         allocator: std.mem.Allocator,
         runtime: *Runtime,
         /// Custom user-data state.
-        state: UserState,
+        state: AppState,
         /// The matched route instance.
-        route: *const Route(Server, UserState),
+        route: *const Route(Server, AppState),
         /// The Request that triggered this handler.
         request: *const Request,
         /// The Response that will be returned.

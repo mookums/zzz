@@ -149,16 +149,16 @@ pub const ServerConfig = struct {
     request_uri_bytes_max: u32 = 1024 * 2,
 };
 
-pub fn Server(comptime security: Security, comptime UserState: type) type {
+pub fn Server(comptime security: Security, comptime AppState: type) type {
     const TLSContextType = comptime if (security == .tls) TLSContext else void;
     const TLSType = comptime if (security == .tls) ?TLS else void;
 
     return struct {
         const Self = @This();
-        pub const Context = _Context(Self, UserState);
-        pub const Router = _Router(Self, UserState);
-        pub const Route = _Route(Self, UserState);
-        pub const SSE = _SSE(Self, UserState);
+        pub const Context = _Context(Self, AppState);
+        pub const Router = _Router(Self, AppState);
+        pub const Route = _Route(Self, AppState);
+        pub const SSE = _SSE(Self, AppState);
         allocator: std.mem.Allocator,
         config: ServerConfig,
         addr: ?std.net.Address,

@@ -11,9 +11,9 @@ const Runtime = @import("tardy").Runtime;
 const Stat = @import("tardy").Stat;
 const Cross = @import("tardy").Cross;
 
-pub fn FsDir(Server: type, UserState: type) type {
+pub fn FsDir(Server: type, AppState: type) type {
     return struct {
-        const Context = _Context(Server, UserState);
+        const Context = _Context(Server, AppState);
 
         const FileProvision = struct {
             mime: Mime,

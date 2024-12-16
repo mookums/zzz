@@ -12,10 +12,10 @@ const _FsDir = @import("fs_dir.zig").FsDir;
 const _Context = @import("../context.zig").Context;
 
 /// Structure of a server route definition.
-pub fn Route(comptime Server: type, comptime UserState: type) type {
+pub fn Route(comptime Server: type, comptime AppState: type) type {
     return struct {
-        const Context = _Context(Server, UserState);
-        const FsDir = _FsDir(Server, UserState);
+        const Context = _Context(Server, AppState);
+        const FsDir = _FsDir(Server, AppState);
 
         const Self = @This();
         pub const HandlerFn = *const fn (context: *Context) anyerror!void;
