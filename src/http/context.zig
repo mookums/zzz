@@ -18,8 +18,6 @@ const _SSE = @import("sse.zig").SSE;
 const Runtime = @import("tardy").Runtime;
 const TaskFn = @import("tardy").TaskFn;
 
-const raw_respond = @import("server.zig").raw_respond;
-
 // Context is dependent on the server that gets created.
 pub fn Context(comptime Server: type, comptime AppState: type) type {
     return struct {
@@ -30,7 +28,7 @@ pub fn Context(comptime Server: type, comptime AppState: type) type {
         /// Custom user-data state.
         state: AppState,
         /// The matched route instance.
-        route: *const Route(Server, AppState),
+        route: ?*const Route(Server, AppState),
         /// The Request that triggered this handler.
         request: *const Request,
         /// The Response that will be returned.

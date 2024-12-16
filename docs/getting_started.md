@@ -97,6 +97,15 @@ pub fn main() !void {
                 });
             }
         }.handler_fn,
+        .error_handler = struct {
+            fn handler_fn(ctx: *Context, _: anyerror) !void {
+                try ctx.respond(.{
+                    .status = .@"Internal Server Error",
+                    .mime = http.Mime.HTML,
+                    .body = "Oh no, Internal Server Error!",
+                });
+            }
+        }.handler_fn,
     });
 
     // This provides the entry function into the Tardy runtime. This will run
