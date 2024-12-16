@@ -89,6 +89,7 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
             };
         }
 
+        /// Set a handler function for the provided method.
         inline fn inner_route(
             comptime method: Method,
             self: Self,
@@ -96,6 +97,20 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
         ) Self {
             var new_handlers = self.handlers;
             new_handlers[comptime method_to_index(method)] = handler_fn;
+            return Self{
+                .path = self.path,
+                .handlers = new_handlers,
+            };
+        }
+
+        /// Set a handler function for all methods.
+        pub fn all(self: Self, handler_fn: HandlerFn) Self {
+            var new_handlers = self.handlers;
+
+            for (&new_handlers) |*new_handler| {
+                new_handler.* = handler_fn;
+            }
+
             return Self{
                 .path = self.path,
                 .handlers = new_handlers,

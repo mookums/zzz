@@ -50,7 +50,7 @@ pub fn Router(comptime Server: type, comptime AppState: type) type {
             const self = Self{
                 // Initialize the routing tree from the given routes.
                 .routes = comptime RoutingTrie.init(_routes),
-                .not_found_route = comptime Route.init("").get(configuration.not_found_handler),
+                .not_found_route = comptime Route.init("").all(configuration.not_found_handler),
                 .state = state,
             };
 
