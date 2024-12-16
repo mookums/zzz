@@ -186,13 +186,13 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Define a GET handler to serve an entire directory.
-        pub fn serve_fs_dir(comptime _self: *const Self, comptime dir_path: []const u8) Self {
+        pub fn serve_fs_dir(comptime self: *const Self, comptime dir_path: []const u8) Self {
             const url_with_match_all = comptime std.fmt.comptimePrint(
                 "{s}/%r",
-                .{std.mem.trimRight(u8, _self.path, "/")},
+                .{std.mem.trimRight(u8, self.path, "/")},
             );
 
-            return _self
+            return self
                 // Set the new path.
                 .set_path(url_with_match_all)
                 // Set GET handler.
