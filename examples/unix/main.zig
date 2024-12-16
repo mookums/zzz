@@ -38,7 +38,7 @@ pub fn main() !void {
 
     var router = Router.init({}, &[_]Route{
         Route.init("/").get(root_handler)
-    });
+    }, .{});
 
     try t.entry(
         &router,

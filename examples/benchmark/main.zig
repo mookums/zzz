@@ -63,7 +63,7 @@ pub fn main() !void {
     var router = Router.init({}, &[_]Route{
         Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
         Route.init("/hi/%s").get(hi_handler),
-    });
+    }, .{});
 
     try t.entry(
         &router,

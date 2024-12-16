@@ -71,17 +71,17 @@ pub fn main() !void {
                 });
             }
         }.handler_fn),
+    }, .{
+        .not_found_handler = struct {
+            fn handler_fn(ctx: *Context) !void {
+                try ctx.respond(.{
+                    .status = .@"Not Found",
+                    .mime = http.Mime.HTML,
+                    .body = "Not Found Handler!",
+                });
+            }
+        }.handler_fn,
     });
-
-    router.serve_not_found(Route.init("").get(struct {
-        fn handler_fn(ctx: *Context) !void {
-            try ctx.respond(.{
-                .status = .@"Not Found",
-                .mime = http.Mime.HTML,
-                .body = "Not Found Handler!",
-            });
-        }
-    }.handler_fn));
 
     // This provides the entry function into the Tardy runtime. This will run
     // exactly once inside of each runtime (each thread gets a single runtime).

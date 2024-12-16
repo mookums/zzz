@@ -110,7 +110,7 @@ pub fn main() !void {
         Route.init("/kill").get(kill_handler),
         Route.init("/stream").get(sse_handler),
         Route.init("/message").post(msg_handler),
-    });
+    }, .{});
 
     const EntryParams = struct {
         router: *const Router,

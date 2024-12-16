@@ -45,7 +45,7 @@ pub fn main() !void {
                 ctx.runtime.stop();
             }
         }.handler_fn)
-    });
+    }, .{});
 
     var t = try Tardy.init(.{
         .allocator = allocator,

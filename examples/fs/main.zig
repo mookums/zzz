@@ -56,7 +56,7 @@ pub fn main() !void {
         }.handler_fn),
 
         Route.init("/static").serve_fs_dir("./examples/fs/static"),
-    });
+    }, .{});
 
     try t.entry(
         &router,

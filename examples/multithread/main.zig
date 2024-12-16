@@ -85,7 +85,7 @@ pub fn main() !void {
         Route.init("/hi/%s").get(hi_handler),
         Route.init("/redirect").get(redir_handler),
         Route.init("/post").post(post_handler),
-    });
+    }, .{});
 
     try t.entry(
         &router,

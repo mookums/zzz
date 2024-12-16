@@ -53,7 +53,7 @@ pub fn main() !void {
                 });
             }
         }.handler_fn),
-    });
+    }, .{});
 
     try t.entry(
         &router,
