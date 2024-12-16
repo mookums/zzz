@@ -134,7 +134,7 @@ pub fn TokenHashMap(V: type) type {
 
             // Get key-value tuples to clone: all key-value tuples of the current map, without the overridden ones.
             const kvsToClone = if (kvsToRemove.len > 0) comptime kvs: {
-                var kvs: []KV = &[0]KV{};
+                var kvs: []const KV = &[0]KV{};
 
                 var kvsToRemoveIndex = 0;
                 var i = 0;
