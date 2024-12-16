@@ -60,7 +60,7 @@ pub fn TokenHashMap(V: type) type {
         values: []const V,
 
         /// Hash the given token key.
-        fn hashKey(input: Token) Hash {
+        fn hash_key(input: Token) Hash {
             const bytes = blk: {
                 break :blk switch (input) {
                     .fragment => |inner| inner,
@@ -72,7 +72,7 @@ pub fn TokenHashMap(V: type) type {
         }
 
         /// Initialize a token hash map with the given key-value tuples.
-        pub fn initComptime(comptime kvs: []const KV) Self {
+        pub fn init_comptime(comptime kvs: []const KV) Self {
             const arrays = comptime kvs: {
                 // Initialize arrays.
                 var result = struct {
@@ -85,7 +85,7 @@ pub fn TokenHashMap(V: type) type {
                 var index = 0;
                 for (kvs) |kv| {
                     // Get the current key hash.
-                    const hash = hashKey(kv[0]);
+                    const hash = hash_key(kv[0]);
                     // Fill keys / values internal arrays.
                     result.hashes[index] = .{ hash, index };
                     result.keys[index] = kv[0];
@@ -108,7 +108,7 @@ pub fn TokenHashMap(V: type) type {
         }
 
         /// Get raw key-value tuples of the current map.
-        pub fn getKvs(self: *const Self) []const KV {
+        pub fn get_kvs(self: *const Self) []const KV {
             var kvs: [self.keys.len]KV = undefined;
             for (&kvs, self.keys, self.values) |*kv, key, value| {
                 kv.* = .{key, value};
@@ -117,79 +117,79 @@ pub fn TokenHashMap(V: type) type {
         }
 
         /// Initialize a cloned token hash map with the provided new key-value tuples.
-        pub fn withKvs(self: *const Self, comptime newKvs: []const KV) Self {
+        pub fn with_kvs(self: *const Self, comptime new_kvs: []const KV) Self {
             // Get key-value tuples to remove from clones: they are overridden by new key-value tuples.
-            const kvsToRemove = comptime kvsToRemove: {
+            const kvs_to_remove = comptime kvs_to_remove: {
                 var kvs: []const usize = &[0]usize{};
 
-                for (newKvs) |kv| {
-                    const index: ?usize = self.getIndex(kv[0]) catch null;
+                for (new_kvs) |kv| {
+                    const index: ?usize = self.get_index(kv[0]) catch null;
                     if (index) |idx| {
                         kvs = kvs ++ .{idx};
                     }
                 }
 
-                break :kvsToRemove kvs;
+                break :kvs_to_remove kvs;
             };
 
             // Get key-value tuples to clone: all key-value tuples of the current map, without the overridden ones.
-            const kvsToClone = if (kvsToRemove.len > 0) comptime kvs: {
+            const kvs_to_clone = if (kvs_to_remove.len > 0) comptime kvs: {
                 var kvs: []const KV = &[0]KV{};
 
-                var kvsToRemoveIndex = 0;
+                var kvs_to_remove_index = 0;
                 var i = 0;
-                for (self.getKvs()) |kv| {
-                    if (kvsToRemoveIndex < kvsToRemove.len and i != kvsToRemove[kvsToRemoveIndex]) {
+                for (self.get_kvs()) |kv| {
+                    if (kvs_to_remove_index < kvs_to_remove.len and i != kvs_to_remove[kvs_to_remove_index]) {
                         kvs = kvs ++ .{kv};
                     } else {
-                        kvsToRemoveIndex += 1;
+                        kvs_to_remove_index += 1;
                     }
                     i += 1;
                 }
 
                 break :kvs kvs;
-            } else self.getKvs();
+            } else self.get_kvs();
 
-            return Self.initComptime(kvsToClone ++ newKvs);
+            return Self.init_comptime(kvs_to_clone ++ new_kvs);
         }
 
         /// Get the index in keys / values array from the provided token key.
-        pub fn getIndex(self: *const Self, key: Token) MapGetErrors!usize {
+        pub fn get_index(self: *const Self, key: Token) MapGetErrors!usize {
             // Get the current key hash.
-            const hash = hashKey(key);
+            const hash = hash_key(key);
 
             // Search in the sorted hashes array.
-            const hashIndex = std.sort.binarySearch(HashEntry, hash, self.hashes, {}, struct {
-                fn f (_: void, searchedKey: Hash, mid_item: HashEntry) std.math.Order {
-                    if (searchedKey < mid_item[0]) return std.math.Order.lt;
-                    if (searchedKey > mid_item[0]) return std.math.Order.gt;
-                    if (searchedKey == mid_item[0]) return std.math.Order.eq;
+            const hash_index = std.sort.binarySearch(HashEntry, hash, self.hashes, {}, struct {
+                fn f (_: void, searched_key: Hash, mid_item: HashEntry) std.math.Order {
+                    if (searched_key < mid_item[0]) return std.math.Order.lt;
+                    if (searched_key > mid_item[0]) return std.math.Order.gt;
+                    if (searched_key == mid_item[0]) return std.math.Order.eq;
 
                     unreachable;
                 }
             }.f);
 
             // No hash index has been found, return not found.
-            if (hashIndex == null) return MapGetErrors.NotFound;
+            if (hash_index == null) return MapGetErrors.NotFound;
 
             // Get the index in keys / values in hashes.
-            return self.hashes[hashIndex.?][1];
+            return self.hashes[hash_index.?][1];
         }
 
         /// Get the value of a given token key.
         pub fn get(self: *const Self, key: Token) MapGetErrors!V {
-            return self.values[try self.getIndex(key)];
+            return self.values[try self.get_index(key)];
         }
 
         /// Try to get the value of a given token key, return NULL if it doesn't exists.
-        pub fn getOptional(self: *const Self, key: Token) ?V {
+        pub fn get_optional(self: *const Self, key: Token) ?V {
             return self.get(key) catch null;
         }
     };
 }
 
 test TokenHashMap {
-    const map = comptime TokenHashMap([]const u8).initComptime(&[_]TokenHashMap([]const u8).KV{
+    const map = comptime TokenHashMap([]const u8).init_comptime(&[_]TokenHashMap([]const u8).KV{
         .{ Token{ .fragment = "route-fragment" }, "route" },
         .{ Token{ .match = .unsigned }, "id" },
         .{ Token{ .match = .remaining }, "remaining" },
@@ -199,5 +199,5 @@ test TokenHashMap {
     try std.testing.expectEqualStrings("id", try map.get(Token{ .match = .unsigned }));
     try std.testing.expectEqualStrings("remaining", try map.get(Token{ .match = .remaining }));
     try std.testing.expectError(MapGetErrors.NotFound, map.get(Token{ .fragment = "not_found" }));
-    try std.testing.expectEqual(null, map.getOptional(Token{ .fragment = "not_found" }));
+    try std.testing.expectEqual(null, map.get_optional(Token{ .fragment = "not_found" }));
 }

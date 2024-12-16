@@ -97,16 +97,16 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                 return Node{
                     .token = token,
                     .route = route,
-                    .children = ChildrenMap.initComptime(&[0]ChildrenMap.KV{}),
+                    .children = ChildrenMap.init_comptime(&[0]ChildrenMap.KV{}),
                 };
             }
 
             /// Initialize a cloned node with a new child for the provided token.
-            pub fn withChild(self: *const Node, token: Token, node: *const Node) Node {
+            pub fn with_child(self: *const Node, token: Token, node: *const Node) Node {
                 return Node{
                     .token = self.token,
                     .route = self.route,
-                    .children = self.children.withKvs(&[_]ChildrenMap.KV{.{ token, node }})
+                    .children = self.children.with_kvs(&[_]ChildrenMap.KV{.{ token, node }})
                 };
             }
         };
@@ -115,7 +115,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
 
         /// Initialize the routing tree with the given routes.
         pub fn init(comptime routes: []const Route) Self {
-            return (Self{}).withRoutes(routes);
+            return (Self{}).with_routes(routes);
         }
 
         fn print_node(root: *const Node, depth: usize) void {
@@ -147,13 +147,13 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Initialize new trie node for the next token.
-        fn _withRoute(comptime node: *const Node, comptime iterator: *std.mem.TokenIterator(u8, .scalar), comptime route: Route) Node {
+        fn _with_route(comptime node: *const Node, comptime iterator: *std.mem.TokenIterator(u8, .scalar), comptime route: Route) Node {
             if (iterator.next()) |chunk| {
                 // Parse the current chunk.
                 const token: Token = Token.parse_chunk(chunk);
                 // Alter the child of the current node.
-                return node.withChild(token, &(_withRoute(
-                    node.children.getOptional(token) orelse &(Node.init(token, null)),
+                return node.with_child(token, &(_with_route(
+                    node.children.get_optional(token) orelse &(Node.init(token, null)),
                     iterator,
                     route,
                 )));
@@ -168,22 +168,22 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Copy the current routing trie to add the provided route.
-        pub fn withRoute(comptime self: *const Self, comptime route: Route) Self {
+        pub fn with_route(comptime self: *const Self, comptime route: Route) Self {
             @setEvalBranchQuota(10000);
 
             // This is where we will parse out the path.
             comptime var iterator = std.mem.tokenizeScalar(u8, route.path, '/');
 
             return Self{
-                .root = _withRoute(&(self.root), &iterator, route),
+                .root = _with_route(&(self.root), &iterator, route),
             };
         }
 
         /// Copy the current routing trie to add all the provided routes.
-        pub fn withRoutes(comptime self: *const Self, comptime routes: []const Route) Self {
+        pub fn with_routes(comptime self: *const Self, comptime routes: []const Route) Self {
             comptime var current = self.*;
             inline for (routes) |route| {
-                current = current.withRoute(route);
+                current = current.with_route(route);
             }
             return current;
         }
@@ -206,7 +206,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                 const fragment = Token{ .fragment = chunk };
 
                 // If it is the fragment, match it here.
-                if (current.children.getOptional(fragment)) |child| {
+                if (current.children.get_optional(fragment)) |child| {
                     current = child.*;
                     continue;
                 }
@@ -214,7 +214,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                 var matched = false;
                 for (std.meta.tags(TokenMatch)) |token_type| {
                     const token = Token{ .match = token_type };
-                    if (current.children.getOptional(token)) |child| {
+                    if (current.children.get_optional(token)) |child| {
                         matched = true;
                         switch (token_type) {
                             .signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {

@@ -801,9 +801,9 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
                 const found = try router.get_route_from_host(p.request.uri.?, p.captures, &p.queries);
-                const optionalHandler = found.route.get_handler(p.request.method.?);
+                const optional_handler = found.route.get_handler(p.request.method.?);
 
-                if (optionalHandler) |handler| {
+                if (optional_handler) |handler| {
                     const context: *Context = try p.arena.allocator().create(Context);
                     context.* = .{
                         .allocator = p.arena.allocator(),
