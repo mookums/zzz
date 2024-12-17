@@ -23,7 +23,7 @@ exe.root_module.addImport(zzz);
 ## zzz?
 zzz is a framework for writing performant and reliable networked services in Zig. It supports both HTTP and HTTPS (using BearSSL for TLS).
 
-zzz currently supports Linux, Mac and Windows. Linux is currently the reccomended target for deployments.
+zzz currently supports Linux, Mac and Windows. Linux is currently the recommended target for deployments.
 
 > [!IMPORTANT]
 > zzz is currently **alpha** software and there is still a lot changing at a fairly quick pace and certain places where things are less polished.
