@@ -9,10 +9,12 @@ pub const Headers = @import("../core/case_string_map.zig").CaseStringMap([]const
 pub const Server = @import("server.zig").Server;
 
 pub const HTTPError = error{
-    TooManyHeaders,
     ContentTooLarge,
-    MalformedRequest,
-    InvalidMethod,
-    URITooLong,
     HTTPVersionNotSupported,
+    InvalidMethod,
+    LengthRequired,
+    MalformedRequest,
+    MethodNotAllowed,
+    TooManyHeaders,
+    URITooLong,
 };
