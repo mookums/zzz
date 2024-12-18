@@ -199,6 +199,8 @@ pub fn FsDir(Server: type, AppState: type) type {
             // Resolving the requested file.
             const search_path = ctx.captures[0].remaining;
             const resolved_file_path = blk: {
+                // This appears to be leaking BUT the ctx.allocator is an
+                // arena so it does get cleaned up eventually.
                 const file_path = std.fs.path.resolve(
                     ctx.allocator,
                     &[_][]const u8{ dir_path, search_path },

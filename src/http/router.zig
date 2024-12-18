@@ -22,7 +22,7 @@ pub fn default_not_found_handler(comptime Server: type, comptime AppState: type)
             try ctx.respond(.{
                 .status = .@"Not Found",
                 .mime = Mime.TEXT,
-                .body = "Not found.",
+                .body = "Not Found",
             });
         }
     }.not_found_handler;

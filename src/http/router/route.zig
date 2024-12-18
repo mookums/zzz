@@ -41,10 +41,8 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Initialize a route for the given path.
-        pub fn init(_path: []const u8) Self {
-            return Self{
-                .path = _path,
-            };
+        pub fn init(path: []const u8) Self {
+            return Self{ .path = path };
         }
 
         /// Returns a comma delinated list of allowed Methods for this route. This
@@ -211,9 +209,7 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
             );
 
             return self
-            // Set the new path.
                 .set_path(url_with_match_all)
-            // Set GET handler.
                 .get(struct {
                 fn handler_fn(ctx: *Context) !void {
                     try FsDir.handler_fn(ctx, dir_path);
