@@ -64,7 +64,6 @@ pub const Provision = struct {
 
     pub fn deinit_hook(provisions: []Provision, allocator: std.mem.Allocator) void {
         for (provisions) |*provision| {
-            allocator.free(provision.buffer);
             provision.recv_buffer.deinit();
             provision.arena.deinit();
             provision.request.deinit();
