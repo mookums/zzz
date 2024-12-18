@@ -34,6 +34,10 @@ pub const AsyncIOType = @import("tardy").AsyncIOType;
 const TardyCreator = @import("tardy").Tardy;
 const Cross = @import("tardy").Cross;
 
+const AcceptResult = @import("tardy").AcceptResult;
+const RecvResult = @import("tardy").RecvResult;
+const SendResult = @import("tardy").SendResult;
+
 pub const RecvStatus = union(enum) {
     kill,
     recv,
@@ -278,19 +282,22 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             }
         }
 
-        fn accept_task(rt: *Runtime, child_socket: std.posix.socket_t, socket: std.posix.socket_t) !void {
-            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
+        fn accept_task(rt: *Runtime, result: AcceptResult, socket: std.posix.socket_t) !void {
             const accept_queued = rt.storage.get_ptr("__zzz_accept_queued", bool);
+
+            const child_socket = result.unwrap() catch |e| {
+                log.err("socket accept failed | {}", .{e});
+                accept_queued.* = true;
+                try rt.net.accept(socket, accept_task, socket);
+                return;
+            };
+
+            const pool = rt.storage.get_ptr("__zzz_provision_pool", Pool(Provision));
             accept_queued.* = false;
 
             if (rt.scheduler.tasks.clean() >= 2) {
                 accept_queued.* = true;
                 try rt.net.accept(socket, accept_task, socket);
-            }
-
-            if (!Cross.socket.is_valid(child_socket)) {
-                log.err("socket accept failed", .{});
-                return error.AcceptFailed;
             }
 
             // This should never fail. It means that we have a dangling item.
@@ -339,7 +346,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     };
 
                     provision.job = .{ .handshake = .{ .state = .recv, .count = 0 } };
-                    try rt.net.recv(borrowed.item, handshake_task, child_socket, recv_buf);
+                    try rt.net.recv(borrowed.item, handshake_recv_task, child_socket, recv_buf);
                 },
                 .plain => {
                     provision.job = .{ .recv = .{ .count = 0 } };
@@ -348,8 +355,18 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             }
         }
 
-        fn recv_task(rt: *Runtime, length: i32, provision: *Provision) !void {
+        fn recv_task(rt: *Runtime, result: RecvResult, provision: *Provision) !void {
             assert(provision.job == .recv);
+
+            const length = result.unwrap() catch |e| {
+                if (e != error.Closed) {
+                    log.warn("socket recv failed | {}", .{e});
+                }
+                provision.job = .close;
+                try rt.net.close(provision, close_task, provision.socket);
+                return;
+            };
+
             const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
             const router = rt.storage.get_const_ptr("__zzz_router", Router);
 
@@ -424,7 +441,37 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             }
         }
 
-        fn handshake_task(rt: *Runtime, length: i32, provision: *Provision) !void {
+        fn handshake_recv_task(rt: *Runtime, result: RecvResult, provision: *Provision) !void {
+            assert(security == .tls);
+
+            const length = result.unwrap() catch |e| {
+                if (e != error.Closed) {
+                    log.warn("socket recv failed | {}", .{e});
+                }
+                provision.job = .close;
+                try rt.net.close(provision, close_task, provision.socket);
+                return error.TLSHandshakeClosed;
+            };
+
+            try handshake_inner_task(rt, length, provision);
+        }
+
+        fn handshake_send_task(rt: *Runtime, result: SendResult, provision: *Provision) !void {
+            assert(security == .tls);
+
+            const length = result.unwrap() catch |e| {
+                if (e != error.ConnectionReset) {
+                    log.warn("socket send failed | {}", .{e});
+                }
+                provision.job = .close;
+                try rt.net.close(provision, close_task, provision.socket);
+                return error.TLSHandshakeClosed;
+            };
+
+            try handshake_inner_task(rt, length, provision);
+        }
+
+        fn handshake_inner_task(rt: *Runtime, length: i32, provision: *Provision) !void {
             assert(security == .tls);
             if (comptime security == .tls) {
                 const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
@@ -436,13 +483,6 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                 assert(tls_ptr.* != null);
                 log.debug("processing handshake", .{});
                 handshake_job.count += 1;
-
-                if (length <= 0) {
-                    log.debug("handshake connection closed", .{});
-                    provision.job = .close;
-                    try rt.net.close(provision, close_task, provision.socket);
-                    return error.TLSHandshakeClosed;
-                }
 
                 if (handshake_job.count >= 50) {
                     log.debug("handshake taken too many cycles", .{});
@@ -467,12 +507,12 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     .recv => |buf| {
                         log.debug("queueing recv in handshake", .{});
                         handshake_job.state = .recv;
-                        try rt.net.recv(provision, handshake_task, provision.socket, buf);
+                        try rt.net.recv(provision, handshake_recv_task, provision.socket, buf);
                     },
                     .send => |buf| {
                         log.debug("queueing send in handshake", .{});
                         handshake_job.state = .send;
-                        try rt.net.send(provision, handshake_task, provision.socket, buf);
+                        try rt.net.send(provision, handshake_send_task, provision.socket, buf);
                     },
                     .complete => {
                         log.debug("handshake complete", .{});
@@ -575,17 +615,21 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             }
         }.inner);
 
-        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(i32, *Provision) {
+        pub fn send_then(comptime func: TaskFn(bool, *Provision)) TaskFn(SendResult, *Provision) {
             return struct {
-                fn send_then_inner(rt: *Runtime, length: i32, provision: *Provision) !void {
+                fn send_then_inner(rt: *Runtime, result: SendResult, provision: *Provision) !void {
                     assert(provision.job == .send);
                     const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
-                    // If the socket is closed.
-                    if (length <= 0) {
-                        try @call(.always_inline, func, .{ rt, false, provision });
+                    const length = result.unwrap() catch |e| {
+                        // If the socket is closed.
+                        if (e != error.ConnectionReset) {
+                            log.warn("socket send failed: {}", .{e});
+                        }
+
+                        try @call(.auto, func, .{ rt, false, provision });
                         return;
-                    }
+                    };
 
                     const send_job = &provision.job.send;
 

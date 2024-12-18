@@ -7,6 +7,11 @@ const Response = @import("../response.zig").Response;
 const Mime = @import("../mime.zig").Mime;
 const _Context = @import("../context.zig").Context;
 
+const OpenResult = @import("tardy").OpenResult;
+const ReadResult = @import("tardy").ReadResult;
+const SendResult = @import("tardy").SendResult;
+const StatResult = @import("tardy").StatResult;
+
 const Runtime = @import("tardy").Runtime;
 const Stat = @import("tardy").Stat;
 const Cross = @import("tardy").Cross;
@@ -27,32 +32,43 @@ pub fn FsDir(Server: type, AppState: type) type {
             buffer: []u8,
         };
 
-        fn open_file_task(rt: *Runtime, fd: std.posix.fd_t, provision: *FileProvision) !void {
+        fn open_file_task(rt: *Runtime, result: OpenResult, provision: *FileProvision) !void {
             errdefer provision.context.respond(.{
                 .status = .@"Internal Server Error",
                 .mime = Mime.HTML,
                 .body = "",
             }) catch unreachable;
 
-            if (!Cross.fd.is_valid(fd)) {
+            const fd = result.unwrap() catch |e| {
+                log.warn("file not found | {}", .{e});
                 try provision.context.respond(.{
                     .status = .@"Not Found",
                     .mime = Mime.HTML,
                     .body = "File Not Found",
                 });
                 return;
-            }
+            };
             provision.fd = fd;
 
             try rt.fs.stat(provision, stat_file_task, fd);
         }
 
-        fn stat_file_task(rt: *Runtime, stat: Stat, provision: *FileProvision) !void {
+        fn stat_file_task(rt: *Runtime, result: StatResult, provision: *FileProvision) !void {
             errdefer provision.context.respond(.{
                 .status = .@"Internal Server Error",
                 .mime = Mime.HTML,
                 .body = "",
             }) catch unreachable;
+
+            const stat = result.unwrap() catch |e| {
+                log.warn("stat on fd={d} failed | {}", .{ provision.fd, e });
+                try provision.context.respond(.{
+                    .status = .@"Not Found",
+                    .mime = Mime.HTML,
+                    .body = "File Not Found",
+                });
+                return;
+            };
 
             // Set file size.
             provision.file_size = stat.size;
@@ -109,50 +125,56 @@ pub fn FsDir(Server: type, AppState: type) type {
             );
         }
 
-        fn read_file_task(rt: *Runtime, result: i32, provision: *FileProvision) !void {
+        fn read_file_task(rt: *Runtime, result: ReadResult, provision: *FileProvision) !void {
             errdefer {
                 std.posix.close(provision.fd);
                 provision.context.close() catch unreachable;
             }
 
-            if (result <= -1) {
-                log.warn("read file task failed", .{});
-                std.posix.close(provision.fd);
-                try provision.context.close();
-                return;
-            }
+            const length = result.unwrap() catch |e| {
+                switch (e) {
+                    error.EndOfFile => {
+                        log.debug("done streaming file | rd off: {d} | f size: {d} ", .{
+                            provision.rd_offset,
+                            provision.file_size,
+                        });
 
-            const length: usize = @intCast(result);
-            provision.rd_offset += length;
-            provision.current_length += length;
+                        std.posix.close(provision.fd);
+                        try provision.context.send_then_recv(
+                            provision.buffer[0..provision.current_length],
+                        );
+                        return;
+                    },
+                    else => {
+                        log.warn("reading on fd={d} failed | {}", .{ provision.fd, e });
+                        std.posix.close(provision.fd);
+                        try provision.context.close();
+                        return;
+                    },
+                }
+            };
+
+            const length_as_usize: usize = @intCast(length);
+            provision.rd_offset += length_as_usize;
+            provision.current_length += length_as_usize;
             log.debug("current offset: {d} | fd: {}", .{ provision.rd_offset, provision.fd });
 
-            if (provision.rd_offset >= provision.file_size or result == 0) {
-                log.debug("done streaming file | rd off: {d} | f size: {d} | result: {d}", .{
-                    provision.rd_offset,
-                    provision.file_size,
-                    result,
-                });
-
-                std.posix.close(provision.fd);
-                try provision.context.send_then_recv(provision.buffer[0..provision.current_length]);
+            assert(provision.rd_offset <= length_as_usize);
+            assert(provision.current_length <= provision.buffer.len);
+            if (provision.current_length == provision.buffer.len) {
+                try provision.context.send_then(
+                    provision.buffer[0..provision.current_length],
+                    provision,
+                    send_file_task,
+                );
             } else {
-                assert(provision.current_length <= provision.buffer.len);
-                if (provision.current_length == provision.buffer.len) {
-                    try provision.context.send_then(
-                        provision.buffer[0..provision.current_length],
-                        provision,
-                        send_file_task,
-                    );
-                } else {
-                    try rt.fs.read(
-                        provision,
-                        read_file_task,
-                        provision.fd,
-                        provision.buffer[provision.current_length..],
-                        provision.rd_offset,
-                    );
-                }
+                try rt.fs.read(
+                    provision,
+                    read_file_task,
+                    provision.fd,
+                    provision.buffer[provision.current_length..],
+                    provision.rd_offset,
+                );
             }
         }
 

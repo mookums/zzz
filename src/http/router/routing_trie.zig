@@ -146,12 +146,16 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Initialize new trie node for the next token.
-        fn _with_route(comptime node: *const Node, comptime iterator: *std.mem.TokenIterator(u8, .scalar), comptime route: Route) Node {
+        fn with_route_helper(
+            comptime node: *const Node,
+            comptime iterator: *std.mem.TokenIterator(u8, .scalar),
+            comptime route: Route,
+        ) Node {
             if (iterator.next()) |chunk| {
                 // Parse the current chunk.
                 const token: Token = Token.parse_chunk(chunk);
                 // Alter the child of the current node.
-                return node.with_child(token, &(_with_route(
+                return node.with_child(token, &(with_route_helper(
                     node.children.get_optional(token) orelse &(Node.init(token, null)),
                     iterator,
                     route,
@@ -168,13 +172,13 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
 
         /// Copy the current routing trie to add the provided route.
         pub fn with_route(comptime self: *const Self, comptime route: Route) Self {
-            @setEvalBranchQuota(10000);
+            @setEvalBranchQuota(1_000_000);
 
             // This is where we will parse out the path.
             comptime var iterator = std.mem.tokenizeScalar(u8, route.path, '/');
 
             return Self{
-                .root = _with_route(&(self.root), &iterator, route),
+                .root = with_route_helper(&(self.root), &iterator, route),
             };
         }
 

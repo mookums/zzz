@@ -3,7 +3,7 @@
     "a framework for writing performant and reliable networked services";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/release-24.05";
+    nixpkgs.url = "github:nixos/nixpkgs/release-24.11";
     iguana.url = "github:mookums/iguana";
     flake-utils.url = "github:numtide/flake-utils";
   };
