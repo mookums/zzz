@@ -8,7 +8,7 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain);
+const Server = http.Server(.plain, void);
 const Context = Server.Context;
 const Route = Server.Route;
 const Router = Server.Router;
@@ -17,7 +17,7 @@ pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(ctx: *Context, _: void) !void {
+fn hi_handler(ctx: *Context) !void {
     const name = ctx.captures[0].string;
 
     const body = try std.fmt.allocPrint(ctx.allocator,
@@ -60,10 +60,10 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
-    try router.serve_embedded_file("/", http.Mime.HTML, @embedFile("index.html"));
-    try router.serve_route("/hi/%s", Route.init().get({}, hi_handler));
+    var router = Router.init({}, &[_]Route{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
+        Route.init("/hi/%s").get(hi_handler),
+    }, .{});
 
     try t.entry(
         &router,

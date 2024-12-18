@@ -13,15 +13,15 @@ const TLS = @import("../tls/lib.zig").TLS;
 const _Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
-const Capture = @import("routing_trie.zig").Capture;
-const QueryMap = @import("routing_trie.zig").QueryMap;
+const Capture = @import("router/routing_trie.zig").Capture;
+const QueryMap = @import("router/routing_trie.zig").QueryMap;
 const ResponseSetOptions = Response.ResponseSetOptions;
 const _SSE = @import("sse.zig").SSE;
 
 const Provision = @import("provision.zig").Provision;
 const Mime = @import("mime.zig").Mime;
 const _Router = @import("router.zig").Router;
-const _Route = @import("route.zig").Route;
+const _Route = @import("router/route.zig").Route;
 const HTTPError = @import("lib.zig").HTTPError;
 
 const AfterType = @import("../core/job.zig").AfterType;
@@ -149,16 +149,16 @@ pub const ServerConfig = struct {
     request_uri_bytes_max: u32 = 1024 * 2,
 };
 
-pub fn Server(comptime security: Security) type {
+pub fn Server(comptime security: Security, comptime AppState: type) type {
     const TLSContextType = comptime if (security == .tls) TLSContext else void;
     const TLSType = comptime if (security == .tls) ?TLS else void;
 
     return struct {
         const Self = @This();
-        pub const Context = _Context(Self);
-        pub const Router = _Router(Self);
-        pub const Route = _Route(Self);
-        pub const SSE = _SSE(Self);
+        pub const Context = _Context(Self, AppState);
+        pub const Router = _Router(Self, AppState);
+        pub const Route = _Route(Self, AppState);
+        pub const SSE = _SSE(Self, AppState);
         allocator: std.mem.Allocator,
         config: ServerConfig,
         addr: ?std.net.Address,
@@ -801,13 +801,15 @@ pub fn Server(comptime security: Security) type {
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
             route: {
                 const found = try router.get_route_from_host(p.request.uri.?, p.captures, &p.queries);
-                const handler = found.route.get_handler(p.request.method.?);
+                const optional_handler = found.route.get_handler(p.request.method.?);
 
-                if (handler) |h_with_data| {
+                if (optional_handler) |handler| {
                     const context: *Context = try p.arena.allocator().create(Context);
                     context.* = .{
                         .allocator = p.arena.allocator(),
                         .runtime = runtime,
+                        .state = router.state,
+                        .route = &found.route,
                         .request = &p.request,
                         .response = &p.response,
                         .captures = found.captures,
@@ -815,9 +817,8 @@ pub fn Server(comptime security: Security) type {
                         .provision = p,
                     };
 
-                    @call(.auto, h_with_data.handler, .{
+                    @call(.auto, handler, .{
                         context,
-                        @as(*anyopaque, @ptrFromInt(h_with_data.data)),
                     }) catch |e| {
                         log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri.?, e });
                         p.response.set(.{

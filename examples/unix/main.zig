@@ -8,7 +8,7 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain);
+const Server = http.Server(.plain, void);
 const Context = Server.Context;
 const Route = Server.Route;
 const Router = Server.Router;
@@ -17,7 +17,7 @@ pub const std_options = .{
     .log_level = .err,
 };
 
-pub fn root_handler(ctx: *Context, _: void) !void {
+pub fn root_handler(ctx: *Context) !void {
     try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
@@ -36,10 +36,9 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init(allocator);
-    defer router.deinit();
-
-    try router.serve_route("/", Route.init().get({}, root_handler));
+    var router = Router.init({}, &[_]Route{
+        Route.init("/").get(root_handler)
+    }, .{});
 
     try t.entry(
         &router,

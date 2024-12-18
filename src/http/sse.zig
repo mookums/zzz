@@ -15,8 +15,8 @@ const SSEMessage = struct {
     retry: ?u64 = null,
 };
 
-pub fn SSE(comptime Server: type) type {
-    const Context = _Context(Server);
+pub fn SSE(comptime Server: type, comptime AppState: type) type {
+    const Context = _Context(Server, AppState);
     return struct {
         const Self = @This();
         context: *Context,
