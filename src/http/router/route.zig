@@ -175,7 +175,10 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
                     // it might be more beneficial to using caching.
                     if (comptime bytes.len > 1024) {
                         @setEvalBranchQuota(1_000_000);
-                        const etag = comptime std.fmt.comptimePrint("\"{d}\"", .{std.hash.Wyhash.hash(0, bytes)});
+                        const etag = comptime std.fmt.comptimePrint(
+                            "\"{d}\"",
+                            .{std.hash.Wyhash.hash(0, bytes)},
+                        );
                         ctx.response.headers.putAssumeCapacity("ETag", etag[0..]);
 
                         if (ctx.request.headers.get("If-None-Match")) |match| {
@@ -208,14 +211,14 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
             );
 
             return self
-                // Set the new path.
+            // Set the new path.
                 .set_path(url_with_match_all)
-                // Set GET handler.
+            // Set GET handler.
                 .get(struct {
-                    fn handler_fn(ctx: *Context) !void {
-                        try FsDir.handler_fn(ctx, dir_path);
-                    }
-                }.handler_fn);
+                fn handler_fn(ctx: *Context) !void {
+                    try FsDir.handler_fn(ctx, dir_path);
+                }
+            }.handler_fn);
         }
     };
 }

@@ -193,13 +193,16 @@ pub fn FsDir(Server: type, AppState: type) type {
 
             //TODO Can we do this once and for all at initialization?
             // Resolving the base directory.
-            const resolved_dir = try std.fs.path.resolve(ctx.allocator, &[_][]const u8{ dir_path });
+            const resolved_dir = try std.fs.path.resolve(ctx.allocator, &[_][]const u8{dir_path});
             defer ctx.allocator.free(resolved_dir);
 
             // Resolving the requested file.
             const search_path = ctx.captures[0].remaining;
             const resolved_file_path = blk: {
-                const file_path = std.fs.path.resolve(ctx.allocator, &[_][]const u8{ dir_path, search_path }) catch {
+                const file_path = std.fs.path.resolve(
+                    ctx.allocator,
+                    &[_][]const u8{ dir_path, search_path },
+                ) catch {
                     try ctx.respond(.{
                         .status = .@"Not Found",
                         .mime = Mime.HTML,

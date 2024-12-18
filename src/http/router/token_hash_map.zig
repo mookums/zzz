@@ -2,7 +2,7 @@ const std = @import("std");
 const Token = @import("routing_trie.zig").Token;
 
 /// Errors of get function.
-pub const MapGetErrors = error {
+pub const MapGetErrors = error{
     NotFound,
 };
 
@@ -10,10 +10,10 @@ pub const MapGetErrors = error {
 pub const Hash = u64;
 
 /// Type of a hash entry in hashed array.
-pub const HashEntry = struct{Hash, usize};
+pub const HashEntry = struct { Hash, usize };
 
 /// In-place sort of the given array at compile time.
-/// Implementation reference: https://github.com/Koura/algorithms/blob/b1dd07147a34554543994b2c033fae64a2202933/sorting/quicksort.zig
+/// https://github.com/Koura/algorithms/blob/b1dd07147a34554543994b2c033fae64a2202933/sorting/quicksort.zig
 fn sort(A: []HashEntry, lo: usize, hi: usize) void {
     if (lo < hi) {
         const p = partition(A, lo, hi);
@@ -111,7 +111,7 @@ pub fn TokenHashMap(V: type) type {
         pub fn get_kvs(self: *const Self) []const KV {
             var kvs: [self.keys.len]KV = undefined;
             for (&kvs, self.keys, self.values) |*kv, key, value| {
-                kv.* = .{key, value};
+                kv.* = .{ key, value };
             }
             return &kvs;
         }
@@ -160,7 +160,7 @@ pub fn TokenHashMap(V: type) type {
 
             // Search in the sorted hashes array.
             const hash_index = std.sort.binarySearch(HashEntry, hash, self.hashes, {}, struct {
-                fn f (_: void, searched_key: Hash, mid_item: HashEntry) std.math.Order {
+                fn f(_: void, searched_key: Hash, mid_item: HashEntry) std.math.Order {
                     if (searched_key < mid_item[0]) return std.math.Order.lt;
                     if (searched_key > mid_item[0]) return std.math.Order.gt;
                     if (searched_key == mid_item[0]) return std.math.Order.eq;

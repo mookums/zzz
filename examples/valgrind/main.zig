@@ -31,7 +31,6 @@ pub fn main() !void {
                     \\ </body>
                     \\ </html>
                 ;
-
                 try ctx.respond(.{
                     .status = .OK,
                     .mime = http.Mime.HTML,
@@ -44,7 +43,7 @@ pub fn main() !void {
             pub fn handler_fn(ctx: *Context) !void {
                 ctx.runtime.stop();
             }
-        }.handler_fn)
+        }.handler_fn),
     }, .{});
 
     var t = try Tardy.init(.{

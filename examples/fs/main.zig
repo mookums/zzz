@@ -40,7 +40,6 @@ pub fn main() !void {
                     \\ </body>
                     \\ </html>
                 ;
-
                 try ctx.respond(.{
                     .status = .OK,
                     .mime = http.Mime.HTML,

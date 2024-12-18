@@ -106,7 +106,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                 return Node{
                     .token = self.token,
                     .route = self.route,
-                    .children = self.children.with_kvs(&[_]ChildrenMap.KV{.{ token, node }})
+                    .children = self.children.with_kvs(&[_]ChildrenMap.KV{.{ token, node }}),
                 };
             }
         };
@@ -135,7 +135,6 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                     std.debug.print("  ⃝", .{});
                 }
                 std.debug.print("\n", .{});
-
 
                 print_node(node, depth + 1);
             }
@@ -481,7 +480,11 @@ test "Routing with Queries" {
 
     {
         // Purposefully have too many queries.
-        const captured = try s.get_route("/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11", captures[0..], &q);
+        const captured = try s.get_route(
+            "/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11",
+            captures[0..],
+            &q,
+        );
         try testing.expectEqual(null, captured);
     }
 }

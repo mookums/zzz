@@ -36,9 +36,7 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init({}, &[_]Route{
-        Route.init("/").get(root_handler)
-    }, .{});
+    var router = Router.init({}, &[_]Route{Route.init("/").get(root_handler)}, .{});
 
     try t.entry(
         &router,
