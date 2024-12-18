@@ -265,9 +265,10 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             provision.response.clear();
 
             if (provision.recv_buffer.len > config.list_recv_bytes_retain) {
-                provision.recv_buffer.shrink_retaining_capacity(config.list_recv_bytes_retain);
+                try provision.recv_buffer.shrink_clear_and_free(config.list_recv_bytes_retain);
+            } else {
+                provision.recv_buffer.clear_retaining_capacity();
             }
-            provision.recv_buffer.clear_retaining_capacity();
 
             pool.release(provision.index);
 
