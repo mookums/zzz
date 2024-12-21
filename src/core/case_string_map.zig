@@ -1,35 +1,92 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const Pool = @import("tardy").Pool;
+
 pub fn CaseStringMap(comptime T: type) type {
-    return std.ArrayHashMapUnmanaged([]const u8, T, struct {
-        pub fn hash(_: @This(), input: []const u8) u32 {
-            var h: u32 = 0;
-            for (input) |byte| {
-                h = h *% 31 +% std.ascii.toLower(byte);
-            }
-            return h;
+    return struct {
+        const Self = @This();
+        const InnerPool = Pool(Entry);
+        const PoolIterator = InnerPool.Iterator;
+
+        const Entry = struct {
+            hash: u32,
+            key: []const u8,
+            data: T,
+        };
+
+        pool: InnerPool,
+
+        pub fn init(allocator: std.mem.Allocator, size: usize) !Self {
+            const pool = try Pool(Entry).init(allocator, size, null, null);
+            return .{ .pool = pool };
         }
 
-        pub fn eql(_: @This(), first: []const u8, second: []const u8, _: usize) bool {
-            if (first.len != second.len) return false;
-            for (first, second) |a, b| {
-                if (std.ascii.toLower(a) != std.ascii.toLower(b)) return false;
-            }
-            return true;
+        pub fn deinit(self: *Self) void {
+            self.pool.deinit(null, null);
         }
-    }, true);
+
+        pub fn put(self: *Self, name: []const u8, data: T) !void {
+            const name_hash = hash(name);
+            const entry = try self.pool.borrow_hint(@intCast(name_hash));
+            entry.item.* = .{ .key = name, .hash = name_hash, .data = data };
+        }
+
+        pub fn put_assume_capacity(self: *Self, name: []const u8, data: T) void {
+            assert(self.pool.clean() > 0);
+            const name_hash = hash(name);
+            const entry = self.pool.borrow_hint(@intCast(name_hash)) catch unreachable;
+            entry.item.* = .{ .key = name, .hash = name_hash, .data = data };
+        }
+
+        pub fn get(self: *Self, name: []const u8) ?T {
+            const name_hash = hash(name);
+
+            var iter = self.pool.iterator();
+            while (iter.next()) |entry| {
+                if (entry.hash == name_hash) {
+                    return entry.data;
+                }
+            }
+
+            return null;
+        }
+
+        pub fn iterator(self: *Self) PoolIterator {
+            return self.pool.iterator();
+        }
+
+        pub fn num_clean(self: *const Self) usize {
+            return self.pool.clean();
+        }
+
+        pub fn dirty(self: *const Self) usize {
+            return self.pool.dirty.count();
+        }
+
+        pub fn clear(self: *Self) void {
+            // unset all of the dirty bits, effectively clearing it.
+            self.pool.dirty.unsetAll();
+        }
+
+        fn hash(name: []const u8) u32 {
+            var h = std.hash.Fnv1a_32.init();
+            for (name) |byte| {
+                h.update(&.{std.ascii.toLower(byte)});
+            }
+            return h.final();
+        }
+    };
 }
 
 const testing = std.testing;
 
 test "CaseStringMap: Add Stuff" {
-    var csm = CaseStringMap([]const u8){};
-    defer csm.deinit(testing.allocator);
-    try csm.ensureUnusedCapacity(testing.allocator, 2);
+    var csm = try CaseStringMap([]const u8).init(testing.allocator, 2);
+    defer csm.deinit();
 
-    csm.putAssumeCapacity("Content-Length", "100");
-    csm.putAssumeCapacity("Host", "localhost:9999");
+    try csm.put("Content-Length", "100");
+    csm.put_assume_capacity("Host", "localhost:9999");
 
     const content_length = csm.get("content-length");
     try testing.expect(content_length != null);

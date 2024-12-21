@@ -71,7 +71,7 @@ pub inline fn raw_respond(p: *Provision) !RecvStatus {
 
     const body = p.response.body orelse "";
     const header_buffer = try p.response.headers_into_buffer(p.buffer, @intCast(body.len));
-    p.response.headers.clearRetainingCapacity();
+    p.response.headers.clear();
     const pseudo = Pseudoslice.init(header_buffer, body, p.buffer);
     return .{ .send = pseudo };
 }
@@ -125,12 +125,8 @@ pub const ServerConfig = struct {
     /// Size of the buffer (in bytes) used for
     /// interacting with the socket.
     ///
-    /// Default: 4 KB.
-    socket_buffer_bytes: u32 = 1024 * 4,
-    /// Maximum length of a Header Key
-    ///
-    /// Default: 64
-    header_key_length_max: u16 = 64,
+    /// Default: 1 KB.
+    socket_buffer_bytes: u32 = 1024,
     /// Maximum number of Headers in a Request/Response
     ///
     /// Default: 32
@@ -740,7 +736,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             }.send_then_inner;
         }
 
-        pub inline fn serve(self: *Self, router: *const Router, rt: *Runtime) !void {
+        pub fn serve(self: *Self, router: *const Router, rt: *Runtime) !void {
             if (self.addr == null) return error.ServerNotBinded;
             const addr = self.addr.?;
             try rt.storage.store_alloc("__zzz_is_unix", addr.any.family == std.posix.AF.UNIX);
@@ -786,7 +782,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             try rt.net.accept(socket, accept_task, socket);
         }
 
-        pub inline fn clean(rt: *Runtime) !void {
+        pub fn clean(rt: *Runtime) !void {
             // clean up socket.
             const server_socket = rt.storage.get("__zzz_server_socket", std.posix.socket_t);
             std.posix.close(server_socket);
@@ -896,7 +892,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                         break :route;
                     };
 
-                    p.response.headers.putAssumeCapacity("Allow", allowed);
+                    p.response.headers.put_assume_capacity("Allow", allowed);
                     break :route;
                 }
             }

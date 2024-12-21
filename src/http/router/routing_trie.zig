@@ -199,7 +199,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
         ) !?FoundRoute {
             var capture_idx: usize = 0;
 
-            queries.clearRetainingCapacity();
+            queries.clear();
             const query_pos = std.mem.indexOfScalar(u8, path, '?');
             var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
 
@@ -262,7 +262,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
                     var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
 
                     while (query_iter.next()) |chunk| {
-                        if (queries.count() >= queries.capacity() / 2) return null;
+                        if (queries.pool.clean() == 0) return null;
 
                         const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse break;
                         if (chunk.len < field_idx + 1) break;
@@ -272,7 +272,7 @@ pub fn RoutingTrie(comptime Server: type, comptime AppState: type) type {
 
                         assert(std.mem.indexOfScalar(u8, key, '=') == null);
                         assert(std.mem.indexOfScalar(u8, value, '=') == null);
-                        queries.putAssumeCapacity(key, value);
+                        queries.put_assume_capacity(key, value);
                     }
                 }
             }
@@ -372,9 +372,8 @@ test "Routing with Paths" {
         Route.init("/item/list"),
     });
 
-    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
-    try q.ensureTotalCapacity(testing.allocator, 8);
-    defer q.deinit(testing.allocator);
+    var q = try QueryMap.init(testing.allocator, 8);
+    defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
@@ -405,9 +404,8 @@ test "Routing with Remaining" {
         Route.init("/item/%i/price/%f"),
     });
 
-    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
-    try q.ensureTotalCapacity(testing.allocator, 8);
-    defer q.deinit(testing.allocator);
+    var q = try QueryMap.init(testing.allocator, 8);
+    defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
@@ -448,9 +446,8 @@ test "Routing with Queries" {
         Route.init("/item/%i/price/%f"),
     });
 
-    var q = try QueryMap.init(testing.allocator, &[_][]const u8{}, &[_][]const u8{});
-    try q.ensureTotalCapacity(testing.allocator, 8);
-    defer q.deinit(testing.allocator);
+    var q = try QueryMap.init(testing.allocator, 8);
+    defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
@@ -460,7 +457,7 @@ test "Routing with Queries" {
         const captured = (try s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
-        try testing.expectEqual(2, q.count());
+        try testing.expectEqual(2, q.dirty());
         try testing.expectEqualStrings("muki", q.get("name").?);
         try testing.expectEqualStrings("waffle", q.get("food").?);
     }
@@ -470,7 +467,7 @@ test "Routing with Queries" {
         const captured = (try s.get_route("/item/2112.22121/price_float?", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
-        try testing.expectEqual(0, q.count());
+        try testing.expectEqual(0, q.dirty());
     }
 
     {
@@ -479,7 +476,7 @@ test "Routing with Queries" {
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
-        try testing.expectEqual(0, q.count());
+        try testing.expectEqual(0, q.dirty());
     }
 
     {

@@ -21,7 +21,7 @@ pub const ZeroCopyBuffer = struct {
         self.allocator.free(self.ptr[0..self.capacity]);
     }
 
-    pub fn as_slice(self: *ZeroCopyBuffer) []u8 {
+    pub fn as_slice(self: *const ZeroCopyBuffer) []u8 {
         return self.ptr[0..self.len];
     }
 
@@ -30,7 +30,7 @@ pub const ZeroCopyBuffer = struct {
         end: ?usize = null,
     };
 
-    pub fn subslice(self: *ZeroCopyBuffer, options: SubsliceOptions) []u8 {
+    pub fn subslice(self: *const ZeroCopyBuffer, options: SubsliceOptions) []u8 {
         const start: usize = options.start orelse 0;
         const end: usize = options.end orelse self.len;
         assert(start <= end);
@@ -68,7 +68,7 @@ pub const ZeroCopyBuffer = struct {
         }
     }
 
-    pub fn get_write_area_assume_space(self: *ZeroCopyBuffer, size: usize) []u8 {
+    pub fn get_write_area_assume_space(self: *const ZeroCopyBuffer, size: usize) []u8 {
         assert(self.capacity - self.len >= size);
         return self.ptr[self.len .. self.len + size];
     }

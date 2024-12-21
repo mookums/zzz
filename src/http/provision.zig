@@ -49,8 +49,7 @@ pub const Provision = struct {
             provision.captures = ctx.allocator.alloc(Capture, config.capture_count_max) catch {
                 @panic("attempting to statically allocate more memory than available. (Captures)");
             };
-            provision.queries = QueryMap{};
-            provision.queries.ensureUnusedCapacity(ctx.allocator, config.query_count_max) catch {
+            provision.queries = QueryMap.init(ctx.allocator, config.query_count_max) catch {
                 @panic("attempting to statically allocate more memory than available. (QueryMap)");
             };
             provision.request = Request.init(ctx.allocator, config.header_count_max) catch {
@@ -68,7 +67,7 @@ pub const Provision = struct {
             provision.arena.deinit();
             provision.request.deinit();
             provision.response.deinit();
-            provision.queries.deinit(allocator);
+            provision.queries.deinit();
             allocator.free(provision.captures);
         }
     }

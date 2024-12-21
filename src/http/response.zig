@@ -14,8 +14,7 @@ pub const Response = struct {
     headers: Headers,
 
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Response {
-        var headers = Headers{};
-        try headers.ensureUnusedCapacity(allocator, header_count_max);
+        const headers = try Headers.init(allocator, header_count_max);
 
         return Response{
             .allocator = allocator,
@@ -24,7 +23,7 @@ pub const Response = struct {
     }
 
     pub fn deinit(self: *Response) void {
-        self.headers.deinit(self.allocator);
+        self.headers.deinit();
     }
 
     pub fn clear(self: *Response) void {
@@ -77,12 +76,12 @@ pub const Response = struct {
         // Headers
         var iter = self.headers.iterator();
         while (iter.next()) |entry| {
-            std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
-            index += entry.key_ptr.len;
+            std.mem.copyForwards(u8, buffer[index..], entry.key);
+            index += entry.key.len;
             std.mem.copyForwards(u8, buffer[index..], ": ");
             index += 2;
-            std.mem.copyForwards(u8, buffer[index..], entry.value_ptr.*);
-            index += entry.value_ptr.len;
+            std.mem.copyForwards(u8, buffer[index..], entry.data);
+            index += entry.data.len;
             std.mem.copyForwards(u8, buffer[index..], "\r\n");
             index += 2;
         }

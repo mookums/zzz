@@ -59,7 +59,7 @@ pub fn Router(comptime Server: type, comptime AppState: type) type {
 
         pub fn get_route_from_host(self: Self, path: []const u8, captures: []Capture, queries: *QueryMap) !FoundRoute {
             return try self.routes.get_route(path, captures, queries) orelse {
-                queries.clearRetainingCapacity();
+                queries.clear();
                 return FoundRoute{ .route = self.not_found_route, .captures = captures[0..0], .queries = queries };
             };
         }

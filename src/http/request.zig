@@ -16,27 +16,23 @@ pub const Request = struct {
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Request {
-        var headers = Headers{};
-        try headers.ensureUnusedCapacity(allocator, header_count_max);
+        const headers = try Headers.init(allocator, header_count_max);
 
         return Request{
             .allocator = allocator,
             .headers = headers,
-            .method = null,
-            .uri = null,
-            .body = null,
         };
     }
 
     pub fn deinit(self: *Request) void {
-        self.headers.deinit(self.allocator);
+        self.headers.deinit();
     }
 
     pub fn clear(self: *Request) void {
         self.method = null;
         self.uri = null;
         self.body = null;
-        self.headers.clearRetainingCapacity();
+        self.headers.clear();
     }
 
     const RequestParseOptions = struct {
@@ -88,8 +84,8 @@ pub const Request = struct {
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
                 if (value.len == 0) return HTTPError.MalformedRequest;
 
-                if (self.headers.count() >= self.headers.capacity() / 2) return HTTPError.TooManyHeaders;
-                self.headers.putAssumeCapacity(key, value);
+                if (self.headers.num_clean() == 0) return HTTPError.TooManyHeaders;
+                self.headers.put_assume_capacity(key, value);
             }
         }
     }
