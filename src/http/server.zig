@@ -62,7 +62,7 @@ pub const Security = union(enum) {
 /// of a response. This is used when we already know what we want to send.
 ///
 /// See: `route_and_respond`
-pub inline fn raw_respond(p: *Provision) !RecvStatus {
+pub fn raw_respond(p: *Provision) !RecvStatus {
     {
         const status_code: u16 = if (p.response.status) |status| @intFromEnum(status) else 0;
         const status_name = if (p.response.status) |status| @tagName(status) else "No Status";
@@ -645,7 +645,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
 
                             if (job_tls.encrypted_count >= job_tls.encrypted.len) {
                                 if (send_job.count >= send_job.slice.len) {
-                                    try @call(.always_inline, func, .{ rt, true, provision });
+                                    try @call(.auto, func, .{ rt, true, provision });
                                 } else {
                                     // Queue a new chunk up for sending.
                                     log.debug(
@@ -700,7 +700,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                             send_job.count += send_count;
 
                             if (send_job.count >= send_job.slice.len) {
-                                try @call(.always_inline, func, .{ rt, true, provision });
+                                try @call(.auto, func, .{ rt, true, provision });
                             } else {
                                 log.debug(
                                     "{d} - sending next chunk starting at index {d}",

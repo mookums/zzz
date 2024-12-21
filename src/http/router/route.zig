@@ -88,7 +88,7 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
         }
 
         /// Set a handler function for the provided method.
-        inline fn inner_route(
+        fn inner_route(
             comptime method: Method,
             self: Self,
             handler_fn: HandlerFn,
