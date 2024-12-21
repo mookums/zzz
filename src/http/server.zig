@@ -827,61 +827,52 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             return socket;
         }
 
+        /// Try to pass the given error to the router error handler.
+        fn handle_error(router: *const Router, provision: *Provision, context: *Context, err: anyerror) RecvStatus {
+            // Call router error handler.
+            router.error_handler(context, err) catch {
+                provision.response.set(.{
+                    .status = .@"Internal Server Error",
+                    .mime = Mime.TEXT,
+                    .body = "Internal server error.",
+                });
+                return raw_respond(provision) catch unreachable;
+            };
+            return .spawned;
+        }
+
         fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
-            route: {
+            {
                 const found = try router.get_route_from_host(p.request.uri.?, p.captures, &p.queries);
                 const optional_handler = found.route.get_handler(p.request.method.?);
 
-                if (optional_handler) |handler| {
-                    const context: *Context = try p.arena.allocator().create(Context);
-                    context.* = .{
-                        .allocator = p.arena.allocator(),
-                        .runtime = runtime,
-                        .state = router.state,
-                        .route = &found.route,
-                        .request = &p.request,
-                        .response = &p.response,
-                        .captures = found.captures,
-                        .queries = found.queries,
-                        .provision = p,
-                    };
+                const context: *Context = try p.arena.allocator().create(Context);
+                context.* = .{
+                    .allocator = p.arena.allocator(),
+                    .runtime = runtime,
+                    .state = router.state,
+                    .route = &found.route,
+                    .request = &p.request,
+                    .response = &p.response,
+                    .captures = found.captures,
+                    .queries = found.queries,
+                    .provision = p,
+                };
 
+                if (optional_handler) |handler| {
                     @call(.auto, handler, .{
                         context,
                     }) catch |e| {
                         log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri.?, e });
-                        p.response.set(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        });
-
-                        return try raw_respond(p);
+                        // Call router error handler.
+                        return handle_error(router, p, context, e);
                     };
 
                     return .spawned;
                 } else {
                     // If we match the route but not the method.
-                    p.response.set(.{
-                        .status = .@"Method Not Allowed",
-                        .mime = Mime.HTML,
-                        .body = "405 Method Not Allowed",
-                    });
-
-                    // We also need to add to Allow header.
-                    // This uses the connection's arena to allocate 64 bytes.
-                    const allowed = found.route.get_allowed(p.arena.allocator()) catch {
-                        p.response.set(.{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        });
-
-                        break :route;
-                    };
-
-                    p.response.headers.put_assume_capacity("Allow", allowed);
-                    break :route;
+                    // Call router error handler with Method Not Allowed error.
+                    return handle_error(router, p, context, HTTPError.MethodNotAllowed);
                 }
             }
 
@@ -903,14 +894,22 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             var stage = provision.stage;
             const job = provision.job.recv;
 
-            if (job.count >= config.request_bytes_max) {
-                provision.response.set(.{
-                    .status = .@"Content Too Large",
-                    .mime = Mime.HTML,
-                    .body = "Request was too large",
-                });
+            // Initialize a context for the error handler.
+            const context: *Context = try provision.arena.allocator().create(Context);
+            context.* = .{
+                .allocator = provision.arena.allocator(),
+                .runtime = rt,
+                .state = router.state,
+                .route = null,
+                .request = &provision.request,
+                .response = &provision.response,
+                .captures = provision.captures,
+                .queries = &provision.queries,
+                .provision = provision,
+            };
 
-                return try raw_respond(provision);
+            if (job.count >= config.request_bytes_max) {
+                return handle_error(router, provision, context, HTTPError.ContentTooLarge);
             }
 
             switch (stage) {
@@ -943,52 +942,8 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                             .request_uri_bytes_max = config.request_uri_bytes_max,
                         },
                     ) catch |e| {
-                        switch (e) {
-                            HTTPError.ContentTooLarge => {
-                                provision.response.set(.{
-                                    .status = .@"Content Too Large",
-                                    .mime = Mime.HTML,
-                                    .body = "Request was too large",
-                                });
-                            },
-                            HTTPError.TooManyHeaders => {
-                                provision.response.set(.{
-                                    .status = .@"Request Header Fields Too Large",
-                                    .mime = Mime.HTML,
-                                    .body = "Too Many Headers",
-                                });
-                            },
-                            HTTPError.MalformedRequest => {
-                                provision.response.set(.{
-                                    .status = .@"Bad Request",
-                                    .mime = Mime.HTML,
-                                    .body = "Malformed Request",
-                                });
-                            },
-                            HTTPError.URITooLong => {
-                                provision.response.set(.{
-                                    .status = .@"URI Too Long",
-                                    .mime = Mime.HTML,
-                                    .body = "URI Too Long",
-                                });
-                            },
-                            HTTPError.InvalidMethod => {
-                                provision.response.set(.{
-                                    .status = .@"Not Implemented",
-                                    .mime = Mime.HTML,
-                                    .body = "Not Implemented",
-                                });
-                            },
-                            HTTPError.HTTPVersionNotSupported => {
-                                provision.response.set(.{
-                                    .status = .@"HTTP Version Not Supported",
-                                    .mime = Mime.HTML,
-                                    .body = "HTTP Version Not Supported",
-                                });
-                            },
-                        }
-
-                        return raw_respond(provision) catch unreachable;
+                        // Call router error handler.
+                        return handle_error(router, provision, context, e);
                     };
 
                     // Logging information about Request.
@@ -1003,13 +958,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     const is_http_1_1 = provision.request.version == .@"HTTP/1.1";
                     const is_host_present = provision.request.headers.get("Host") != null;
                     if (is_http_1_1 and !is_host_present) {
-                        provision.response.set(.{
-                            .status = .@"Bad Request",
-                            .mime = Mime.HTML,
-                            .body = "Missing \"Host\" Header",
-                        });
-
-                        return try raw_respond(provision);
+                        return handle_error(router, provision, context, HTTPError.MalformedRequest);
                     }
 
                     if (!provision.request.expect_body()) {
@@ -1067,13 +1016,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
 
                     const content_length = blk: {
                         const length_string = provision.request.headers.get("Content-Length") orelse {
-                            provision.response.set(.{
-                                .status = .@"Length Required",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
-
-                            return try raw_respond(provision);
+                            return handle_error(router, provision, context, HTTPError.LengthRequired);
                         };
 
                         break :blk try std.fmt.parseInt(u32, length_string, 10);
@@ -1084,12 +1027,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
 
                     // If this body will be too long, abort early.
                     if (request_length > config.request_bytes_max) {
-                        provision.response.set(.{
-                            .status = .@"Content Too Large",
-                            .mime = Mime.HTML,
-                            .body = "",
-                        });
-                        return try raw_respond(provision);
+                        return handle_error(router, provision, context, HTTPError.ContentTooLarge);
                     }
 
                     if (job.count >= request_length) {
