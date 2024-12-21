@@ -355,7 +355,8 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
         fn recv_task(rt: *Runtime, result: RecvResult, provision: *Provision) !void {
             assert(provision.job == .recv);
 
-            const length = result.unwrap() catch |e| {
+            // recv_count is how many bytes we have read off the socket
+            const recv_count = result.unwrap() catch |e| {
                 if (e != error.Closed) {
                     log.warn("socket recv failed | {}", .{e});
                 }
@@ -369,17 +370,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
 
             const recv_job = &provision.job.recv;
 
-            // If the socket is closed.
-            if (length <= 0) {
-                provision.job = .close;
-                try rt.net.close(provision, close_task, provision.socket);
-                return;
-            }
-
             log.debug("{d} - recv triggered", .{provision.index});
-
-            // recv_count is how many bytes we have read off the socket
-            const recv_count: usize = @intCast(length);
 
             // this is how many http bytes we have received
             const http_bytes_count: usize = blk: {
@@ -468,7 +459,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
             try handshake_inner_task(rt, length, provision);
         }
 
-        fn handshake_inner_task(rt: *Runtime, length: i32, provision: *Provision) !void {
+        fn handshake_inner_task(rt: *Runtime, length: usize, provision: *Provision) !void {
             assert(security == .tls);
             if (comptime security == .tls) {
                 const tls_slice = rt.storage.get("__zzz_tls_slice", []TLSType);
@@ -488,11 +479,9 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     return error.TLSHandshakeTooManyCycles;
                 }
 
-                const hs_length: usize = @intCast(length);
-
                 const hstate = switch (handshake_job.state) {
-                    .recv => tls_ptr.*.?.continue_handshake(.{ .recv = @intCast(hs_length) }),
-                    .send => tls_ptr.*.?.continue_handshake(.{ .send = @intCast(hs_length) }),
+                    .recv => tls_ptr.*.?.continue_handshake(.{ .recv = length }),
+                    .send => tls_ptr.*.?.continue_handshake(.{ .send = length }),
                 } catch |e| {
                     log.err("{d} - tls handshake failed={any}", .{ provision.index, e });
                     provision.job = .close;
@@ -618,7 +607,7 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     assert(provision.job == .send);
                     const config = rt.storage.get_const_ptr("__zzz_config", ServerConfig);
 
-                    const length = result.unwrap() catch |e| {
+                    const send_count = result.unwrap() catch |e| {
                         // If the socket is closed.
                         if (e != error.ConnectionReset) {
                             log.warn("socket send failed: {}", .{e});
@@ -631,7 +620,6 @@ pub fn Server(comptime security: Security, comptime AppState: type) type {
                     const send_job = &provision.job.send;
 
                     log.debug("{d} - send triggered", .{provision.index});
-                    const send_count: usize = @intCast(length);
                     log.debug("{d} - sent length: {d}", .{ provision.index, send_count });
 
                     switch (comptime security) {

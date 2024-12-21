@@ -167,7 +167,7 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
                             .{std.time.s_per_day * 30},
                         );
 
-                    ctx.response.headers.putAssumeCapacity("Cache-Control", cache_control);
+                    ctx.response.headers.put_assume_capacity("Cache-Control", cache_control);
 
                     // If our static item is greater than 1KB,
                     // it might be more beneficial to using caching.
@@ -177,7 +177,7 @@ pub fn Route(comptime Server: type, comptime AppState: type) type {
                             "\"{d}\"",
                             .{std.hash.Wyhash.hash(0, bytes)},
                         );
-                        ctx.response.headers.putAssumeCapacity("ETag", etag[0..]);
+                        ctx.response.headers.put_assume_capacity("ETag", etag[0..]);
 
                         if (ctx.request.headers.get("If-None-Match")) |match| {
                             if (std.mem.eql(u8, etag, match)) {

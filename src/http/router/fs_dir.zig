@@ -89,7 +89,7 @@ pub fn FsDir(Server: type, AppState: type) type {
                 .{etag_hash},
             );
 
-            provision.response.headers.putAssumeCapacity("ETag", calc_etag);
+            provision.response.headers.put_assume_capacity("ETag", calc_etag);
 
             // If we have an ETag on the request...
             if (provision.request.headers.get("If-None-Match")) |etag| {

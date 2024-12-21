@@ -563,9 +563,9 @@ pub const TLS = struct {
 
     pub const HandshakeInput = union(enum) {
         // this is the length of the recv to ack.
-        recv: u32,
+        recv: usize,
         // this is the length of the send to ack.
-        send: u32,
+        send: usize,
     };
 
     const HandshakeState = union(enum) {

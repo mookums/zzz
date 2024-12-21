@@ -39,7 +39,7 @@ pub fn CaseStringMap(comptime T: type) type {
             entry.item.* = .{ .key = name, .hash = name_hash, .data = data };
         }
 
-        pub fn get(self: *Self, name: []const u8) ?T {
+        pub fn get(self: *const Self, name: []const u8) ?T {
             const name_hash = hash(name);
 
             var iter = self.pool.iterator();
