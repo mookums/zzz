@@ -4,9 +4,8 @@
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
         .tardy = .{
-            //.url = "git+https://github.com/mookums/tardy?ref=v0.2.1#d6452871e1eabf802c2f2423b87932edd3645e94",
-            //.hash = "1220ceafa7dec628f8d4ac02e2f4484b79f3a5bd34ad3c0c7333604a10e5cb807f6d",
-            .path = "../tardy",
+            .url = "git+https://github.com/mookums/tardy?ref=v0.2.1#e133b423e455a637a068296d0a3d00a4c71b1143",
+            .hash = "1220c3c3e6dd2fc6e61645dff2d22d46cb3eca3fb5c4c14a0015dab881d0a5af3976",
         },
         .bearssl = .{
             .url = "git+https://github.com/mookums/bearssl-zig#37a96eee56fe2543579bbc6da148ca886f3dd32b",
