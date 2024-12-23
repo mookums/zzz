@@ -8,12 +8,12 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain, void);
-const Router = Server.Router;
-const Context = Server.Context;
-const Route = Server.Route;
+const Server = http.Server;
+const Router = http.Router;
+const Context = http.Context;
+const Route = http.Route;
 
-fn hi_handler(ctx: *Context) !void {
+fn hi_handler(ctx: *Context, _: void) !void {
     const name = ctx.captures[0].string;
     const greeting = ctx.queries.get("greeting") orelse "Hi";
 
@@ -36,27 +36,27 @@ fn hi_handler(ctx: *Context) !void {
         \\ </html>
     , .{ greeting, name });
 
-    try ctx.respond(.{
+    return try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
     });
 }
 
-fn redir_handler(ctx: *Context) !void {
+fn redir_handler(ctx: *Context, _: void) !void {
     ctx.response.headers.put_assume_capacity("Location", "/hi/redirect");
 
-    try ctx.respond(.{
+    return try ctx.respond(.{
         .status = .@"Permanent Redirect",
         .mime = http.Mime.HTML,
         .body = "",
     });
 }
 
-fn post_handler(ctx: *Context) !void {
+fn post_handler(ctx: *Context, _: void) !void {
     log.debug("Body: {s}", .{ctx.request.body orelse ""});
 
-    try ctx.respond(.{
+    return try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
@@ -80,12 +80,14 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init({}, &[_]Route{
-        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
-        Route.init("/hi/%s").get(hi_handler),
-        Route.init("/redirect").get(redir_handler),
-        Route.init("/post").post(post_handler),
+    var router = try Router.init(allocator, &.{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")).layer(),
+        Route.init("/hi/%s").get({}, hi_handler).layer(),
+        Route.init("/redirect").get({}, redir_handler).layer(),
+        Route.init("/post").post({}, post_handler).layer(),
     }, .{});
+    defer router.deinit(allocator);
+    router.print_route_tree();
 
     try t.entry(
         &router,

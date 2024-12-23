@@ -8,17 +8,17 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain, void);
-const Context = Server.Context;
-const Route = Server.Route;
-const Router = Server.Router;
+const Server = http.Server;
+const Context = http.Context;
+const Route = http.Route;
+const Router = http.Router;
 
 pub const std_options = .{
     .log_level = .err,
 };
 
-pub fn root_handler(ctx: *Context) !void {
-    try ctx.respond(.{
+pub fn root_handler(ctx: *Context, _: void) !void {
+    return try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "This is an HTTP benchmark",
@@ -36,7 +36,11 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init({}, &[_]Route{Route.init("/").get(root_handler)}, .{});
+    var router = try Router.init(allocator, &.{
+        Route.init("/").get({}, root_handler).layer(),
+    }, .{});
+    defer router.deinit(allocator);
+    router.print_route_tree();
 
     try t.entry(
         &router,

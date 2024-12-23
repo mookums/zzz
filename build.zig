@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) void {
     add_example(b, "tls", true, target, optimize, zzz);
     add_example(b, "minram", false, target, optimize, zzz);
     add_example(b, "fs", false, target, optimize, zzz);
+    add_example(b, "middleware", false, target, optimize, zzz);
     add_example(b, "multithread", false, target, optimize, zzz);
     add_example(b, "benchmark", false, target, optimize, zzz);
     add_example(b, "valgrind", true, target, optimize, zzz);

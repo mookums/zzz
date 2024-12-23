@@ -88,7 +88,7 @@ test "CaseStringMap: Add Stuff" {
     try csm.put("Content-Length", "100");
     csm.put_assume_capacity("Host", "localhost:9999");
 
-    const content_length = csm.get("content-length");
+    const content_length = csm.get("Content-length");
     try testing.expect(content_length != null);
 
     const host = csm.get("host");

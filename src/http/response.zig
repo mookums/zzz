@@ -30,6 +30,7 @@ pub const Response = struct {
         self.status = null;
         self.mime = null;
         self.body = null;
+        self.headers.clear();
     }
 
     pub const ResponseSetOptions = struct {

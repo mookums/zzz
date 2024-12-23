@@ -616,14 +616,14 @@ pub const TLS = struct {
             if ((after_state & bearssl.BR_SSL_SENDAPP) != 0) break :blk .complete;
 
             if ((after_state & bearssl.BR_SSL_SENDREC) != 0) {
-                var length: usize = 0;
+                var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_sendrec_buf(engine, &length);
                 log.debug("send rec buffer: address={*}, length={d}", .{ buf, length });
                 break :blk .{ .send = buf[0..length] };
             }
 
             if ((after_state & bearssl.BR_SSL_RECVREC) != 0) {
-                var length: usize = 0;
+                var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
                 log.debug("recv rec buffer: address={*}, length={d}", .{ buf, length });
                 break :blk .{ .recv = buf[0..length] };

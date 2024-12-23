@@ -8,10 +8,11 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain, void);
-const Router = Server.Router;
-const Context = Server.Context;
-const Route = Server.Route;
+const Server = http.Server;
+const Router = http.Router;
+const Context = http.Context;
+const Route = http.Route;
+const FsDir = http.FsDir;
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -29,9 +30,9 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init({}, &[_]Route{
-        Route.init("/").get(struct {
-            pub fn handler_fn(ctx: *Context) !void {
+    var router = try Router.init(allocator, &.{
+        Route.init("/").get({}, struct {
+            pub fn handler_fn(ctx: *Context, _: void) !void {
                 const body =
                     \\ <!DOCTYPE html>
                     \\ <html>
@@ -40,22 +41,18 @@ pub fn main() !void {
                     \\ </body>
                     \\ </html>
                 ;
-                try ctx.respond(.{
+                return try ctx.respond(.{
                     .status = .OK,
                     .mime = http.Mime.HTML,
                     .body = body[0..],
                 });
             }
-        }.handler_fn),
+        }.handler_fn).layer(),
 
-        Route.init("/kill").get(struct {
-            pub fn handler_fn(ctx: *Context) !void {
-                ctx.runtime.stop();
-            }
-        }.handler_fn),
-
-        Route.init("/static").serve_fs_dir("./examples/fs/static"),
+        FsDir.serve("/", "./examples/fs/static"),
     }, .{});
+    defer router.deinit(allocator);
+    router.print_route_tree();
 
     try t.entry(
         &router,

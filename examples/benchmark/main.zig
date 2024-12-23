@@ -8,16 +8,16 @@ const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
 
-const Server = http.Server(.plain, void);
-const Context = Server.Context;
-const Route = Server.Route;
-const Router = Server.Router;
+const Server = http.Server;
+const Context = http.Context;
+const Route = http.Route;
+const Router = http.Router;
 
 pub const std_options = .{
     .log_level = .err,
 };
 
-fn hi_handler(ctx: *Context) !void {
+fn hi_handler(ctx: *Context, _: void) !void {
     const name = ctx.captures[0].string;
 
     const body = try std.fmt.allocPrint(ctx.allocator,
@@ -39,7 +39,7 @@ fn hi_handler(ctx: *Context) !void {
         \\ </html>
     , .{name});
 
-    try ctx.respond(.{
+    return try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
@@ -60,10 +60,12 @@ pub fn main() !void {
     });
     defer t.deinit();
 
-    var router = Router.init({}, &[_]Route{
-        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
-        Route.init("/hi/%s").get(hi_handler),
+    var router = try Router.init(allocator, &.{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")).layer(),
+        Route.init("/hi/%s").get({}, hi_handler).layer(),
     }, .{});
+    defer router.deinit(allocator);
+    router.print_route_tree();
 
     try t.entry(
         &router,

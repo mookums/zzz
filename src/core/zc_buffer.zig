@@ -85,9 +85,9 @@ pub const ZeroCopyBuffer = struct {
 
     pub fn shrink_clear_and_free(self: *ZeroCopyBuffer, new_size: usize) !void {
         assert(new_size <= self.len);
-        if (!self.allocator.resize(self.ptr[0..self.len], new_size)) {
+        if (!self.allocator.resize(self.ptr[0..self.capacity], new_size)) {
             const slice = try self.allocator.realloc(
-                self.ptr[0..self.len],
+                self.ptr[0..self.capacity],
                 new_size,
             );
             self.ptr = slice.ptr;

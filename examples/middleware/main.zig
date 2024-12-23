@@ -1,17 +1,5 @@
-# Getting Started
-zzz is a networking framework that allows for modularity and flexibility in design. For most use cases, this flexibility is not a requirement and so various defaults are provided.
-
-For this guide, we will assume that you are running on a modern Linux platform and looking to design a service that utilizes HTTP.
-This is the current latest release.
-
-`zig fetch --save git+https://github.com/mookums/zzz#v0.2.0`
-
-## Hello, World!
-We can write a quick example that serves out "Hello, World" responses to any client that connects to the server. This example is the same as the one that is provided within the `examples/basic` directory.
-
-```zig
 const std = @import("std");
-const log = std.log.scoped(.@"examples/basic");
+const log = std.log.scoped(.@"examples/middleware");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -24,6 +12,8 @@ const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
+const Next = http.Next;
+const Middleware = http.Middleware;
 
 fn root_handler(ctx: *Context, id: i8) !void {
     const body_fmt =
@@ -46,16 +36,14 @@ fn root_handler(ctx: *Context, id: i8) !void {
     });
 }
 
-fn echo_handler(ctx: *Context, _: void) !void {
-    const body = if (ctx.request.body) |b|
-        try ctx.allocator.dupe(u8, b)
-    else
-        "";
-    return try ctx.respond(.{
-        .status = .OK,
-        .mime = http.Mime.HTML,
-        .body = body[0..],
-    });
+fn pre_middleware(next: *Next, _: void) !void {
+    log.info("pre request middleware: {s}", .{next.ctx.request.uri.?});
+    return try next.run();
+}
+
+fn post_middleware(next: *Next, _: void) !void {
+    log.info("post request middleware: {s}", .{next.ctx.request.uri.?});
+    return try next.run();
 }
 
 pub fn main() !void {
@@ -77,10 +65,11 @@ pub fn main() !void {
     const num: i8 = 12;
 
     var router = try Router.init(allocator, &.{
+        Middleware.init().before({}, pre_middleware).after({}, post_middleware).layer(),
         Route.init("/").get(num, root_handler).layer(),
-        Route.init("/echo").post({}, echo_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
+    router.print_route_tree();
 
     // This provides the entry function into the Tardy runtime. This will run
     // exactly once inside of each runtime (each thread gets a single runtime).
@@ -101,6 +90,3 @@ pub fn main() !void {
         }.exit,
     );
 }
-```
-
-The snippet above handles all of the basic tasks involved with serving a plaintext route using zzz's HTTP implementation. 

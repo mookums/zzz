@@ -11,11 +11,11 @@ const Task = tardy.Task;
 const Broadcast = tardy.Broadcast;
 const Channel = tardy.Channel;
 
-const Server = http.Server(.plain, *Broadcast(usize));
-const Router = Server.Router;
-const Context = Server.Context;
-const Route = Server.Route;
-const SSE = Server.SSE;
+const Server = http.Server;
+const Router = http.Router;
+const Context = http.Context;
+const Route = http.Route;
+const SSE = http.SSE;
 
 // When using SSE, you end up leaving the various abstractions that zzz has setup for you
 // and you begin programming more against the tardy runtime.
@@ -33,11 +33,11 @@ fn sse_send(_: *Runtime, value_opt: ?*const usize, ctx: *SSEBroadcastContext) !v
             .{value.*},
         );
 
-        try ctx.sse.send(.{ .data = data }, ctx, sse_recv);
+        return try ctx.sse.send(.{ .data = data }, ctx, sse_recv);
     } else {
         const broadcast = ctx.sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
         broadcast.unsubscribe(ctx.channel);
-        try ctx.sse.context.close();
+        return try ctx.sse.context.close();
     }
 }
 
@@ -62,25 +62,25 @@ fn sse_init(rt: *Runtime, success: bool, sse: *SSE) !void {
     const broadcast = sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
     const context = try sse.allocator.create(SSEBroadcastContext);
     context.* = .{ .sse = sse, .channel = try broadcast.subscribe(rt, 10) };
-    try context.channel.recv(context, sse_send);
+    return try context.channel.recv(context, sse_send);
 }
 
-fn sse_handler(ctx: *Context) !void {
+fn sse_handler(ctx: *Context, _: void) !void {
     log.debug("going into sse mode", .{});
-    try ctx.to_sse(sse_init);
+    return try ctx.to_sse(sse_init);
 }
 
-fn msg_handler(ctx: *Context) !void {
+fn msg_handler(ctx: *Context, broadcast: *Broadcast(usize)) !void {
     log.debug("message handler", .{});
-    try ctx.state.send(0);
-    try ctx.respond(.{
+    try broadcast.send(0);
+    return try ctx.respond(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "",
     });
 }
 
-fn kill_handler(ctx: *Context) !void {
+fn kill_handler(ctx: *Context, _: void) !void {
     ctx.runtime.stop();
 }
 
@@ -105,12 +105,14 @@ pub fn main() !void {
     var broadcast = try Broadcast(usize).init(allocator, max_conn);
     defer broadcast.deinit();
 
-    var router = Router.init(&broadcast, &[_]Route{
-        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")),
-        Route.init("/kill").get(kill_handler),
-        Route.init("/stream").get(sse_handler),
-        Route.init("/message").post(msg_handler),
+    var router = try Router.init(allocator, &.{
+        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")).layer(),
+        Route.init("/kill").get({}, kill_handler).layer(),
+        Route.init("/stream").get({}, sse_handler).layer(),
+        Route.init("/message").post(&broadcast, msg_handler).layer(),
     }, .{});
+    defer router.deinit(allocator);
+    router.print_route_tree();
 
     const EntryParams = struct {
         router: *const Router,
