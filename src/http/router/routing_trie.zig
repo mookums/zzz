@@ -264,9 +264,12 @@ pub const RoutingTrie = struct {
                             .unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
                                 captures[capture_idx] = Capture{ .unsigned = value };
                             } else |_| continue :child_loop,
-                            .float => if (std.fmt.parseFloat(f64, chunk)) |value| {
-                                captures[capture_idx] = Capture{ .float = value };
-                            } else |_| continue :child_loop,
+                            // Float types MUST have a '.' to differentiate them.
+                            .float => if (std.mem.indexOfScalar(u8, chunk, '.')) |_| {
+                                if (std.fmt.parseFloat(f64, chunk)) |value| {
+                                    captures[capture_idx] = Capture{ .float = value };
+                                } else |_| continue :child_loop;
+                            } else continue :child_loop,
                             .string => captures[capture_idx] = Capture{ .string = chunk },
                             .remaining => {
                                 const rest = iter.buffer[(iter.index - chunk.len)..];
@@ -483,6 +486,7 @@ test "Routing with Queries" {
     try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
 
     {
+        q.clear();
         const captured = (try s.get_bundle("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
@@ -492,6 +496,7 @@ test "Routing with Queries" {
     }
 
     {
+        q.clear();
         // Purposefully bad format with no keys or values.
         const captured = (try s.get_bundle("/item/2112.22121/price_float?", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
@@ -500,6 +505,7 @@ test "Routing with Queries" {
     }
 
     {
+        q.clear();
         // Purposefully bad format with incomplete key/value pair.
         const captured = (try s.get_bundle("/item/100/price/283.21?help", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
@@ -509,6 +515,7 @@ test "Routing with Queries" {
     }
 
     {
+        q.clear();
         // Purposefully have too many queries.
         const captured = try s.get_bundle(
             "/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11",
