@@ -41,6 +41,11 @@ fn pre_middleware(next: *Next, _: void) !void {
     return try next.run();
 }
 
+fn pre_fail_middleware(next: *Next, _: void) !void {
+    log.info("pre fail request middleware: {s}", .{next.ctx.request.uri.?});
+    return error.ExpectedFailure;
+}
+
 fn post_middleware(next: *Next, _: void) !void {
     log.info("post request middleware: {s}", .{next.ctx.request.uri.?});
     return try next.run();
@@ -67,6 +72,8 @@ pub fn main() !void {
     var router = try Router.init(allocator, &.{
         Middleware.init().before({}, pre_middleware).after({}, post_middleware).layer(),
         Route.init("/").get(num, root_handler).layer(),
+        Middleware.init().before({}, pre_fail_middleware).layer(),
+        Route.init("/fail").get(num, root_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
     router.print_route_tree();

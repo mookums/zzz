@@ -65,8 +65,9 @@ pub const Router = struct {
         captures: []Capture,
         queries: *QueryMap,
     ) !FoundBundle {
-        return try self.routes.get_route(path, captures, queries) orelse {
-            queries.clear();
+        queries.clear();
+
+        return try self.routes.get_bundle(path, captures, queries) orelse {
             const not_found_bundle: Bundle = .{
                 .pre = &.{},
                 .route = Route.init("").all({}, self.configuration.not_found),

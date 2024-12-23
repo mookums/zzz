@@ -36,7 +36,7 @@ pub const Context = struct {
     captures: []Capture,
     queries: *QueryMap,
     provision: *Provision,
-    next: *Next,
+    next: Next,
     triggered: bool = false,
 
     pub fn to_sse(self: *Self, then: TaskFn(bool, *SSE)) !void {

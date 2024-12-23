@@ -6,7 +6,10 @@ const Capture = @import("router/routing_trie.zig").Capture;
 const QueryMap = @import("router/routing_trie.zig").QueryMap;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
+const Context = @import("context.zig").Context;
 const ServerConfig = @import("server.zig").ServerConfig;
+
+const Runtime = @import("tardy").Runtime;
 
 pub const Stage = union(enum) {
     header,
@@ -25,9 +28,11 @@ pub const Provision = struct {
     request: Request,
     response: Response,
     stage: Stage,
+    context: Context,
 
     pub const InitContext = struct {
         allocator: std.mem.Allocator,
+        runtime: *Runtime,
         config: ServerConfig,
     };
 
@@ -57,6 +62,26 @@ pub const Provision = struct {
             };
             provision.response = Response.init(ctx.allocator, config.header_count_max) catch {
                 @panic("attempting to statically allocate more memory than available. (Response)");
+            };
+
+            // Anything undefined within here is sourced at Handler time.
+            provision.context = .{
+                .provision = provision,
+                .allocator = provision.arena.allocator(),
+                .request = &provision.request,
+                .response = &provision.response,
+                .runtime = ctx.runtime,
+                .next = .{
+                    .ctx = &provision.context,
+                    .stage = .pre,
+                    // Handler Time.
+                    .pre_chain = undefined,
+                    .post_chain = undefined,
+                },
+
+                // Handler Time.
+                .captures = undefined,
+                .queries = undefined,
             };
         }
     }

@@ -750,7 +750,11 @@ pub const Server = struct {
         provision_pool.* = try Pool(Provision).init(
             rt.allocator,
             self.config.connection_count_max,
-            Provision.InitContext{ .allocator = self.allocator, .config = self.config },
+            Provision.InitContext{
+                .allocator = self.allocator,
+                .config = self.config,
+                .runtime = rt,
+            },
             Provision.init_hook,
         );
 
@@ -836,42 +840,38 @@ pub const Server = struct {
         return socket;
     }
 
-    fn route_and_respond(runtime: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
+    fn route_and_respond(_: *Runtime, p: *Provision, router: *const Router) !RecvStatus {
         route: {
             const found = try router.get_bundle_from_host(p.request.uri.?, p.captures, &p.queries);
             const optional_handler = found.bundle.route.get_handler(p.request.method.?);
 
             if (optional_handler) |h_with_data| {
-                const next: *Next = try p.arena.allocator().create(Next);
+                p.context.captures = found.captures;
+                p.context.queries = found.queries;
+                p.context.triggered = false;
 
-                const context: *Context = try p.arena.allocator().create(Context);
-                context.* = .{
-                    .allocator = p.arena.allocator(),
-                    .runtime = runtime,
-                    .request = &p.request,
-                    .response = &p.response,
-                    .captures = found.captures,
-                    .queries = found.queries,
-                    .provision = p,
-                    .next = next,
+                p.context.next.stage = .pre;
+                p.context.next.pre_chain = .{
+                    .chain = found.bundle.pre,
+                    .handler = h_with_data,
                 };
-
-                next.* = .{
-                    .ctx = context,
-                    .stage = .pre,
-                    .pre_chain = .{
-                        .chain = found.bundle.pre,
-                        .handler = h_with_data,
-                    },
-                    .post_chain = found.bundle.post,
-                };
+                p.context.next.post_chain = found.bundle.post;
 
                 if (found.bundle.pre.len > 0) {
-                    try next.run();
+                    p.context.next.run() catch |e| {
+                        log.err("\"{s}\" middleware failed with error: {}", .{ p.request.uri.?, e });
+                        p.response.set(.{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.HTML,
+                            .body = "",
+                        });
+
+                        return try raw_respond(p);
+                    };
                     return .spawned;
                 } else {
                     @call(.auto, h_with_data.handler, .{
-                        context,
+                        &p.context,
                         h_with_data.data,
                     }) catch |e| {
                         log.err("\"{s}\" handler failed with error: {}", .{ p.request.uri.?, e });

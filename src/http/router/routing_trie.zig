@@ -233,70 +233,62 @@ pub const RoutingTrie = struct {
         print_node(&self.root, 0);
     }
 
-    pub fn get_route(
+    pub fn get_bundle(
         self: Self,
         path: []const u8,
         captures: []Capture,
         queries: *QueryMap,
     ) !?FoundBundle {
         var capture_idx: usize = 0;
-
-        queries.clear();
         const query_pos = std.mem.indexOfScalar(u8, path, '?');
         var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
 
         var current = self.root;
 
         slash_loop: while (iter.next()) |chunk| {
-            const fragment = Token{ .fragment = chunk };
+            var child_iter = current.children.iterator();
+            child_loop: while (child_iter.next()) |entry| {
+                const token = entry.key_ptr.*;
+                const child = entry.value_ptr.*;
 
-            // If it is the fragment, match it here.
-            if (current.children.get(fragment)) |child| {
-                current = child;
-                continue;
-            }
+                switch (token) {
+                    .fragment => |inner| if (std.mem.eql(u8, inner, chunk)) {
+                        current = child;
+                        continue :slash_loop;
+                    },
+                    .match => |kind| {
+                        switch (kind) {
+                            .signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
+                                captures[capture_idx] = Capture{ .signed = value };
+                            } else |_| continue :child_loop,
+                            .unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
+                                captures[capture_idx] = Capture{ .unsigned = value };
+                            } else |_| continue :child_loop,
+                            .float => if (std.fmt.parseFloat(f64, chunk)) |value| {
+                                captures[capture_idx] = Capture{ .float = value };
+                            } else |_| continue :child_loop,
+                            .string => captures[capture_idx] = Capture{ .string = chunk },
+                            .remaining => {
+                                const rest = iter.buffer[(iter.index - chunk.len)..];
+                                captures[capture_idx] = Capture{ .remaining = rest };
 
-            var matched = false;
-            for (std.meta.tags(TokenMatch)) |token_type| {
-                const token = Token{ .match = token_type };
-                if (current.children.get(token)) |child| {
-                    matched = true;
-                    switch (token_type) {
-                        .signed => if (std.fmt.parseInt(i64, chunk, 10)) |value| {
-                            captures[capture_idx] = Capture{ .signed = value };
-                        } else |_| continue,
-                        .unsigned => if (std.fmt.parseInt(u64, chunk, 10)) |value| {
-                            captures[capture_idx] = Capture{ .unsigned = value };
-                        } else |_| continue,
-                        .float => if (std.fmt.parseFloat(f64, chunk)) |value| {
-                            captures[capture_idx] = Capture{ .float = value };
-                        } else |_| continue,
-                        .string => captures[capture_idx] = Capture{ .string = chunk },
-                        // This ends the matching sequence and claims everything.
-                        // Does not claim the query values.
-                        .remaining => {
-                            const rest = iter.buffer[(iter.index - chunk.len)..];
-                            captures[capture_idx] = Capture{ .remaining = rest };
+                                current = child;
+                                capture_idx += 1;
 
-                            current = child;
-                            capture_idx += 1;
+                                break :slash_loop;
+                            },
+                        }
 
-                            break :slash_loop;
-                        },
-                    }
-
-                    current = child;
-                    capture_idx += 1;
-
-                    if (capture_idx > captures.len) return error.TooManyCaptures;
-                    break;
+                        current = child;
+                        capture_idx += 1;
+                        if (capture_idx > captures.len) return error.TooManyCaptures;
+                        continue :slash_loop;
+                    },
                 }
             }
 
             // If we failed to match, this is an invalid route.
-            if (!matched) {
-                return null;
-            }
+            return null;
         }
 
         if (query_pos) |pos| {
@@ -416,17 +408,17 @@ test "Routing with Paths" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
 
     {
-        const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/name/HELLO", captures[0..], &q)).?;
 
         try testing.expectEqual(Route.init("/item/name/%s"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
-        const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/2112.22121/price_float", captures[0..], &q)).?;
 
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
@@ -447,27 +439,27 @@ test "Routing with Remaining" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
 
     {
-        const captured = (try s.get_route("/item/name/HELLO", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/name/HELLO", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
-        const captured = (try s.get_route("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
     {
-        const captured = (try s.get_route("/item/2112.22121/price_float", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/2112.22121/price_float", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
     {
-        const captured = (try s.get_route("/item/100/price/283.21", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/100/price/283.21", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
@@ -488,10 +480,10 @@ test "Routing with Queries" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_route("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
 
     {
-        const captured = (try s.get_route("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
         try testing.expectEqual(2, q.dirty());
@@ -501,7 +493,7 @@ test "Routing with Queries" {
 
     {
         // Purposefully bad format with no keys or values.
-        const captured = (try s.get_route("/item/2112.22121/price_float?", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/2112.22121/price_float?", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
         try testing.expectEqual(0, q.dirty());
@@ -509,7 +501,7 @@ test "Routing with Queries" {
 
     {
         // Purposefully bad format with incomplete key/value pair.
-        const captured = (try s.get_route("/item/100/price/283.21?help", captures[0..], &q)).?;
+        const captured = (try s.get_bundle("/item/100/price/283.21?help", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
@@ -518,7 +510,7 @@ test "Routing with Queries" {
 
     {
         // Purposefully have too many queries.
-        const captured = try s.get_route(
+        const captured = try s.get_bundle(
             "/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11",
             captures[0..],
             &q,
