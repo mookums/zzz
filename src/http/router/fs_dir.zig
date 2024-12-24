@@ -164,13 +164,11 @@ pub const FsDir = struct {
             }
         };
 
-        const length_as_usize: usize = @intCast(length);
-        provision.rd_offset += length_as_usize;
-        provision.current_length += length_as_usize;
+        provision.rd_offset += length;
+        provision.current_length += length;
         log.debug("current offset: {d} | fd: {}", .{ provision.rd_offset, provision.fd });
-
-        assert(provision.rd_offset <= length_as_usize);
         assert(provision.current_length <= provision.buffer.len);
+
         if (provision.current_length == provision.buffer.len) {
             return try provision.context.send_then(
                 provision.buffer[0..provision.current_length],
