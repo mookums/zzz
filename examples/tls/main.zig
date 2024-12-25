@@ -49,8 +49,8 @@ pub fn main() !void {
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
-        Route.init("/embed/pico.min.css").serve_embedded_file(
-            http.Mime.CSS,
+        Route.init("/embed/pico.min.css").embed_file(
+            .{ .mime = http.Mime.CSS },
             @embedFile("embed/pico.min.css"),
         ).layer(),
 

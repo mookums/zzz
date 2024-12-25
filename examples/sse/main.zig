@@ -106,7 +106,7 @@ pub fn main() !void {
     defer broadcast.deinit();
 
     var router = try Router.init(allocator, &.{
-        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")).layer(),
+        Route.init("/").embed_file(.{ .mime = http.Mime.HTML }, @embedFile("index.html")).layer(),
         Route.init("/kill").get({}, kill_handler).layer(),
         Route.init("/stream").get({}, sse_handler).layer(),
         Route.init("/message").post(&broadcast, msg_handler).layer(),

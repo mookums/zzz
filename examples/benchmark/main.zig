@@ -61,7 +61,7 @@ pub fn main() !void {
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
-        Route.init("/").serve_embedded_file(http.Mime.HTML, @embedFile("index.html")).layer(),
+        Route.init("/").embed_file(.{ .mime = http.Mime.HTML }, @embedFile("index.html")).layer(),
         Route.init("/hi/%s").get({}, hi_handler).layer(),
     }, .{});
     defer router.deinit(allocator);

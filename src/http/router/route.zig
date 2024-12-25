@@ -9,6 +9,7 @@ const Method = @import("../method.zig").Method;
 const Request = @import("../request.zig").Request;
 const Response = @import("../response.zig").Response;
 const Mime = @import("../mime.zig").Mime;
+const Encoding = @import("../encoding.zig").Encoding;
 
 const FsDir = @import("fs_dir.zig").FsDir;
 const Context = @import("../context.zig").Context;
@@ -166,10 +167,17 @@ pub const Route = struct {
         return inner_route(.PATCH, self, data, handler_fn);
     }
 
+    const ServeEmbeddedOptions = struct {
+        /// If you are serving a compressed file, please
+        /// set the correct encoding type.
+        encoding: ?Encoding = null,
+        mime: ?Mime = null,
+    };
+
     /// Define a GET handler to serve an embedded file.
-    pub fn serve_embedded_file(
+    pub fn embed_file(
         self: *const Self,
-        comptime mime: ?Mime,
+        comptime opts: ServeEmbeddedOptions,
         comptime bytes: []const u8,
     ) Self {
         return self.get({}, struct {
@@ -205,9 +213,16 @@ pub const Route = struct {
                     }
                 }
 
+                if (opts.encoding) |encoding| {
+                    ctx.response.headers.put_assume_capacity(
+                        "Content-Encoding",
+                        @tagName(encoding),
+                    );
+                }
+
                 return try ctx.respond(.{
                     .status = .OK,
-                    .mime = mime,
+                    .mime = opts.mime,
                     .body = bytes,
                 });
             }
