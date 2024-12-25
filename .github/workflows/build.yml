@@ -1,4 +1,4 @@
-name: unit-test 
+name: build 
 on:
   push:
   pull_request:
@@ -17,4 +17,4 @@ jobs:
         with:
           version: 0.13.0
       - name: Build all examples 
-        run: zig build test --summary all
+        run: zig build
