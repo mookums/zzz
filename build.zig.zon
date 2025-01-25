@@ -3,10 +3,11 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
-        .tardy = .{
-            .url = "git+https://github.com/mookums/tardy#c2851c1e8ec5c66a16a0fb318d6bacea4ae9cc0b",
-            .hash = "122054b7c88eca71ab699e7ff530cd56303459356ea9ff3c9c78794943b035cadfea",
-        },
+        // .tardy = .{
+        //     .url = "git+https://github.com/mookums/tardy#e4bd6b8f84d888378f786405b10c7d3f16228ce7",
+        //     .hash = "12201f73a4c8c7fcaa7e16b8b1795abc718320a726292284ba4b94a3320b207e2ac8",
+        // },
+        .tardy = .{ .path = "../tardy" },
         .bearssl = .{
             .url = "git+https://github.com/mookums/bearssl-zig#37a96eee56fe2543579bbc6da148ca886f3dd32b",
             .hash = "12200e89d16612100a2f145cfa292537ac25b2205735fc1c644c799d2995f94e8e20",

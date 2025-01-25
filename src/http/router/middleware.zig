@@ -69,7 +69,8 @@ pub const Next = struct {
         switch (self.stage) {
             .pre => {
                 if (self.pre_chain.chain.len > 0) {
-                    return try self.ctx.runtime.spawn(void, self, next_middleware_task);
+                    @panic("TODO");
+                    //return try self.ctx.runtime.spawn(void, self, next_middleware_task);
                 } else {
                     return try @call(
                         .auto,
@@ -80,7 +81,8 @@ pub const Next = struct {
             },
             .post => {
                 if (self.post_chain.len > 0) {
-                    return try self.ctx.runtime.spawn(void, self, next_middleware_task);
+                    @panic("TODO");
+                    //return try self.ctx.runtime.spawn(void, self, next_middleware_task);
                 } else {
                     return try self.ctx.respond_without_middleware();
                 }
