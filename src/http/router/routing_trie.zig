@@ -2,12 +2,19 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/routing_trie");
 
-const Layer = @import("layer.zig").Layer;
+const Layer = @import("middleware.zig").Layer;
 const Route = @import("route.zig").Route;
-const Bundle = @import("bundle.zig").Bundle;
+
+const Respond = @import("../response.zig").Respond;
+const Context = @import("../lib.zig").Context;
 
 const MiddlewareWithData = @import("middleware.zig").MiddlewareWithData;
 const CaseStringMap = @import("../../core/case_string_map.zig").CaseStringMap;
+
+pub const Bundle = struct {
+    route: Route,
+    middlewares: []const MiddlewareWithData,
+};
 
 fn TokenHashMap(comptime V: type) type {
     return std.HashMap(Token, V, struct {
@@ -150,15 +157,13 @@ pub const RoutingTrie = struct {
     };
 
     root: Node,
-    pre_mw: std.ArrayListUnmanaged(MiddlewareWithData),
-    post_mw: std.ArrayListUnmanaged(MiddlewareWithData),
+    middlewares: std.ArrayListUnmanaged(MiddlewareWithData),
 
     /// Initialize the routing tree with the given routes.
     pub fn init(allocator: std.mem.Allocator, layers: []const Layer) !Self {
         var self: Self = .{
             .root = Node.init(allocator, .{ .fragment = "" }, null),
-            .pre_mw = try std.ArrayListUnmanaged(MiddlewareWithData).initCapacity(allocator, 0),
-            .post_mw = try std.ArrayListUnmanaged(MiddlewareWithData).initCapacity(allocator, 0),
+            .middlewares = try std.ArrayListUnmanaged(MiddlewareWithData).initCapacity(allocator, 0),
         };
 
         for (layers) |layer| {
@@ -178,17 +183,11 @@ pub const RoutingTrie = struct {
                     }
 
                     current.bundle = .{
-                        .pre = self.pre_mw.items,
                         .route = route,
-                        .post = self.post_mw.items,
+                        .middlewares = self.middlewares.items,
                     };
                 },
-                .pre => |func| try self.pre_mw.append(allocator, func),
-                .post => |func| try self.post_mw.append(allocator, func),
-                .pair => |inner| {
-                    try self.pre_mw.append(allocator, inner.pre);
-                    try self.post_mw.append(allocator, inner.post);
-                },
+                .middleware => |mw| try self.middlewares.append(allocator, mw),
             }
         }
 
@@ -197,8 +196,7 @@ pub const RoutingTrie = struct {
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         self.root.deinit();
-        self.pre_mw.deinit(allocator);
-        self.post_mw.deinit(allocator);
+        self.middlewares.deinit(allocator);
     }
 
     fn print_node(root: *const Node, depth: usize) void {
@@ -215,7 +213,7 @@ pub const RoutingTrie = struct {
         }
 
         if (root.bundle) |bundle| {
-            std.debug.print(" [x] ({d} | {d})", .{ bundle.pre.len, bundle.post.len });
+            std.debug.print(" [x] ({d})", .{bundle.middlewares.len});
         } else {
             std.debug.print(" [ ]", .{});
         }
@@ -309,7 +307,7 @@ pub const RoutingTrie = struct {
 
                     assert(std.mem.indexOfScalar(u8, key, '=') == null);
                     assert(std.mem.indexOfScalar(u8, value, '=') == null);
-                    queries.put_assume_capacity(key, value);
+                    try queries.put(key, value);
                 }
             }
         }

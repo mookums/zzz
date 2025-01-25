@@ -15,20 +15,19 @@ const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Capture = @import("router/routing_trie.zig").Capture;
 const QueryMap = @import("router/routing_trie.zig").QueryMap;
-const ResponseSetOptions = Response.ResponseSetOptions;
 const SSE = @import("sse.zig").SSE;
 
 const Provision = @import("provision.zig").Provision;
 const Mime = @import("mime.zig").Mime;
 const Router = @import("router.zig").Router;
 const Route = @import("router/route.zig").Route;
-const Layer = @import("router/layer.zig").Layer;
+const Layer = @import("router/middleware.zig").Layer;
 const Middleware = @import("router/middleware.zig").Middleware;
 const HTTPError = @import("lib.zig").HTTPError;
 
-const Next = @import("router/middleware.zig").Next;
+const HandlerWithData = @import("router/route.zig").HandlerWithData;
 
-const AfterType = @import("../core/job.zig").AfterType;
+const Next = @import("router/middleware.zig").Next;
 
 pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
@@ -37,19 +36,13 @@ const TardyCreator = @import("tardy").Tardy;
 
 const Cross = @import("tardy").Cross;
 const Pool = @import("tardy").Pool;
+const PoolKind = @import("tardy").PoolKind;
 const Socket = @import("tardy").Socket;
 const ZeroCopy = @import("tardy").ZeroCopy;
 
 const AcceptResult = @import("tardy").AcceptResult;
 const RecvResult = @import("tardy").RecvResult;
 const SendResult = @import("tardy").SendResult;
-
-pub const RecvStatus = union(enum) {
-    kill,
-    recv,
-    send: Pseudoslice,
-    spawned,
-};
 
 /// Security Model to use.
 ///
@@ -73,22 +66,26 @@ pub const ServerConfig = struct {
     security: Security = .plain,
     /// Kernel Backlog Value.
     backlog_count: u31 = 512,
+    /// Stack Size
+    ///
+    /// If you have a large number of middlewares or
+    /// create a LOT of stack memory, you may want to increase this.
+    ///
+    /// P.S: A lot of functions in the standard library do end up allocating
+    /// a lot on the stack (such as std.log).
+    ///
+    /// Default: 1MB
+    stack_size: usize = 1024 * 1024,
     /// Number of Maximum Concurrent Connections.
     ///
     /// This is applied PER runtime.
     /// zzz will drop/close any connections greater
     /// than this.
     ///
-    /// You want to tune this to your expected number
-    /// of maximum connections.
+    /// You can set this to `null` to have no maximum.
     ///
     /// Default: 1024
-    connection_count_max: usize = 1024,
-    /// Maximum number of completions we can reap
-    /// with a single call of reap().
-    ///
-    /// Default: 256
-    completion_reap_max: u16 = 256,
+    connection_count_max: ?usize = 1024,
     /// Amount of allocated memory retained
     /// after an arena is cleared.
     ///
@@ -181,41 +178,41 @@ pub const Server = struct {
         body: RequestBodyState,
     };
 
-    const RespondState = enum {
-        send,
-        handler,
-    };
-
     const State = union(enum) {
         request: RequestState,
-        respond: RespondState,
+        handler,
+        respond,
     };
 
-    const HTTP_RESPONSE = "HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Length: 27\r\nContent-Type: text/plain\r\n\r\nThis is an HTTP benchmark\r\n";
-    const STACK_SIZE = 1024 * 64;
-
-    // rewrite using frames :)
     pub fn main_frame(
         rt: *Runtime,
         config: ServerConfig,
+        router: *const Router,
         server: *const Socket,
         provisions: *Pool(Provision),
     ) !void {
         const socket = try server.accept(rt);
         defer socket.close_blocking();
+        try Cross.socket.disable_nagle(socket.handle);
 
         log.debug("queuing up a new accept request", .{});
-        try rt.spawn(.{ rt, config, server, provisions }, main_frame, STACK_SIZE);
+        try rt.spawn(.{ rt, config, router, server, provisions }, main_frame, config.stack_size);
 
         const index = try provisions.borrow();
         defer provisions.release(index);
         const provision = provisions.get_ptr(index);
 
-        // TODO: reintroduce maximum connections limit
-        // make it a ?usize so you're not forced :)
+        if (config.connection_count_max) |connection_max_count| {
+            _ = connection_max_count;
+            // TODO: reintroduce maximum connections limit
+            // make it a ?usize so you're not forced :)
+            // dont queue a new accept unless we are under the limit basically.
+        }
 
+        // if we are growing, we can handle a newly allocated provision here.
+        // otherwise, it should be initalized.
         if (!provision.initalized) {
-            log.debug("initalizing provision", .{});
+            log.debug("initalizing new provision", .{});
             provision.recv_buffer = ZeroCopy(u8).init(rt.allocator, config.socket_buffer_bytes) catch {
                 @panic("attempting to allocate more memory than available. (ZeroCopyBuffer)");
             };
@@ -248,6 +245,7 @@ pub const Server = struct {
         var state: State = .{ .request = .header };
         provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
 
+        // TODO: add a limit to how many times a socket can run a keep-alive
         while (true) switch (state) {
             .request => |*kind| switch (kind.*) {
                 .header => {
@@ -288,9 +286,7 @@ pub const Server = struct {
                             socket.addr,
                         });
 
-                        const content_length_str: []const u8 = provision.request.headers.get(
-                            "Content-Length",
-                        ) orelse "0";
+                        const content_length_str = provision.request.headers.get("Content-Length") orelse "0";
                         const content_length = try std.fmt.parseUnsigned(usize, content_length_str, 10);
                         log.debug("content length={d}", .{content_length});
 
@@ -303,12 +299,12 @@ pub const Server = struct {
                                     },
                                 },
                             };
-                        } else state = .{ .respond = .handler };
+                        } else state = .handler;
                     }
                 },
                 .body => |*info| {
                     if (info.current_length == info.content_length) {
-                        state = .{ .respond = .handler };
+                        state = .handler;
                         continue;
                     }
 
@@ -321,60 +317,121 @@ pub const Server = struct {
                     };
 
                     provision.recv_buffer.mark_written(recv_count);
-                    if (provision.recv_buffer.len > config.request_bytes_max) break;
                     provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+                    if (provision.recv_buffer.len > config.request_bytes_max) break;
 
                     info.current_length += recv_count;
                     assert(info.current_length <= info.content_length);
-
-                    if (info.current_length == info.content_length) state = .{ .respond = .handler };
                 },
             },
-            .respond => |*kind| switch (kind.*) {
-                .handler => {
-                    // TODO: this is where we would have to:
-                    // 1. match the request with a route
-                    // 2. iterate through the middleware chain
-                    // 3. return the response
-                    // 4. buffer-ize it.
-                    // 5. send all over the socket :)
-                    state = .{ .respond = .send };
-                },
-                .send => {
-                    const length = socket.send_all(rt, HTTP_RESPONSE[0..]) catch |e| {
+            .handler => {
+                const found = try router.get_bundle_from_host(
+                    provision.request.uri.?,
+                    provision.captures,
+                    &provision.queries,
+                );
+
+                const h_with_data: HandlerWithData = found.bundle.route.get_handler(
+                    provision.request.method.?,
+                ) orelse {
+                    try provision.response.apply(.{
+                        .status = .@"Method Not Allowed",
+                        .mime = Mime.TEXT,
+                        .body = "",
+                    });
+
+                    state = .respond;
+                    continue;
+                };
+
+                const context: Context = .{
+                    .runtime = rt,
+                    .allocator = provision.arena.allocator(),
+                    .request = &provision.request,
+                    .address = socket.addr,
+                };
+
+                var next: Next = .{
+                    .context = context,
+                    .middlewares = found.bundle.middlewares,
+                    .handler = h_with_data,
+                };
+
+                const respond = try next.run();
+                try provision.response.apply(respond);
+                state = .respond;
+            },
+            .respond => {
+                // we will just use the recv buffer zero copy as an impromptu buffer :)
+                const buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+
+                const body = provision.response.body orelse "";
+                const content_length = body.len;
+                const headers = try provision.response.headers_into_buffer(buffer, content_length);
+
+                var sent: usize = 0;
+                const pseudo = Pseudoslice.init(headers, body, buffer);
+
+                while (sent < pseudo.len) {
+                    const send_slice = pseudo.get(sent, buffer.len);
+                    const sent_length = socket.send_all(rt, send_slice) catch |e| {
                         log.debug("send failed on socket | {}", .{e});
                         break;
                     };
-                    if (length != HTTP_RESPONSE.len) break;
+                    if (sent_length != send_slice.len) break;
+                    sent += sent_length;
+                }
 
-                    // keep-alive vs close
-                    const connection = provision.request.headers.get("Connection") orelse "keep-alive";
+                // keep-alive vs close
+                const connection = provision.request.headers.get("Connection") orelse "keep-alive";
+                // will be cleaned by defer.
+                if (std.mem.eql(u8, connection, "close")) break;
 
-                    // will be cleaned by defer.
-                    if (std.mem.eql(u8, connection, "close")) break;
-
-                    // if keep-alive
-                    // TODO: determine if we want to shrink here or not.
-                    provision.request.clear();
-                    provision.response.clear();
-                    provision.recv_buffer.clear_retaining_capacity();
-                    _ = provision.arena.reset(.retain_capacity);
-                    state = .{ .request = .header };
-                    provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
-                },
+                // if keep-alive
+                provision.request.clear();
+                provision.response.clear();
+                provision.recv_buffer.clear_retaining_capacity();
+                _ = provision.arena.reset(.retain_capacity);
+                state = .{ .request = .header };
+                provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
             },
         };
 
-        log.debug("socket closed! :)", .{});
+        log.info("connection ({}) closed", .{socket.addr});
     }
 
-    pub fn serve(self: *Self, rt: *Runtime, socket: *Socket) !void {
-        //self.router = router;
+    /// Serve an HTTP server.
+    pub fn serve(self: *Self, rt: *Runtime, router: *const Router, socket: *const Socket) !void {
+        self.router = router;
         log.info("security mode: {s}", .{@tagName(self.config.security)});
 
-        const provision_pool = try rt.allocator.create(Pool(Provision));
-        provision_pool.* = try Pool(Provision).init(rt.allocator, self.config.connection_count_max, .grow);
+        const count = self.config.connection_count_max orelse 1024;
+        const pooling: PoolKind = if (self.config.connection_count_max == null) .grow else .static;
 
-        try rt.spawn(.{ rt, self.config, socket, provision_pool }, main_frame, STACK_SIZE);
+        const provision_pool = try rt.allocator.create(Pool(Provision));
+        provision_pool.* = try Pool(Provision).init(rt.allocator, count, pooling);
+
+        // initialize first batch of provisions :)
+        for (provision_pool.items) |*provision| {
+            provision.initalized = true;
+            provision.recv_buffer = ZeroCopy(u8).init(rt.allocator, self.config.socket_buffer_bytes) catch {
+                @panic("attempting to allocate more memory than available. (ZeroCopy)");
+            };
+            provision.arena = std.heap.ArenaAllocator.init(rt.allocator);
+            provision.captures = rt.allocator.alloc(Capture, self.config.capture_count_max) catch {
+                @panic("attempting to allocate more memory than available. (Captures)");
+            };
+            provision.queries = QueryMap.init(rt.allocator, self.config.query_count_max) catch {
+                @panic("attempting to allocate more memory than available. (QueryMap)");
+            };
+            provision.request = Request.init(rt.allocator, self.config.header_count_max) catch {
+                @panic("attempting to allocate more memory than available. (Request)");
+            };
+            provision.response = Response.init(rt.allocator, self.config.header_count_max) catch {
+                @panic("attempting to allocate more memory than available. (Response)");
+            };
+        }
+
+        try rt.spawn(.{ rt, self.config, router, socket, provision_pool }, main_frame, self.config.stack_size);
     }
 };

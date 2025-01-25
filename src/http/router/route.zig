@@ -8,16 +8,17 @@ const wrap = @import("tardy").wrap;
 const Method = @import("../method.zig").Method;
 const Request = @import("../request.zig").Request;
 const Response = @import("../response.zig").Response;
+const Respond = @import("../response.zig").Respond;
 const Mime = @import("../mime.zig").Mime;
 const Encoding = @import("../encoding.zig").Encoding;
 
 const FsDir = @import("fs_dir.zig").FsDir;
 const Context = @import("../context.zig").Context;
-const Layer = @import("layer.zig").Layer;
+const Layer = @import("middleware.zig").Layer;
 
-pub const HandlerFn = *const fn (*Context, usize) anyerror!void;
+pub const HandlerFn = *const fn (Context, usize) anyerror!Respond;
 pub fn TypedHandlerFn(comptime T: type) type {
-    return *const fn (*Context, T) anyerror!void;
+    return *const fn (Context, T) anyerror!Respond;
 }
 
 pub const HandlerWithData = struct {

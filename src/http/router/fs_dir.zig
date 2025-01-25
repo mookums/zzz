@@ -3,7 +3,7 @@ const log = std.log.scoped(.@"zzz/http/router");
 const assert = std.debug.assert;
 
 const Route = @import("route.zig").Route;
-const Layer = @import("layer.zig").Layer;
+const Layer = @import("middleware.zig").Layer;
 const Request = @import("../request.zig").Request;
 const Response = @import("../response.zig").Response;
 const Mime = @import("../mime.zig").Mime;

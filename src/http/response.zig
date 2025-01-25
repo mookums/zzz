@@ -6,8 +6,16 @@ const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
 
+const Pair = @import("../core/lib.zig").Pair;
+
+pub const Respond = struct {
+    status: Status = .OK,
+    mime: Mime = Mime.TEXT,
+    body: []const u8 = "",
+    headers: []const [2][]const u8 = &.{},
+};
+
 pub const Response = struct {
-    allocator: std.mem.Allocator,
     status: ?Status = null,
     mime: ?Mime = null,
     body: ?[]const u8 = null,
@@ -15,15 +23,20 @@ pub const Response = struct {
 
     pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Response {
         const headers = try Headers.init(allocator, header_count_max);
-
-        return Response{
-            .allocator = allocator,
-            .headers = headers,
-        };
+        return Response{ .headers = headers };
     }
 
     pub fn deinit(self: *Response) void {
         self.headers.deinit();
+    }
+
+    pub fn apply(self: *Response, into: Respond) !void {
+        self.status = into.status;
+        self.mime = into.mime;
+        self.body = into.body;
+
+        self.headers.clear();
+        for (into.headers) |pair| try self.headers.put(pair[0], pair[1]);
     }
 
     pub fn clear(self: *Response) void {
@@ -31,26 +44,6 @@ pub const Response = struct {
         self.mime = null;
         self.body = null;
         self.headers.clear();
-    }
-
-    pub const ResponseSetOptions = struct {
-        status: ?Status = null,
-        mime: ?Mime = null,
-        body: ?[]const u8 = null,
-    };
-
-    pub fn set(self: *Response, options: ResponseSetOptions) void {
-        if (options.status) |status| {
-            self.status = status;
-        }
-
-        if (options.mime) |mime| {
-            self.mime = mime;
-        }
-
-        if (options.body) |body| {
-            self.body = body;
-        }
     }
 
     pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?usize) ![]u8 {
