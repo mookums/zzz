@@ -7,12 +7,35 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
+const Socket = tardy.Socket;
+const Dir = tardy.Dir;
 
 const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
+const Respond = http.Respond;
 const FsDir = http.FsDir;
+
+const Compression = http.Middlewares.Compression;
+
+fn base_handler(_: *const Context, dir: Dir) !Respond {
+    log.debug("dir={}", .{dir});
+    const body =
+        \\ <!DOCTYPE html>
+        \\ <html>
+        \\ <body>
+        \\ <h1>Hello, World!</h1>
+        \\ </body>
+        \\ </html>
+    ;
+
+    return Respond{
+        .status = .OK,
+        .mime = http.Mime.HTML,
+        .body = body[0..],
+    };
+}
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
@@ -24,50 +47,40 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .auto,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .auto });
     defer t.deinit();
 
-    var router = try Router.init(allocator, &.{
-        Route.init("/").get({}, struct {
-            pub fn handler_fn(ctx: *Context, _: void) !void {
-                const body =
-                    \\ <!DOCTYPE html>
-                    \\ <html>
-                    \\ <body>
-                    \\ <h1>Hello, World!</h1>
-                    \\ </body>
-                    \\ </html>
-                ;
-                return try ctx.respond(.{
-                    .status = .OK,
-                    .mime = http.Mime.HTML,
-                    .body = body[0..],
-                });
-            }
-        }.handler_fn).layer(),
+    const static_dir = Dir.from_std(try std.fs.cwd().openDir("examples/fs/static", .{}));
 
-        FsDir.serve("/", "./examples/fs/static"),
+    var router = try Router.init(allocator, &.{
+        Route.init("/").get(static_dir, base_handler).layer(),
+        Compression(.{ .gzip = .{} }),
+        FsDir.serve("/", static_dir),
     }, .{});
     defer router.deinit(allocator);
     router.print_route_tree();
 
+    const EntryParams = struct {
+        router: *const Router,
+        socket: Socket,
+    };
+
+    var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(256);
+
+    const params: EntryParams = .{ .router = &router, .socket = socket };
     try t.entry(
-        &router,
+        &params,
         struct {
-            fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(rt.allocator, .{});
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
-                try server.serve(r, rt);
+            fn entry(rt: *Runtime, p: *const EntryParams) !void {
+                var server = Server.init(rt.allocator, .{
+                    .stack_size = 1024 * 1024 * 4,
+                    .socket_buffer_bytes = 1024 * 4,
+                });
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                Server.clean(rt) catch unreachable;
-            }
-        }.exit,
     );
 }

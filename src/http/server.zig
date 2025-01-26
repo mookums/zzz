@@ -365,17 +365,21 @@ pub const Server = struct {
                     .runtime = rt,
                     .allocator = provision.arena.allocator(),
                     .request = &provision.request,
+                    .response = &provision.response,
                     .socket = socket,
+                    .captures = found.captures,
+                    .queries = found.queries,
                 };
 
                 var next: Next = .{
-                    .context = context,
+                    .context = &context,
                     .middlewares = found.bundle.middlewares,
                     .handler = h_with_data,
                 };
 
                 const respond = try next.run();
                 try provision.response.apply(respond);
+
                 state = .respond;
             },
             .respond => {
@@ -390,7 +394,7 @@ pub const Server = struct {
                 const pseudo = Pseudoslice.init(headers, body, buffer);
 
                 while (sent < pseudo.len) {
-                    const send_slice = pseudo.get(sent, buffer.len);
+                    const send_slice = pseudo.get(sent, sent + buffer.len);
                     const sent_length = socket.send_all(rt, send_slice) catch |e| {
                         log.debug("send failed on socket | {}", .{e});
                         break;
@@ -416,7 +420,7 @@ pub const Server = struct {
                 provision.request.clear();
                 provision.response.clear();
                 provision.recv_buffer.clear_retaining_capacity();
-                _ = provision.arena.reset(.retain_capacity);
+                _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
                 state = .{ .request = .header };
                 provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
             },

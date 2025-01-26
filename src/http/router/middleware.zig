@@ -23,7 +23,7 @@ pub const Layer = union(enum) {
 
 pub const Next = struct {
     const Self = @This();
-    context: Context,
+    context: *const Context,
     middlewares: []const MiddlewareWithData,
     handler: HandlerWithData,
 

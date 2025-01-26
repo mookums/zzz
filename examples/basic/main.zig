@@ -19,11 +19,10 @@ const Next = http.Next;
 const Response = http.Response;
 const Respond = http.Respond;
 
-const Compression = http.Middlewares.Compression;
 const RateLimitConfig = http.Middlewares.RateLimitConfig;
 const RateLimiting = http.Middlewares.RateLimiting;
 
-fn base_handler(_: Context, _: void) !Respond {
+fn base_handler(_: *const Context, _: void) !Respond {
     return .{
         .status = .OK,
         .mime = http.Mime.HTML,
@@ -47,7 +46,6 @@ pub fn main() !void {
 
     var router = try Router.init(allocator, &.{
         RateLimiting(&config),
-        Compression(.{ .gzip = .{} }),
         Route.init("/").get({}, base_handler).layer(),
     }, .{});
     defer router.deinit(allocator);

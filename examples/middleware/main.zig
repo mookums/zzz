@@ -7,15 +7,17 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
+const Socket = tardy.Socket;
 
 const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
 const Next = http.Next;
+const Respond = http.Respond;
 const Middleware = http.Middleware;
 
-fn root_handler(ctx: *Context, id: i8) !void {
+fn root_handler(ctx: *const Context, id: i8) !Respond {
     const body_fmt =
         \\ <!DOCTYPE html>
         \\ <html>
@@ -26,29 +28,29 @@ fn root_handler(ctx: *Context, id: i8) !void {
         \\ </html>
     ;
     const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id});
+
     // This is the standard response and what you
     // will usually be using. This will send to the
     // client and then continue to await more requests.
-    return try ctx.respond(.{
+    return Respond{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    });
+    };
 }
 
-fn pre_middleware(next: *Next, _: void) !void {
-    log.info("pre request middleware: {s}", .{next.ctx.request.uri.?});
+fn passing_middleware(next: *Next, _: void) !Respond {
+    log.info("pass middleware: {s}", .{next.context.request.uri.?});
     return try next.run();
 }
 
-fn pre_fail_middleware(next: *Next, _: void) !void {
-    log.info("pre fail request middleware: {s}", .{next.ctx.request.uri.?});
-    return error.ExpectedFailure;
-}
-
-fn post_middleware(next: *Next, _: void) !void {
-    log.info("post request middleware: {s}", .{next.ctx.request.uri.?});
-    return try next.run();
+fn failing_middleware(next: *Next, _: void) !Respond {
+    log.info("fail middleware: {s}", .{next.context.request.uri.?});
+    return Respond{
+        .status = .@"Internal Server Error",
+        .mime = http.Mime.HTML,
+        .body = "",
+    };
 }
 
 pub fn main() !void {
@@ -59,41 +61,38 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Creating our Tardy instance that
-    // will spawn our runtimes.
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
     const num: i8 = 12;
 
     var router = try Router.init(allocator, &.{
-        Middleware.init().before({}, pre_middleware).after({}, post_middleware).layer(),
+        Middleware.init({}, passing_middleware).layer(),
         Route.init("/").get(num, root_handler).layer(),
-        Middleware.init().before({}, pre_fail_middleware).layer(),
+        Middleware.init({}, failing_middleware).layer(),
         Route.init("/fail").get(num, root_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
     router.print_route_tree();
 
-    // This provides the entry function into the Tardy runtime. This will run
-    // exactly once inside of each runtime (each thread gets a single runtime).
+    const EntryParams = struct {
+        router: *const Router,
+        socket: Socket,
+    };
+
+    var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(256);
+
+    const params: EntryParams = .{ .router = &router, .socket = socket };
     try t.entry(
-        &router,
+        &params,
         struct {
-            fn entry(rt: *Runtime, r: *const Router) !void {
+            fn entry(rt: *Runtime, p: *const EntryParams) !void {
                 var server = Server.init(rt.allocator, .{});
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
-                try server.serve(r, rt);
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
-            }
-        }.exit,
     );
 }

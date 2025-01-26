@@ -16,9 +16,9 @@ const FsDir = @import("fs_dir.zig").FsDir;
 const Context = @import("../context.zig").Context;
 const Layer = @import("middleware.zig").Layer;
 
-pub const HandlerFn = *const fn (Context, usize) anyerror!Respond;
+pub const HandlerFn = *const fn (*const Context, usize) anyerror!Respond;
 pub fn TypedHandlerFn(comptime T: type) type {
-    return *const fn (Context, T) anyerror!Respond;
+    return *const fn (*const Context, T) anyerror!Respond;
 }
 
 pub const HandlerWithData = struct {
