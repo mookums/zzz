@@ -182,7 +182,10 @@ pub const Route = struct {
         comptime bytes: []const u8,
     ) Self {
         return self.get({}, struct {
-            fn handler_fn(ctx: *Context, _: void) !void {
+            fn handler_fn(ctx: Context, _: void) !Respond {
+                var header_list = try std.ArrayListUnmanaged([2][]const u8).initCapacity(ctx.allocator, 3);
+                defer header_list.deinit(ctx.allocator);
+
                 const cache_control: []const u8 = if (comptime builtin.mode == .Debug)
                     "no-cache"
                 else
@@ -191,7 +194,7 @@ pub const Route = struct {
                         .{std.time.s_per_day * 30},
                     );
 
-                ctx.response.headers.put_assume_capacity("Cache-Control", cache_control);
+                try header_list.append(ctx.allocator, .{ "Cache-Control", cache_control });
 
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
@@ -201,31 +204,33 @@ pub const Route = struct {
                         "\"{d}\"",
                         .{std.hash.Wyhash.hash(0, bytes)},
                     );
-                    ctx.response.headers.put_assume_capacity("ETag", etag[0..]);
+                    try header_list.append(ctx.allocator, .{ "ETag", etag[0..] });
 
                     if (ctx.request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
-                            return try ctx.respond(.{
+                            return Respond{
                                 .status = .@"Not Modified",
                                 .mime = Mime.HTML,
                                 .body = "",
-                            });
+                                .headers = try header_list.toOwnedSlice(ctx.allocator),
+                            };
                         }
                     }
                 }
 
                 if (opts.encoding) |encoding| {
-                    ctx.response.headers.put_assume_capacity(
-                        "Content-Encoding",
-                        @tagName(encoding),
+                    try header_list.append(
+                        ctx.allocator,
+                        .{ "Content-Encoding", @tagName(encoding) },
                     );
                 }
 
-                return try ctx.respond(.{
+                return Respond{
                     .status = .OK,
-                    .mime = opts.mime,
+                    .mime = opts.mime orelse Mime.BIN,
                     .body = bytes,
-                });
+                    .headers = try header_list.toOwnedSlice(ctx.allocator),
+                };
             }
         }.handler_fn);
     }

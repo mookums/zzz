@@ -2,10 +2,8 @@ const std = @import("std");
 
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 
-const Provision = @import("provision.zig").Provision;
+const Provision = @import("server.zig").Provision;
 const Context = @import("context.zig").Context;
-
-const TaskFn = @import("tardy").TaskFn;
 const Runtime = @import("tardy").Runtime;
 
 const SSEMessage = struct {
@@ -15,44 +13,4 @@ const SSEMessage = struct {
     retry: ?u64 = null,
 };
 
-pub const SSE = struct {
-    const Self = @This();
-    context: *Context,
-    allocator: std.mem.Allocator,
-    runtime: *Runtime,
-
-    pub fn send(
-        self: *Self,
-        options: SSEMessage,
-        then_context: anytype,
-        then: TaskFn(bool, @TypeOf(then_context)),
-    ) !void {
-        var index: usize = 0;
-        const buffer = self.context.provision.buffer;
-
-        if (options.id) |id| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "id: {s}\n", .{id});
-            index += buf.len;
-        }
-
-        if (options.event) |event| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "event: {s}\n", .{event});
-            index += buf.len;
-        }
-
-        if (options.data) |data| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "data: {s}\n", .{data});
-            index += buf.len;
-        }
-
-        if (options.retry) |retry| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "retry: {d}\n", .{retry});
-            index += buf.len;
-        }
-
-        buffer[index] = '\n';
-        index += 1;
-
-        try self.context.send_then(buffer[0..index], then_context, then);
-    }
-};
+pub const SSE = struct {};

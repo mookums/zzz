@@ -19,14 +19,14 @@ const Next = http.Next;
 const Response = http.Response;
 const Respond = http.Respond;
 
-const CompressMiddleware = http.CompressMiddleware;
-const RateLimitMiddleware = http.RateLimitMiddleware;
-const ThreadSafeRateLimit = http.ThreadSafeRateLimit;
+const Compression = http.Middlewares.Compression;
+const RateLimitConfig = http.Middlewares.RateLimitConfig;
+const RateLimiting = http.Middlewares.RateLimiting;
 
 fn base_handler(_: Context, _: void) !Respond {
     return .{
         .status = .OK,
-        .mime = http.Mime.TEXT,
+        .mime = http.Mime.HTML,
         .body = "Hello, world!",
     };
 }
@@ -35,25 +35,19 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Creating our Tardy instance that
-    // will spawn our runtimes.
-    var t = try Tardy.init(allocator, .{
-        .threading = .auto,
-        .size_tasks_initial = 128,
-        .size_aio_reap_max = 128,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
-    var limiter = ThreadSafeRateLimit.init(allocator);
-    defer limiter.deinit();
+    var config = RateLimitConfig.init(allocator, 5, 30, null);
+    defer config.deinit();
 
     var router = try Router.init(allocator, &.{
-        //RateLimitMiddleware(std.time.ms_per_s, &limiter),
-        //CompressMiddleware(.{ .gzip = .{} }),
+        RateLimiting(&config),
+        Compression(.{ .gzip = .{} }),
         Route.init("/").get({}, base_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
@@ -66,20 +60,19 @@ pub fn main() !void {
 
     const EntryParams = struct {
         router: *const Router,
-        socket: *Socket,
+        socket: Socket,
     };
 
-    const params: EntryParams = .{ .router = &router, .socket = &socket };
-
-    // This provides the entry function into the Tardy runtime. This will run
-    // exactly once inside of each runtime (each thread gets a single runtime).
+    const params: EntryParams = .{ .router = &router, .socket = socket };
     try t.entry(
         &params,
         struct {
             fn entry(rt: *Runtime, p: *const EntryParams) !void {
                 var server = Server.init(rt.allocator, .{
                     .stack_size = 1024 * 1024 * 4,
-                    .socket_buffer_bytes = 1024 * 4,
+                    .socket_buffer_bytes = 1024 * 2,
+                    .keepalive_count_max = null,
+                    .connection_count_max = null,
                 });
                 try server.serve(rt, p.router, p.socket);
             }

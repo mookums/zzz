@@ -18,10 +18,7 @@ pub const Layer = @import("router/middleware.zig").Layer;
 pub const Middleware = @import("router/middleware.zig").Middleware;
 pub const MiddlewareFn = @import("router/middleware.zig").MiddlewareFn;
 pub const Next = @import("router/middleware.zig").Next;
-
-pub const ThreadSafeRateLimit = @import("middlewares/lib.zig").ThreadSafeRateLimit;
-pub const RateLimitMiddleware = @import("middlewares/lib.zig").RateLimitMiddleware;
-pub const CompressMiddleware = @import("middlewares/lib.zig").CompressMiddleware;
+pub const Middlewares = @import("middlewares/lib.zig");
 
 pub const FsDir = @import("router/fs_dir.zig").FsDir;
 

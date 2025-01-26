@@ -17,7 +17,6 @@ const Capture = @import("router/routing_trie.zig").Capture;
 const QueryMap = @import("router/routing_trie.zig").QueryMap;
 const SSE = @import("sse.zig").SSE;
 
-const Provision = @import("provision.zig").Provision;
 const Mime = @import("mime.zig").Mime;
 const Router = @import("router.zig").Router;
 const Route = @import("router/route.zig").Route;
@@ -64,8 +63,10 @@ pub const Security = union(enum) {
 /// for interacting with the underlying network.
 pub const ServerConfig = struct {
     security: Security = .plain,
-    /// Kernel Backlog Value.
-    backlog_count: u31 = 512,
+    /// Kernel Backlog Value
+    ///
+    /// Default: 4096
+    backlog_count: u31 = 4096,
     /// Stack Size
     ///
     /// If you have a large number of middlewares or
@@ -84,8 +85,14 @@ pub const ServerConfig = struct {
     ///
     /// You can set this to `null` to have no maximum.
     ///
-    /// Default: 1024
-    connection_count_max: ?usize = 1024,
+    /// Default: `null`
+    connection_count_max: ?u32 = null,
+    /// Number of times a Request-Response can happen with keep-alive.
+    ///
+    /// Setting this to `null` will set no limit.
+    ///
+    /// Default: `null`
+    keepalive_count_max: ?u16 = null,
     /// Amount of allocated memory retained
     /// after an arena is cleared.
     ///
@@ -106,12 +113,12 @@ pub const ServerConfig = struct {
     /// This is mainly a concern when you are reading in
     /// large requests before responding.
     ///
-    /// Default: 2MB.
+    /// Default: 2MB
     list_recv_bytes_max: u32 = 1024 * 1024 * 2,
     /// Size of the buffer (in bytes) used for
     /// interacting with the socket.
     ///
-    /// Default: 1 KB.
+    /// Default: 1 KB
     socket_buffer_bytes: u32 = 1024,
     /// Maximum number of Headers in a Request/Response
     ///
@@ -127,20 +134,29 @@ pub const ServerConfig = struct {
     query_count_max: u16 = 8,
     /// Maximum size (in bytes) of the Request.
     ///
-    /// Default: 2MB.
+    /// Default: 2MB
     request_bytes_max: u32 = 1024 * 1024 * 2,
     /// Maximum size (in bytes) of the Request URI.
     ///
-    /// Default: 2KB.
+    /// Default: 2KB
     request_uri_bytes_max: u32 = 1024 * 2,
+};
+
+pub const Provision = struct {
+    initalized: bool = false,
+    recv_buffer: ZeroCopy(u8),
+    buffer: []u8,
+    arena: std.heap.ArenaAllocator,
+    captures: []Capture,
+    queries: QueryMap,
+    request: Request,
+    response: Response,
 };
 
 pub const Server = struct {
     const Self = @This();
-    allocator: std.mem.Allocator,
     config: ServerConfig,
     tls_ctx: ?TLSContext,
-    router: *const Router,
 
     pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
         const tls_ctx = switch (config.security) {
@@ -154,12 +170,7 @@ pub const Server = struct {
             .plain => null,
         };
 
-        return Self{
-            .allocator = allocator,
-            .config = config,
-            .tls_ctx = tls_ctx,
-            .router = undefined,
-        };
+        return Self{ .config = config, .tls_ctx = tls_ctx };
     }
 
     pub fn deinit(self: *const Self) void {
@@ -188,26 +199,31 @@ pub const Server = struct {
         rt: *Runtime,
         config: ServerConfig,
         router: *const Router,
-        server: *const Socket,
+        server: Socket,
         provisions: *Pool(Provision),
+        connection_count: *usize,
     ) !void {
         const socket = try server.accept(rt);
         defer socket.close_blocking();
+        connection_count.* += 1;
+        defer connection_count.* -= 1;
         try Cross.socket.disable_nagle(socket.handle);
 
         log.debug("queuing up a new accept request", .{});
-        try rt.spawn(.{ rt, config, router, server, provisions }, main_frame, config.stack_size);
+        try rt.spawn(
+            .{ rt, config, router, server, provisions, connection_count },
+            main_frame,
+            config.stack_size,
+        );
+
+        if (config.connection_count_max) |max| if (connection_count.* > max) {
+            log.debug("over connection max, closing", .{});
+            return;
+        };
 
         const index = try provisions.borrow();
         defer provisions.release(index);
         const provision = provisions.get_ptr(index);
-
-        if (config.connection_count_max) |connection_max_count| {
-            _ = connection_max_count;
-            // TODO: reintroduce maximum connections limit
-            // make it a ?usize so you're not forced :)
-            // dont queue a new accept unless we are under the limit basically.
-        }
 
         // if we are growing, we can handle a newly allocated provision here.
         // otherwise, it should be initalized.
@@ -245,7 +261,8 @@ pub const Server = struct {
         var state: State = .{ .request = .header };
         provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
 
-        // TODO: add a limit to how many times a socket can run a keep-alive
+        var keepalive_count: u16 = 0;
+
         while (true) switch (state) {
             .request => |*kind| switch (kind.*) {
                 .header => {
@@ -348,7 +365,7 @@ pub const Server = struct {
                     .runtime = rt,
                     .allocator = provision.arena.allocator(),
                     .request = &provision.request,
-                    .address = socket.addr,
+                    .socket = socket,
                 };
 
                 var next: Next = .{
@@ -388,6 +405,14 @@ pub const Server = struct {
                 if (std.mem.eql(u8, connection, "close")) break;
 
                 // if keep-alive
+                if (config.keepalive_count_max) |max| {
+                    if (keepalive_count > max) {
+                        log.debug("closing connection, exceeded keepalive max", .{});
+                        break;
+                    }
+                    keepalive_count += 1;
+                }
+
                 provision.request.clear();
                 provision.response.clear();
                 provision.recv_buffer.clear_retaining_capacity();
@@ -401,8 +426,7 @@ pub const Server = struct {
     }
 
     /// Serve an HTTP server.
-    pub fn serve(self: *Self, rt: *Runtime, router: *const Router, socket: *const Socket) !void {
-        self.router = router;
+    pub fn serve(self: *Self, rt: *Runtime, router: *const Router, socket: Socket) !void {
         log.info("security mode: {s}", .{@tagName(self.config.security)});
 
         const count = self.config.connection_count_max orelse 1024;
@@ -410,6 +434,11 @@ pub const Server = struct {
 
         const provision_pool = try rt.allocator.create(Pool(Provision));
         provision_pool.* = try Pool(Provision).init(rt.allocator, count, pooling);
+        errdefer rt.allocator.destroy(provision_pool);
+
+        const connection_count = try rt.allocator.create(usize);
+        errdefer rt.allocator.destroy(connection_count);
+        connection_count.* = 0;
 
         // initialize first batch of provisions :)
         for (provision_pool.items) |*provision| {
@@ -432,6 +461,10 @@ pub const Server = struct {
             };
         }
 
-        try rt.spawn(.{ rt, self.config, router, socket, provision_pool }, main_frame, self.config.stack_size);
+        try rt.spawn(
+            .{ rt, self.config, router, socket, provision_pool, connection_count },
+            main_frame,
+            self.config.stack_size,
+        );
     }
 };

@@ -6,8 +6,6 @@ const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
 
-const Pair = @import("../core/lib.zig").Pair;
-
 pub const Respond = struct {
     status: Status = .OK,
     mime: Mime = Mime.TEXT,
