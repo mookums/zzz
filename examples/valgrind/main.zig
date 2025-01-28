@@ -20,15 +20,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
         Route.init("/").get({}, struct {
-            pub fn handler_fn(ctx: *Context, _: void) !void {
+            pub fn handler_fn(ctx: *const Context, _: void) !void {
                 const body =
                     \\ <!DOCTYPE html>
                     \\ <html>
@@ -46,7 +43,7 @@ pub fn main() !void {
         }.handler_fn).layer(),
 
         Route.init("/kill").get({}, struct {
-            pub fn handler_fn(ctx: *Context, _: void) !void {
+            pub fn handler_fn(ctx: *const Context, _: void) !void {
                 ctx.runtime.stop();
             }
         }.handler_fn).layer(),

@@ -202,24 +202,31 @@ pub const Server = struct {
         server: Socket,
         provisions: *Pool(Provision),
         connection_count: *usize,
+        accept_queued: *bool,
     ) !void {
         const socket = try server.accept(rt);
         defer socket.close_blocking();
+
         connection_count.* += 1;
         defer connection_count.* -= 1;
-        try Cross.socket.disable_nagle(socket.handle);
+        accept_queued.* = false;
 
-        log.debug("queuing up a new accept request", .{});
-        try rt.spawn(
-            .{ rt, config, router, server, provisions, connection_count },
-            main_frame,
-            config.stack_size,
-        );
+        if (socket.addr.any.family != std.posix.AF.UNIX) {
+            try Cross.socket.disable_nagle(socket.handle);
+        }
 
         if (config.connection_count_max) |max| if (connection_count.* > max) {
             log.debug("over connection max, closing", .{});
             return;
         };
+
+        log.debug("queuing up a new accept request", .{});
+        try rt.spawn(
+            .{ rt, config, router, server, provisions, connection_count, accept_queued },
+            main_frame,
+            config.stack_size,
+        );
+        accept_queued.* = true;
 
         const index = try provisions.borrow();
         defer provisions.release(index);
@@ -273,6 +280,8 @@ pub const Server = struct {
                             break;
                         },
                     };
+
+                    // TODO: if TLS, decrypt the received bytes here.
 
                     provision.recv_buffer.mark_written(recv_count);
                     provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
@@ -332,6 +341,8 @@ pub const Server = struct {
                             break;
                         },
                     };
+
+                    // TODO: if TLS, decrypt the received bytes here.
 
                     provision.recv_buffer.mark_written(recv_count);
                     provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
@@ -395,6 +406,9 @@ pub const Server = struct {
 
                 while (sent < pseudo.len) {
                     const send_slice = pseudo.get(sent, sent + buffer.len);
+
+                    // TODO: if TLS, encrypt the sending bytes here.
+
                     const sent_length = socket.send_all(rt, send_slice) catch |e| {
                         log.debug("send failed on socket | {}", .{e});
                         break;
@@ -427,6 +441,15 @@ pub const Server = struct {
         };
 
         log.info("connection ({}) closed", .{socket.addr});
+
+        if (!accept_queued.*) {
+            try rt.spawn(
+                .{ rt, config, router, server, provisions, connection_count, accept_queued },
+                main_frame,
+                config.stack_size,
+            );
+            accept_queued.* = true;
+        }
     }
 
     /// Serve an HTTP server.
@@ -443,6 +466,10 @@ pub const Server = struct {
         const connection_count = try rt.allocator.create(usize);
         errdefer rt.allocator.destroy(connection_count);
         connection_count.* = 0;
+
+        const accept_queued = try rt.allocator.create(bool);
+        errdefer rt.allocator.destroy(accept_queued);
+        accept_queued.* = true;
 
         // initialize first batch of provisions :)
         for (provision_pool.items) |*provision| {
@@ -466,7 +493,7 @@ pub const Server = struct {
         }
 
         try rt.spawn(
-            .{ rt, self.config, router, socket, provision_pool, connection_count },
+            .{ rt, self.config, router, socket, provision_pool, connection_count, accept_queued },
             main_frame,
             self.config.stack_size,
         );

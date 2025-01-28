@@ -70,7 +70,7 @@ pub fn main() !void {
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
                     .keepalive_count_max = null,
-                    .connection_count_max = null,
+                    .connection_count_max = 10,
                 });
                 try server.serve(rt, p.router, p.socket);
             }
