@@ -2,7 +2,7 @@ const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Runtime = @import("tardy").Runtime;
-const Socket = @import("tardy").Socket;
+const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
 
 const Capture = @import("router/routing_trie.zig").Capture;
 const QueryMap = @import("router/routing_trie.zig").QueryMap;
@@ -17,7 +17,7 @@ pub const Context = struct {
     request: *const Request,
     response: *Response,
     /// Socket for this Connection.
-    socket: Socket,
+    socket: SecureSocket,
     captures: []const Capture,
     queries: *const QueryMap,
 };

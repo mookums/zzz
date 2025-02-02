@@ -46,11 +46,11 @@ fn passing_middleware(next: *Next, _: void) !Respond {
 
 fn failing_middleware(next: *Next, _: void) !Respond {
     log.info("fail middleware: {s}", .{next.context.request.uri.?});
-    return Respond{
+    return Respond{ .standard = .{
         .status = .@"Internal Server Error",
         .mime = http.Mime.HTML,
         .body = "",
-    };
+    } };
 }
 
 pub fn main() !void {

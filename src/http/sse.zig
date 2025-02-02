@@ -7,7 +7,7 @@ const Context = @import("context.zig").Context;
 const Mime = @import("mime.zig").Mime;
 
 const Runtime = @import("tardy").Runtime;
-const Socket = @import("tardy").Socket;
+const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
 
 const SSEMessage = struct {
     id: ?[]const u8 = null,
@@ -17,7 +17,7 @@ const SSEMessage = struct {
 };
 
 pub const SSE = struct {
-    socket: Socket,
+    socket: SecureSocket,
     allocator: std.mem.Allocator,
     list: std.ArrayListUnmanaged(u8),
     runtime: *Runtime,

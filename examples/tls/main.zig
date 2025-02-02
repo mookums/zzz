@@ -7,13 +7,17 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
+const Socket = tardy.Socket;
 
 const Server = http.Server;
 const Context = http.Context;
 const Route = http.Route;
 const Router = http.Router;
+const Respond = http.Respond;
 
-fn root_handler(ctx: *Context, _: void) !void {
+fn root_handler(ctx: *const Context, _: void) !Respond {
+    _ = ctx;
+
     const body =
         \\ <!DOCTYPE html>
         \\ <html>
@@ -25,11 +29,12 @@ fn root_handler(ctx: *Context, _: void) !void {
         \\ </body>
         \\ </html>
     ;
-    return try ctx.respond(.{
+
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    });
+    } };
 }
 
 pub fn main() !void {
@@ -42,10 +47,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
@@ -53,22 +55,26 @@ pub fn main() !void {
             .{ .mime = http.Mime.CSS },
             @embedFile("embed/pico.min.css"),
         ).layer(),
-
         Route.init("/").get({}, root_handler).layer(),
-
-        Route.init("/kill").get({}, struct {
-            pub fn handler_fn(ctx: *Context, _: void) !void {
-                ctx.runtime.stop();
-            }
-        }.handler_fn).layer(),
     }, .{});
     defer router.deinit(allocator);
     router.print_route_tree();
 
+    // create socket for tardy
+    var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(1024);
+
+    const EntryParams = struct {
+        router: *const Router,
+        socket: Socket,
+    };
+
     try t.entry(
-        &router,
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, r: *const Router) !void {
+            fn entry(rt: *Runtime, p: EntryParams) !void {
                 var server = Server.init(rt.allocator, .{
                     .security = .{ .tls = .{
                         .cert = .{ .file = .{ .path = "./examples/tls/certs/cert.pem" } },
@@ -77,15 +83,8 @@ pub fn main() !void {
                         .key_name = "EC PRIVATE KEY",
                     } },
                 });
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
-                try server.serve(r, rt);
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
-            }
-        }.exit,
     );
 }

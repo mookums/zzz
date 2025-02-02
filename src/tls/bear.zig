@@ -207,14 +207,8 @@ pub const TLSContext = struct {
         return self;
     }
 
-    pub fn create(self: TLSContext, socket: std.posix.socket_t) !TLS {
-        var tls = TLS.init(.{
-            .allocator = self.parent_allocator,
-            .socket = socket,
-            .context = undefined,
-            .pkey = self.pkey,
-            .chain = self.x509[0..1],
-        });
+    pub fn create(self: TLSContext) !TLS {
+        var tls = TLS.init(self.parent_allocator, undefined, self.x509[0..1], self.pkey);
 
         switch (self.pkey) {
             .RSA => |*inner| {
@@ -469,14 +463,6 @@ fn do_sign(
     return 0;
 }
 
-const TLSOptions = struct {
-    allocator: std.mem.Allocator,
-    socket: std.posix.socket_t,
-    context: bearssl.br_ssl_server_context,
-    chain: []const bearssl.br_x509_certificate,
-    pkey: PrivateKey,
-};
-
 const policy_vtable = bearssl.br_ssl_server_policy_class{
     .context_size = @sizeOf(PolicyContext),
     .choose = choose,
@@ -485,32 +471,33 @@ const policy_vtable = bearssl.br_ssl_server_policy_class{
 };
 
 pub const TLS = struct {
-    allocator: std.mem.Allocator,
-    socket: std.posix.socket_t,
     context: bearssl.br_ssl_server_context,
     iobuf: []u8,
     buffer: std.ArrayList(u8),
-    // chain is not owned, we are just using the ref from tlsctx.
+    // chain is not owned, we are just using the ref from tls_ctx.
     chain: []const bearssl.br_x509_certificate,
     pkey: PrivateKey,
     policy: *PolicyContext,
 
-    pub fn init(options: TLSOptions) TLS {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        context: bearssl.br_ssl_server_context,
+        chain: []const bearssl.br_x509_certificate,
+        pkey: PrivateKey,
+    ) TLS {
         return .{
-            .allocator = options.allocator,
-            .socket = options.socket,
-            .context = options.context,
-            .iobuf = options.allocator.alloc(u8, bearssl.BR_SSL_BUFSIZE_BIDI) catch unreachable,
-            .buffer = std.ArrayList(u8).init(options.allocator),
-            .chain = options.chain,
-            .pkey = options.pkey,
-            .policy = options.allocator.create(PolicyContext) catch unreachable,
+            .context = context,
+            .iobuf = allocator.alloc(u8, bearssl.BR_SSL_BUFSIZE_BIDI) catch unreachable,
+            .buffer = std.ArrayList(u8).init(allocator),
+            .chain = chain,
+            .pkey = pkey,
+            .policy = allocator.create(PolicyContext) catch unreachable,
         };
     }
 
-    pub fn deinit(self: TLS) void {
-        self.allocator.free(self.iobuf);
-        self.allocator.destroy(self.policy);
+    pub fn deinit(self: TLS, allocator: std.mem.Allocator) void {
+        allocator.free(self.iobuf);
+        allocator.destroy(self.policy);
         self.buffer.deinit();
     }
 
@@ -636,55 +623,48 @@ pub const TLS = struct {
         return action;
     }
 
-    pub fn decrypt(self: *TLS, encrypted: []const u8) ![]const u8 {
-        self.buffer.clearRetainingCapacity();
-
+    pub fn decrypt(self: *TLS, encrypted: []u8) !usize {
         const engine = &self.context.eng;
 
         var recv_app = false;
-        var encrypted_index: usize = 0;
+        var read_index: usize = 0;
+        var write_index: usize = 0;
 
-        var cycle_count: u32 = 0;
-        while (cycle_count < 50) : (cycle_count += 1) {
+        while (true) {
             const last_error = bearssl.br_ssl_engine_last_error(engine);
-            log.debug("d cycle {d} - last error | {d}", .{ cycle_count, last_error });
+            log.debug("d - last error | {d}", .{last_error});
             if (last_error != 0) {
-                log.debug("d cycle {d} - decrypt failed | {s}", .{
-                    cycle_count,
-                    fmt_bearssl_error(last_error),
-                });
+                log.debug("d - decrypt failed | {s}", .{fmt_bearssl_error(last_error)});
                 return error.DecryptFailed;
             }
 
             const state = bearssl.br_ssl_engine_current_state(engine);
-            log.debug("d cycle {d} - engine state | {any}", .{ cycle_count, state });
+            log.debug("d - engine state | {any}", .{state});
 
-            if ((state & bearssl.BR_SSL_CLOSED) != 0) {
-                return error.DecryptFailed;
-            }
+            if (read_index == encrypted.len and write_index == encrypted.len) return write_index;
+
+            if ((state & bearssl.BR_SSL_CLOSED) != 0) return error.DecryptFailed;
 
             if ((state & bearssl.BR_SSL_RECVREC) != 0) {
-                if (recv_app) {
-                    return self.buffer.items;
-                }
+                if (recv_app) return write_index;
 
                 log.debug("Triggered BR_SSL_RECVREC", .{});
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvrec_buf(engine, &length);
-                log.debug("d cycle {d} - recv rec buffer: address={*}, length={d}", .{ cycle_count, buf, length });
-                if (length == 0) {
-                    continue;
-                }
+                log.debug("d - recv rec buffer: address={*}, length={d}", .{ buf, length });
+                assert(length > 0);
+                if (read_index == encrypted.len) return 0;
 
-                const min_length = @min(length, encrypted.len - encrypted_index);
-
+                // reads into the engine from our I/O buffer
+                const min_length = @min(length, encrypted.len - read_index);
                 std.mem.copyForwards(
                     u8,
                     buf[0..min_length],
-                    encrypted[encrypted_index .. encrypted_index + min_length],
+                    encrypted[read_index .. read_index + min_length],
                 );
-                encrypted_index += min_length;
-                log.debug("d cycle {d} - total read: {d}", .{ cycle_count, min_length });
+                read_index += min_length;
+
+                log.debug("d - total recvrec: {d}", .{min_length});
                 bearssl.br_ssl_engine_recvrec_ack(engine, min_length);
                 continue;
             }
@@ -695,25 +675,22 @@ pub const TLS = struct {
                 log.debug("Triggered BR_SSL_RECVAPP", .{});
                 var length: usize = undefined;
                 const buf = bearssl.br_ssl_engine_recvapp_buf(engine, &length);
-                log.debug("d cycle {d} - recv app buffer: address={*}, length={d}", .{ cycle_count, buf, length });
+                log.debug("d - recv app buffer: address={*}, length={d}", .{ buf, length });
+                assert(length > 0);
 
-                if (length == 0) {
-                    continue;
-                }
+                const min_length = @min(length, encrypted.len - write_index);
+                assert(write_index + min_length < read_index);
+                std.mem.copyForwards(u8, encrypted[0..min_length], buf[0..min_length]);
+                write_index += min_length;
 
-                try self.buffer.appendSlice(buf[0..length]);
-                log.debug("d cycle {d} - total read: {d}", .{ cycle_count, length });
+                log.debug("d - total recvapp: {d}", .{length});
                 bearssl.br_ssl_engine_recvapp_ack(engine, length);
                 continue;
             }
 
-            if ((state & bearssl.BR_SSL_SENDAPP) != 0) {
-                return error.SendAppWhy;
-            }
+            if ((state & bearssl.BR_SSL_SENDAPP) != 0) return error.SendAppWhy;
 
-            if ((state & bearssl.BR_SSL_SENDREC) != 0) {
-                return error.SendRecWhy;
-            }
+            if ((state & bearssl.BR_SSL_SENDREC) != 0) return error.SendRecWhy;
         }
 
         return error.DecryptTimeout;

@@ -43,6 +43,8 @@ const AcceptResult = @import("tardy").AcceptResult;
 const RecvResult = @import("tardy").RecvResult;
 const SendResult = @import("tardy").SendResult;
 
+const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
+
 /// Security Model to use.
 ///
 /// Default: .plain (plaintext)
@@ -209,6 +211,7 @@ pub const Server = struct {
         config: ServerConfig,
         router: *const Router,
         server: Socket,
+        tls_ctx: ?TLSContext,
         provisions: *Pool(Provision),
         connection_count: *usize,
         accept_queued: *bool,
@@ -231,11 +234,19 @@ pub const Server = struct {
 
         log.debug("queuing up a new accept request", .{});
         try rt.spawn(
-            .{ rt, config, router, server, provisions, connection_count, accept_queued },
+            .{ rt, config, router, server, tls_ctx, provisions, connection_count, accept_queued },
             main_frame,
             config.stack_size,
         );
         accept_queued.* = true;
+
+        // if we have TLS setup...
+        var tls: ?TLS = if (tls_ctx) |ctx| try ctx.create() else null;
+        defer if (tls) |t| t.deinit(rt.allocator);
+        const secure = SecureSocket.init(socket, &tls, rt) catch {
+            log.debug("tls handshake failed!", .{});
+            return;
+        };
 
         const index = try provisions.borrow();
         defer provisions.release(index);
@@ -282,15 +293,13 @@ pub const Server = struct {
         http_loop: while (true) switch (state) {
             .request => |*kind| switch (kind.*) {
                 .header => {
-                    const recv_count = socket.recv(rt, provision.buffer) catch |e| switch (e) {
+                    const recv_count = secure.recv(rt, provision.buffer) catch |e| switch (e) {
                         error.Closed => break,
                         else => {
                             log.debug("recv failed on socket | {}", .{e});
                             break;
                         },
                     };
-
-                    // TODO: if TLS, decrypt the received bytes here.
 
                     provision.recv_buffer.mark_written(recv_count);
                     provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
@@ -343,15 +352,13 @@ pub const Server = struct {
                         continue;
                     }
 
-                    const recv_count = socket.recv(rt, provision.buffer) catch |e| switch (e) {
+                    const recv_count = secure.recv(rt, provision.buffer) catch |e| switch (e) {
                         error.Closed => break,
                         else => {
                             log.debug("recv failed on socket | {}", .{e});
                             break;
                         },
                     };
-
-                    // TODO: if TLS, decrypt the received bytes here.
 
                     provision.recv_buffer.mark_written(recv_count);
                     provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
@@ -390,7 +397,7 @@ pub const Server = struct {
                     .allocator = provision.arena.allocator(),
                     .request = &provision.request,
                     .response = &provision.response,
-                    .socket = socket,
+                    .socket = secure,
                     .captures = found.captures,
                     .queries = found.queries,
                 };
@@ -435,9 +442,7 @@ pub const Server = struct {
                 while (sent < pseudo.len) {
                     const send_slice = pseudo.get(sent, sent + provision.buffer.len);
 
-                    // TODO: if TLS, encrypt the sending bytes here.
-
-                    const sent_length = socket.send_all(rt, send_slice) catch |e| {
+                    const sent_length = secure.send_all(rt, send_slice) catch |e| {
                         log.debug("send failed on socket | {}", .{e});
                         break;
                     };
@@ -464,7 +469,7 @@ pub const Server = struct {
 
         if (!accept_queued.*) {
             try rt.spawn(
-                .{ rt, config, router, server, provisions, connection_count, accept_queued },
+                .{ rt, config, router, server, tls_ctx, provisions, connection_count, accept_queued },
                 main_frame,
                 config.stack_size,
             );
@@ -513,7 +518,7 @@ pub const Server = struct {
         }
 
         try rt.spawn(
-            .{ rt, self.config, router, socket, provision_pool, connection_count, accept_queued },
+            .{ rt, self.config, router, socket, self.tls_ctx, provision_pool, connection_count, accept_queued },
             main_frame,
             self.config.stack_size,
         );

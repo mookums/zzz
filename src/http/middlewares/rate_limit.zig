@@ -13,7 +13,7 @@ const TypedMiddlewareFn = @import("../router/middleware.zig").TypedMiddlewareFn;
 pub fn RateLimiting(config: *RateLimitConfig) Layer {
     const func: TypedMiddlewareFn(*RateLimitConfig) = struct {
         fn rate_limit_mw(next: *Next, c: *RateLimitConfig) !Respond {
-            const ip = get_ip(next.context.socket.addr);
+            const ip = get_ip(next.context.socket.inner.addr);
             const time = std.time.milliTimestamp();
 
             c.mutex.lock();
