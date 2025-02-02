@@ -17,9 +17,7 @@ const Respond = http.Respond;
 
 const Compression = http.Middlewares.Compression;
 
-fn root_handler(ctx: *const Context, _: void) !Respond {
-    _ = ctx;
-
+fn root_handler(_: *const Context, _: void) !Respond {
     const body =
         \\ <!DOCTYPE html>
         \\ <html>

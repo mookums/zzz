@@ -52,11 +52,10 @@ pub fn main() !void {
     try socket.bind();
     try socket.listen(256);
 
-    const params: EntryParams = .{ .router = &router, .socket = socket };
     try t.entry(
-        &params,
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, p: *const EntryParams) !void {
+            fn entry(rt: *Runtime, p: EntryParams) !void {
                 var server = Server.init(rt.allocator, .{});
                 try server.serve(rt, p.router, p.socket);
             }

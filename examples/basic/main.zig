@@ -61,11 +61,10 @@ pub fn main() !void {
         socket: Socket,
     };
 
-    const params: EntryParams = .{ .router = &router, .socket = socket };
     try t.entry(
-        &params,
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, p: *const EntryParams) !void {
+            fn entry(rt: *Runtime, p: EntryParams) !void {
                 var server = Server.init(rt.allocator, .{
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
