@@ -3,10 +3,6 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
-        // .tardy = .{
-        //     .url = "git+https://github.com/mookums/tardy#e4bd6b8f84d888378f786405b10c7d3f16228ce7",
-        //     .hash = "12201f73a4c8c7fcaa7e16b8b1795abc718320a726292284ba4b94a3320b207e2ac8",
-        // },
         .tardy = .{
             .url = "git+https://github.com/mookums/tardy?ref=v0.3.0-rc1#a12b12face4e4833ae8609413d02b6da78657c55",
             .hash = "12206222f98b9a53fece3b8cfc3675336eab0c79da80569e84d004e8ba05033cd2f4",
