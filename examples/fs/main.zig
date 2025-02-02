@@ -19,8 +19,7 @@ const FsDir = http.FsDir;
 
 const Compression = http.Middlewares.Compression;
 
-fn base_handler(_: *const Context, dir: Dir) !Respond {
-    log.debug("dir={}", .{dir});
+fn base_handler(_: *const Context, _: void) !Respond {
     const body =
         \\ <!DOCTYPE html>
         \\ <html>
@@ -30,11 +29,11 @@ fn base_handler(_: *const Context, dir: Dir) !Respond {
         \\ </html>
     ;
 
-    return Respond{
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    };
+    } };
 }
 
 pub fn main() !void {
@@ -53,8 +52,8 @@ pub fn main() !void {
     const static_dir = Dir.from_std(try std.fs.cwd().openDir("examples/fs/static", .{}));
 
     var router = try Router.init(allocator, &.{
-        Route.init("/").get(static_dir, base_handler).layer(),
         Compression(.{ .gzip = .{} }),
+        Route.init("/").get({}, base_handler).layer(),
         FsDir.serve("/", static_dir),
     }, .{});
     defer router.deinit(allocator);

@@ -22,17 +22,16 @@ pub const Layer = union(enum) {
 };
 
 pub const Next = struct {
-    const Self = @This();
     context: *const Context,
     middlewares: []const MiddlewareWithData,
     handler: HandlerWithData,
 
-    pub fn run(self: *Self) !Respond {
+    pub fn run(self: *Next) !Respond {
         if (self.middlewares.len > 0) {
             const middleware = self.middlewares[0];
             self.middlewares = self.middlewares[1..];
-            return try @call(.auto, middleware.func, .{ self, middleware.data });
-        } else return try @call(.auto, self.handler.handler, .{ self.context, self.handler.data });
+            return try middleware.func(self, middleware.data);
+        } else return try self.handler.handler(self.context, self.handler.data);
     }
 };
 

@@ -6,11 +6,22 @@ const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
 
-pub const Respond = struct {
-    status: Status = .OK,
-    mime: Mime = Mime.TEXT,
-    body: []const u8 = "",
-    headers: []const [2][]const u8 = &.{},
+const Stream = @import("tardy").Stream;
+
+pub const Respond = union(enum) {
+    pub const Fields = struct {
+        status: Status = .OK,
+        mime: Mime = Mime.TEXT,
+        body: []const u8 = "",
+        headers: []const [2][]const u8 = &.{},
+    };
+
+    // When we are returning a real HTTP request, we use this.
+    standard: Fields,
+    // If we responded and we want to give control back to the HTTP engine.
+    responded,
+    // If we want the connection to close.
+    close,
 };
 
 pub const Response = struct {
@@ -28,7 +39,7 @@ pub const Response = struct {
         self.headers.deinit();
     }
 
-    pub fn apply(self: *Response, into: Respond) !void {
+    pub fn apply(self: *Response, into: Respond.Fields) !void {
         self.status = into.status;
         self.mime = into.mime;
         self.body = into.body;

@@ -182,7 +182,7 @@ pub const Route = struct {
         comptime bytes: []const u8,
     ) Self {
         return self.get({}, struct {
-            fn handler_fn(ctx: Context, _: void) !Respond {
+            fn handler_fn(ctx: *const Context, _: void) !Respond {
                 var header_list = try std.ArrayListUnmanaged([2][]const u8).initCapacity(ctx.allocator, 3);
                 defer header_list.deinit(ctx.allocator);
 
@@ -209,10 +209,12 @@ pub const Route = struct {
                     if (ctx.request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
                             return Respond{
-                                .status = .@"Not Modified",
-                                .mime = Mime.HTML,
-                                .body = "",
-                                .headers = try header_list.toOwnedSlice(ctx.allocator),
+                                .standard = .{
+                                    .status = .@"Not Modified",
+                                    .mime = Mime.HTML,
+                                    .body = "",
+                                    .headers = try header_list.toOwnedSlice(ctx.allocator),
+                                },
                             };
                         }
                     }
@@ -226,10 +228,12 @@ pub const Route = struct {
                 }
 
                 return Respond{
-                    .status = .OK,
-                    .mime = opts.mime orelse Mime.BIN,
-                    .body = bytes,
-                    .headers = try header_list.toOwnedSlice(ctx.allocator),
+                    .standard = .{
+                        .status = .OK,
+                        .mime = opts.mime orelse Mime.BIN,
+                        .body = bytes,
+                        .headers = try header_list.toOwnedSlice(ctx.allocator),
+                    },
                 };
             }
         }.handler_fn);

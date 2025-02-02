@@ -11,6 +11,7 @@ const QueryMap = @import("router/routing_trie.zig").QueryMap;
 pub const Context = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
+    buffer: []u8,
     runtime: *Runtime,
     /// The Request that triggered this handler.
     request: *const Request,

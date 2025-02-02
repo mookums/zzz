@@ -23,11 +23,11 @@ const RateLimitConfig = http.Middlewares.RateLimitConfig;
 const RateLimiting = http.Middlewares.RateLimiting;
 
 fn base_handler(_: *const Context, _: void) !Respond {
-    return .{
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "Hello, world!",
-    };
+    } };
 }
 
 pub fn main() !void {

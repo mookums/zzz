@@ -7,136 +7,64 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
-const Task = tardy.Task;
-const Broadcast = tardy.Broadcast;
-const Channel = tardy.Channel;
+const Socket = tardy.Socket;
+const Timer = tardy.Timer;
 
 const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
+const Respond = http.Respond;
 const SSE = http.SSE;
 
-// When using SSE, you end up leaving the various abstractions that zzz has setup for you
-// and you begin programming more against the tardy runtime.
+fn sse_handler(ctx: *const Context, _: void) !Respond {
+    var sse = try SSE.init(ctx);
 
-const SSEBroadcastContext = struct {
-    sse: *SSE,
-    channel: *Channel(usize),
-};
-
-fn sse_send(_: *Runtime, value_opt: ?*const usize, ctx: *SSEBroadcastContext) !void {
-    if (value_opt) |value| {
-        const data = try std.fmt.allocPrint(
-            ctx.sse.allocator,
-            "value: {d}",
-            .{value.*},
-        );
-
-        return try ctx.sse.send(.{ .data = data }, ctx, sse_recv);
-    } else {
-        const broadcast = ctx.sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
-        broadcast.unsubscribe(ctx.channel);
-        return try ctx.sse.context.close();
-    }
-}
-
-fn sse_recv(_: *Runtime, success: bool, ctx: *SSEBroadcastContext) !void {
-    if (success) {
-        try ctx.channel.recv(ctx, sse_send);
-    } else {
-        log.debug("channel closed", .{});
-        const broadcast = ctx.sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
-        broadcast.unsubscribe(ctx.channel);
-    }
-}
-
-fn sse_init(rt: *Runtime, success: bool, sse: *SSE) !void {
-    if (!success) {
-        // on failure, it'll auto close after
-        // the sse initalization task runs.
-        log.err("sse initalization failed", .{});
-        return;
+    while (true) {
+        sse.send(.{ .data = "hello from handler!" }) catch break;
+        try Timer.delay(ctx.runtime, .{ .seconds = 1 });
     }
 
-    const broadcast = sse.runtime.storage.get_ptr("broadcast", Broadcast(usize));
-    const context = try sse.allocator.create(SSEBroadcastContext);
-    context.* = .{ .sse = sse, .channel = try broadcast.subscribe(rt, 10) };
-    return try context.channel.recv(context, sse_send);
-}
-
-fn sse_handler(ctx: *Context, _: void) !void {
-    log.debug("going into sse mode", .{});
-    return try ctx.to_sse(sse_init);
-}
-
-fn msg_handler(ctx: *Context, broadcast: *Broadcast(usize)) !void {
-    log.debug("message handler", .{});
-    try broadcast.send(0);
-    return try ctx.respond(.{
-        .status = .OK,
-        .mime = http.Mime.HTML,
-        .body = "",
-    });
-}
-
-fn kill_handler(ctx: *Context, _: void) !void {
-    ctx.runtime.stop();
+    return .responded;
 }
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
-    const max_conn = 512;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .{ .multi = 2 },
-        .size_tasks_max = max_conn,
-        .size_aio_jobs_max = max_conn,
-        .size_aio_reap_max = max_conn,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
-    var broadcast = try Broadcast(usize).init(allocator, max_conn);
-    defer broadcast.deinit();
-
-    var router = try Router.init(allocator, &.{
-        Route.init("/").embed_file(.{ .mime = http.Mime.HTML }, @embedFile("index.html")).layer(),
-        Route.init("/kill").get({}, kill_handler).layer(),
+    const router = try Router.init(allocator, &.{
+        Route.init("/").embed_file(.{ .mime = http.Mime.HTML }, @embedFile("./index.html")).layer(),
         Route.init("/stream").get({}, sse_handler).layer(),
-        Route.init("/message").post(&broadcast, msg_handler).layer(),
     }, .{});
-    defer router.deinit(allocator);
-    router.print_route_tree();
+
+    // create socket for tardy
+    var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(256);
 
     const EntryParams = struct {
         router: *const Router,
-        broadcast: *Broadcast(usize),
+        socket: Socket,
     };
 
     try t.entry(
-        EntryParams{ .router = &router, .broadcast = &broadcast },
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, params: EntryParams) !void {
-                try rt.storage.store_ptr("broadcast", params.broadcast);
-
+            fn entry(rt: *Runtime, p: EntryParams) !void {
                 var server = Server.init(rt.allocator, .{
-                    .connection_count_max = max_conn,
+                    .stack_size = 1024 * 1024 * 4,
+                    .socket_buffer_bytes = 1024 * 2,
                 });
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
-                try server.serve(params.router, rt);
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
-            }
-        }.exit,
     );
 }

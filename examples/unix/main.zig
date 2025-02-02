@@ -20,11 +20,11 @@ pub const std_options = .{
 };
 
 pub fn root_handler(_: *const Context, _: void) !Respond {
-    return Respond{
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "This is an HTTP benchmark",
-    };
+    } };
 }
 
 pub fn main() !void {

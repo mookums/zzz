@@ -195,6 +195,15 @@ pub const Server = struct {
         respond,
     };
 
+    fn prepare_new_request(state: *State, provision: *Provision, config: ServerConfig) !void {
+        provision.request.clear();
+        provision.response.clear();
+        provision.recv_buffer.clear_retaining_capacity();
+        _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
+        state.* = .{ .request = .header };
+        provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+    }
+
     pub fn main_frame(
         rt: *Runtime,
         config: ServerConfig,
@@ -270,7 +279,7 @@ pub const Server = struct {
 
         var keepalive_count: u16 = 0;
 
-        while (true) switch (state) {
+        http_loop: while (true) switch (state) {
             .request => |*kind| switch (kind.*) {
                 .header => {
                     const recv_count = socket.recv(rt, provision.buffer) catch |e| switch (e) {
@@ -372,8 +381,12 @@ pub const Server = struct {
                     continue;
                 };
 
+                // we will just use the recv buffer zero copy as an impromptu buffer :)
+                provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+
                 const context: Context = .{
                     .runtime = rt,
+                    .buffer = provision.buffer,
                     .allocator = provision.arena.allocator(),
                     .request = &provision.request,
                     .response = &provision.response,
@@ -388,24 +401,39 @@ pub const Server = struct {
                     .handler = h_with_data,
                 };
 
-                const respond = try next.run();
-                try provision.response.apply(respond);
+                switch (try next.run()) {
+                    .standard => |respond| {
+                        // applies the respond onto the response
+                        try provision.response.apply(respond);
+                        state = .respond;
+                    },
+                    .responded => {
+                        const connection = provision.request.headers.get("Connection") orelse "keep-alive";
+                        if (std.mem.eql(u8, connection, "close")) break :http_loop;
+                        if (config.keepalive_count_max) |max| {
+                            if (keepalive_count > max) {
+                                log.debug("closing connection, exceeded keepalive max", .{});
+                                break :http_loop;
+                            }
 
-                state = .respond;
+                            keepalive_count += 1;
+                        }
+
+                        try prepare_new_request(&state, provision, config);
+                    },
+                    .close => break :http_loop,
+                }
             },
             .respond => {
-                // we will just use the recv buffer zero copy as an impromptu buffer :)
-                const buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
-
                 const body = provision.response.body orelse "";
                 const content_length = body.len;
-                const headers = try provision.response.headers_into_buffer(buffer, content_length);
+                const headers = try provision.response.headers_into_buffer(provision.buffer, content_length);
 
                 var sent: usize = 0;
-                const pseudo = Pseudoslice.init(headers, body, buffer);
+                const pseudo = Pseudoslice.init(headers, body, provision.buffer);
 
                 while (sent < pseudo.len) {
-                    const send_slice = pseudo.get(sent, sent + buffer.len);
+                    const send_slice = pseudo.get(sent, sent + provision.buffer.len);
 
                     // TODO: if TLS, encrypt the sending bytes here.
 
@@ -413,30 +441,22 @@ pub const Server = struct {
                         log.debug("send failed on socket | {}", .{e});
                         break;
                     };
-                    if (sent_length != send_slice.len) break;
+                    if (sent_length != send_slice.len) break :http_loop;
                     sent += sent_length;
                 }
 
-                // keep-alive vs close
                 const connection = provision.request.headers.get("Connection") orelse "keep-alive";
-                // will be cleaned by defer.
                 if (std.mem.eql(u8, connection, "close")) break;
-
-                // if keep-alive
                 if (config.keepalive_count_max) |max| {
                     if (keepalive_count > max) {
                         log.debug("closing connection, exceeded keepalive max", .{});
                         break;
                     }
+
                     keepalive_count += 1;
                 }
 
-                provision.request.clear();
-                provision.response.clear();
-                provision.recv_buffer.clear_retaining_capacity();
-                _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
-                state = .{ .request = .header };
-                provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+                try prepare_new_request(&state, provision, config);
             },
         };
 

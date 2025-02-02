@@ -23,9 +23,11 @@ const QueryMap = @import("router/routing_trie.zig").QueryMap;
 pub const default_not_found_handler = struct {
     fn not_found_handler(_: *const Context, _: void) !Respond {
         return Respond{
-            .status = .@"Not Found",
-            .mime = Mime.TEXT,
-            .body = "404 | Not Found",
+            .standard = .{
+                .status = .@"Not Found",
+                .mime = Mime.TEXT,
+                .body = "404 | Not Found",
+            },
         };
     }
 }.not_found_handler;

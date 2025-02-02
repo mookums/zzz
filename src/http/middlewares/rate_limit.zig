@@ -54,9 +54,11 @@ pub const RateLimitConfig = struct {
     ) RateLimitConfig {
         const map = std.AutoHashMap(u128, Bucket).init(allocator);
         const respond = response_on_limited orelse Respond{
-            .status = .@"Too Many Requests",
-            .mime = Mime.TEXT,
-            .body = "",
+            .standard = .{
+                .status = .@"Too Many Requests",
+                .mime = Mime.TEXT,
+                .body = "",
+            },
         };
 
         return .{
