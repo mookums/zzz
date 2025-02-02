@@ -15,6 +15,8 @@ const Route = http.Route;
 const Router = http.Router;
 const Respond = http.Respond;
 
+const Compression = http.Middlewares.Compression;
+
 fn root_handler(ctx: *const Context, _: void) !Respond {
     _ = ctx;
 
@@ -51,11 +53,12 @@ pub fn main() !void {
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
+        Route.init("/").get({}, root_handler).layer(),
+        Compression(.{ .gzip = .{} }),
         Route.init("/embed/pico.min.css").embed_file(
             .{ .mime = http.Mime.CSS },
             @embedFile("embed/pico.min.css"),
         ).layer(),
-        Route.init("/").get({}, root_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
     router.print_route_tree();
@@ -82,6 +85,7 @@ pub fn main() !void {
                         .cert_name = "CERTIFICATE",
                         .key_name = "EC PRIVATE KEY",
                     } },
+                    .stack_size = 1024 * 1024 * 8,
                 });
                 try server.serve(rt, p.router, p.socket);
             }
