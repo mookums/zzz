@@ -14,9 +14,6 @@ const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
 const Middleware = http.Middleware;
-
-const Next = http.Next;
-const Response = http.Response;
 const Respond = http.Respond;
 
 const RateLimitConfig = http.Middlewares.RateLimitConfig;
