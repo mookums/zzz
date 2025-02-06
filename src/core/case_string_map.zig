@@ -18,25 +18,19 @@ pub fn CaseStringMap(comptime T: type) type {
         pool: InnerPool,
 
         pub fn init(allocator: std.mem.Allocator, size: usize) !Self {
-            const pool = try Pool(Entry).init(allocator, size, null, null);
+            const pool = try Pool(Entry).init(allocator, size, .grow);
             return .{ .pool = pool };
         }
 
         pub fn deinit(self: *Self) void {
-            self.pool.deinit(null, null);
+            self.pool.deinit();
         }
 
         pub fn put(self: *Self, name: []const u8, data: T) !void {
             const name_hash = hash(name);
-            const entry = try self.pool.borrow_hint(@intCast(name_hash));
-            entry.item.* = .{ .key = name, .hash = name_hash, .data = data };
-        }
-
-        pub fn put_assume_capacity(self: *Self, name: []const u8, data: T) void {
-            assert(self.pool.clean() > 0);
-            const name_hash = hash(name);
-            const entry = self.pool.borrow_hint(@intCast(name_hash)) catch unreachable;
-            entry.item.* = .{ .key = name, .hash = name_hash, .data = data };
+            const index = try self.pool.borrow_hint(@intCast(name_hash));
+            const entry = self.pool.get_ptr(index);
+            entry.* = .{ .key = name, .hash = name_hash, .data = data };
         }
 
         pub fn get(self: *const Self, name: []const u8) ?T {
@@ -86,7 +80,7 @@ test "CaseStringMap: Add Stuff" {
     defer csm.deinit();
 
     try csm.put("Content-Length", "100");
-    csm.put_assume_capacity("Host", "localhost:9999");
+    try csm.put("Host", "localhost:9999");
 
     const content_length = csm.get("Content-length");
     try testing.expect(content_length != null);

@@ -7,22 +7,24 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
+const Socket = tardy.Socket;
 
 const Server = http.Server;
 const Context = http.Context;
 const Route = http.Route;
 const Router = http.Router;
+const Respond = http.Respond;
 
 pub const std_options = .{
     .log_level = .err,
 };
 
-pub fn root_handler(ctx: *Context, _: void) !void {
-    return try ctx.respond(.{
+pub fn root_handler(_: *const Context, _: void) !Respond {
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "This is an HTTP benchmark",
-    });
+    } };
 }
 
 pub fn main() !void {
@@ -30,10 +32,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .auto,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .auto });
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
@@ -42,20 +41,24 @@ pub fn main() !void {
     defer router.deinit(allocator);
     router.print_route_tree();
 
+    const EntryParams = struct {
+        router: *const Router,
+        socket: Socket,
+    };
+
+    var socket = try Socket.init(.{ .unix = "/tmp/zzz.sock" });
+    defer std.fs.deleteFileAbsolute("/tmp/zzz.sock") catch unreachable;
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(256);
+
     try t.entry(
-        &router,
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, r: *const Router) !void {
+            fn entry(rt: *Runtime, p: EntryParams) !void {
                 var server = Server.init(rt.allocator, .{});
-                try server.bind(.{ .unix = "/tmp/zzz.sock" });
-                try server.serve(r, rt);
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
-            }
-        }.exit,
     );
 }

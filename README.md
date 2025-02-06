@@ -5,9 +5,9 @@
 ## Installing
 Latest Zig Stable: `0.13.0`
 
-Latest zzz release: `0.2.0`
+Latest zzz release: `0.3.0`
 ```
-zig fetch --save git+https://github.com/mookums/zzz#v0.2.0
+zig fetch --save git+https://github.com/mookums/zzz#v0.3.0
 ```
 
 You can then add the dependency in your `build.zig` file:
@@ -33,8 +33,6 @@ It focuses on modularity and portability, allowing you to swap in your own imple
 For more information, look here:
 1. [Getting Started](./docs/getting_started.md)
 2. [HTTPS](./docs/https.md)
-3. [Performance Tuning](./docs/performance.md)
-4. [Custom Async](https://muki.gg/post/modular-async)
 
 ## Optimization
 zzz is **very** fast. Through a combination of methods, such as allocation at start up and avoiding thread contention, we are able to extract tons of performance out of a fairly simple implementation. zzz is quite robust currently but is still early stage software. It's currently been running in production, serving my [site](https://muki.gg).
@@ -59,7 +57,8 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
     - `io_uring` for Linux (>= 5.1.0).
     - `epoll` for Linux (>= 2.5.45).
     - `kqueue` for BSD & Mac.
-    - `busy_loop` for Linux, Mac and Windows.
+    - `poll` for Linux, Mac and Windows.
+- Layered Router, including Middleware
 - Single and Multithreaded Support
 - TLS using BearSSL
 - Memory Pooling for minimal allocations 

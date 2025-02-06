@@ -7,16 +7,13 @@ pub const HTTP = @import("./http/lib.zig");
 test "zzz unit tests" {
     // Core
     testing.refAllDecls(@import("./core/case_string_map.zig"));
-    testing.refAllDecls(@import("./core/job.zig"));
     testing.refAllDecls(@import("./core/pseudoslice.zig"));
-    testing.refAllDecls(@import("./core/zc_buffer.zig"));
 
     // HTTP
     testing.refAllDecls(@import("./http/context.zig"));
     testing.refAllDecls(@import("./http/date.zig"));
     testing.refAllDecls(@import("./http/method.zig"));
     testing.refAllDecls(@import("./http/mime.zig"));
-    testing.refAllDecls(@import("./http/provision.zig"));
     testing.refAllDecls(@import("./http/request.zig"));
     testing.refAllDecls(@import("./http/response.zig"));
     testing.refAllDecls(@import("./http/server.zig"));

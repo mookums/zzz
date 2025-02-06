@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const Pair = @import("../core/lib.zig").Pair;
+
 const MimeOption = union(enum) {
     single: []const u8,
     /// The first one should be the priority one.
@@ -141,10 +143,6 @@ const all_mime_types = blk: {
 
     break :blk return_mimes;
 };
-
-pub fn Pair(comptime A: type, comptime B: type) type {
-    return struct { A, B };
-}
 
 const mime_extension_map = blk: {
     const num_pairs = num: {

@@ -15,8 +15,8 @@ pub const Request = struct {
     body: ?[]const u8 = null,
 
     /// This is for constructing a Request.
-    pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Request {
-        const headers = try Headers.init(allocator, header_count_max);
+    pub fn init(allocator: std.mem.Allocator, header_count_initial: usize) !Request {
+        const headers = try Headers.init(allocator, header_count_initial);
 
         return Request{
             .allocator = allocator,
@@ -40,7 +40,7 @@ pub const Request = struct {
         request_uri_bytes_max: u32,
     };
 
-    pub fn parse_headers(self: *Request, bytes: []const u8, options: RequestParseOptions) HTTPError!void {
+    pub fn parse_headers(self: *Request, bytes: []const u8, options: RequestParseOptions) !void {
         self.clear();
         var total_size: u32 = 0;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
@@ -76,7 +76,6 @@ pub const Request = struct {
 
                 // There shouldn't be anything else.
                 if (chunks.next() != null) return HTTPError.MalformedRequest;
-
                 parsing_first_line = false;
             } else {
                 var header_iter = std.mem.tokenizeScalar(u8, line, ':');
@@ -85,7 +84,7 @@ pub const Request = struct {
                 if (value.len == 0) return HTTPError.MalformedRequest;
 
                 if (self.headers.num_clean() == 0) return HTTPError.TooManyHeaders;
-                self.headers.put_assume_capacity(key, value);
+                try self.headers.put(key, value);
             }
         }
     }

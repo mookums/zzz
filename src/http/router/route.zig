@@ -8,16 +8,17 @@ const wrap = @import("tardy").wrap;
 const Method = @import("../method.zig").Method;
 const Request = @import("../request.zig").Request;
 const Response = @import("../response.zig").Response;
+const Respond = @import("../response.zig").Respond;
 const Mime = @import("../mime.zig").Mime;
 const Encoding = @import("../encoding.zig").Encoding;
 
 const FsDir = @import("fs_dir.zig").FsDir;
 const Context = @import("../context.zig").Context;
-const Layer = @import("layer.zig").Layer;
+const Layer = @import("middleware.zig").Layer;
 
-pub const HandlerFn = *const fn (*Context, usize) anyerror!void;
+pub const HandlerFn = *const fn (*const Context, usize) anyerror!Respond;
 pub fn TypedHandlerFn(comptime T: type) type {
-    return *const fn (*Context, T) anyerror!void;
+    return *const fn (*const Context, T) anyerror!Respond;
 }
 
 pub const HandlerWithData = struct {
@@ -181,7 +182,10 @@ pub const Route = struct {
         comptime bytes: []const u8,
     ) Self {
         return self.get({}, struct {
-            fn handler_fn(ctx: *Context, _: void) !void {
+            fn handler_fn(ctx: *const Context, _: void) !Respond {
+                var header_list = try std.ArrayListUnmanaged([2][]const u8).initCapacity(ctx.allocator, 3);
+                defer header_list.deinit(ctx.allocator);
+
                 const cache_control: []const u8 = if (comptime builtin.mode == .Debug)
                     "no-cache"
                 else
@@ -190,7 +194,7 @@ pub const Route = struct {
                         .{std.time.s_per_day * 30},
                     );
 
-                ctx.response.headers.put_assume_capacity("Cache-Control", cache_control);
+                try header_list.append(ctx.allocator, .{ "Cache-Control", cache_control });
 
                 // If our static item is greater than 1KB,
                 // it might be more beneficial to using caching.
@@ -200,31 +204,37 @@ pub const Route = struct {
                         "\"{d}\"",
                         .{std.hash.Wyhash.hash(0, bytes)},
                     );
-                    ctx.response.headers.put_assume_capacity("ETag", etag[0..]);
+                    try header_list.append(ctx.allocator, .{ "ETag", etag[0..] });
 
                     if (ctx.request.headers.get("If-None-Match")) |match| {
                         if (std.mem.eql(u8, etag, match)) {
-                            return try ctx.respond(.{
-                                .status = .@"Not Modified",
-                                .mime = Mime.HTML,
-                                .body = "",
-                            });
+                            return Respond{
+                                .standard = .{
+                                    .status = .@"Not Modified",
+                                    .mime = Mime.HTML,
+                                    .body = "",
+                                    .headers = try header_list.toOwnedSlice(ctx.allocator),
+                                },
+                            };
                         }
                     }
                 }
 
                 if (opts.encoding) |encoding| {
-                    ctx.response.headers.put_assume_capacity(
-                        "Content-Encoding",
-                        @tagName(encoding),
+                    try header_list.append(
+                        ctx.allocator,
+                        .{ "Content-Encoding", @tagName(encoding) },
                     );
                 }
 
-                return try ctx.respond(.{
-                    .status = .OK,
-                    .mime = opts.mime,
-                    .body = bytes,
-                });
+                return Respond{
+                    .standard = .{
+                        .status = .OK,
+                        .mime = opts.mime orelse Mime.BIN,
+                        .body = bytes,
+                        .headers = try header_list.toOwnedSlice(ctx.allocator),
+                    },
+                };
             }
         }.handler_fn);
     }

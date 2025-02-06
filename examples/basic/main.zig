@@ -7,86 +7,69 @@ const http = zzz.HTTP;
 const tardy = zzz.tardy;
 const Tardy = tardy.Tardy(.auto);
 const Runtime = tardy.Runtime;
+const Socket = tardy.Socket;
 
 const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
+const Middleware = http.Middleware;
+const Respond = http.Respond;
 
-fn root_handler(ctx: *Context, id: i8) !void {
-    const body_fmt =
-        \\ <!DOCTYPE html>
-        \\ <html>
-        \\ <body>
-        \\ <h1>Hello, World!</h1>
-        \\ <p>id: {d}</p>
-        \\ </body>
-        \\ </html>
-    ;
-    const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id});
-    // This is the standard response and what you
-    // will usually be using. This will send to the
-    // client and then continue to await more requests.
-    return try ctx.respond(.{
+const RateLimitConfig = http.Middlewares.RateLimitConfig;
+const RateLimiting = http.Middlewares.RateLimiting;
+
+fn base_handler(_: *const Context, _: void) !Respond {
+    return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
-        .body = body[0..],
-    });
-}
-
-fn echo_handler(ctx: *Context, _: void) !void {
-    const body = if (ctx.request.body) |b|
-        try ctx.allocator.dupe(u8, b)
-    else
-        "";
-    return try ctx.respond(.{
-        .status = .OK,
-        .mime = http.Mime.HTML,
-        .body = body[0..],
-    });
+        .body = "Hello, world!",
+    } };
 }
 
 pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Creating our Tardy instance that
-    // will spawn our runtimes.
-    var t = try Tardy.init(.{
-        .allocator = allocator,
-        .threading = .single,
-    });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
-    const num: i8 = 12;
+    var config = RateLimitConfig.init(allocator, 5, 30, null);
+    defer config.deinit();
 
     var router = try Router.init(allocator, &.{
-        Route.init("/").get(num, root_handler).layer(),
-        Route.init("/echo").post({}, echo_handler).layer(),
+        RateLimiting(&config),
+        Route.init("/").get({}, base_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
-    router.print_route_tree();
 
-    // This provides the entry function into the Tardy runtime. This will run
-    // exactly once inside of each runtime (each thread gets a single runtime).
+    // create socket for tardy
+    var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
+    defer socket.close_blocking();
+    try socket.bind();
+    try socket.listen(4096);
+
+    const EntryParams = struct {
+        router: *const Router,
+        socket: Socket,
+    };
+
     try t.entry(
-        &router,
+        EntryParams{ .router = &router, .socket = socket },
         struct {
-            fn entry(rt: *Runtime, r: *const Router) !void {
-                var server = Server.init(rt.allocator, .{});
-                try server.bind(.{ .ip = .{ .host = host, .port = port } });
-                try server.serve(r, rt);
+            fn entry(rt: *Runtime, p: EntryParams) !void {
+                var server = Server.init(rt.allocator, .{
+                    .stack_size = 1024 * 1024 * 4,
+                    .socket_buffer_bytes = 1024 * 2,
+                    .keepalive_count_max = null,
+                    .connection_count_max = 10,
+                });
+                try server.serve(rt, p.router, p.socket);
             }
         }.entry,
-        {},
-        struct {
-            fn exit(rt: *Runtime, _: void) !void {
-                try Server.clean(rt);
-            }
-        }.exit,
     );
 }

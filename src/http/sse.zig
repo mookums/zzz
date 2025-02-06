@@ -2,11 +2,12 @@ const std = @import("std");
 
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 
-const Provision = @import("provision.zig").Provision;
+const Provision = @import("server.zig").Provision;
 const Context = @import("context.zig").Context;
+const Mime = @import("mime.zig").Mime;
 
-const TaskFn = @import("tardy").TaskFn;
 const Runtime = @import("tardy").Runtime;
+const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
 
 const SSEMessage = struct {
     id: ?[]const u8 = null,
@@ -16,43 +17,52 @@ const SSEMessage = struct {
 };
 
 pub const SSE = struct {
-    const Self = @This();
-    context: *Context,
+    socket: SecureSocket,
     allocator: std.mem.Allocator,
+    list: std.ArrayListUnmanaged(u8),
     runtime: *Runtime,
 
-    pub fn send(
-        self: *Self,
-        options: SSEMessage,
-        then_context: anytype,
-        then: TaskFn(bool, @TypeOf(then_context)),
-    ) !void {
-        var index: usize = 0;
-        const buffer = self.context.provision.buffer;
+    pub fn init(ctx: *const Context) !SSE {
+        try ctx.response.apply(.{
+            .status = .OK,
+            .mime = Mime{
+                .content_type = .{ .single = "text/event-stream" },
+                .extension = .{ .single = "" },
+                .description = "SSE",
+            },
+            .headers = &.{},
+        });
 
-        if (options.id) |id| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "id: {s}\n", .{id});
-            index += buf.len;
+        var list = try std.ArrayListUnmanaged(u8).initCapacity(ctx.allocator, 0);
+        errdefer list.deinit(ctx.allocator);
+
+        const headers = try ctx.response.headers_into_buffer(ctx.buffer, null);
+        const sent = try ctx.socket.send_all(ctx.runtime, headers);
+        if (sent != headers.len) return error.Closed;
+
+        return .{
+            .socket = ctx.socket,
+            .allocator = ctx.allocator,
+            .list = list,
+            .runtime = ctx.runtime,
+        };
+    }
+
+    pub fn send(self: *SSE, message: SSEMessage) !void {
+        // just reuse the list
+        defer self.list.clearRetainingCapacity();
+        const writer = self.list.writer(self.allocator);
+
+        if (message.id) |id| try writer.print("id: {s}\n", .{id});
+        if (message.event) |event| try writer.print("event: {s}\n", .{event});
+        if (message.data) |data| {
+            var iter = std.mem.split(u8, data, "\n");
+            while (iter.next()) |line| try writer.print("data: {s}\n", .{line});
         }
+        if (message.retry) |retry| try writer.print("retry: {d}\n", .{retry});
+        try writer.writeByte('\n');
 
-        if (options.event) |event| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "event: {s}\n", .{event});
-            index += buf.len;
-        }
-
-        if (options.data) |data| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "data: {s}\n", .{data});
-            index += buf.len;
-        }
-
-        if (options.retry) |retry| {
-            const buf = try std.fmt.bufPrint(buffer[index..], "retry: {d}\n", .{retry});
-            index += buf.len;
-        }
-
-        buffer[index] = '\n';
-        index += 1;
-
-        try self.context.send_then(buffer[0..index], then_context, then);
+        const sent = try self.socket.send_all(self.runtime, self.list.items);
+        if (sent != self.list.items.len) return error.Closed;
     }
 };
