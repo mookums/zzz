@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const Headers = @import("lib.zig").Headers;
+const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 const Status = @import("lib.zig").Status;
 const Mime = @import("lib.zig").Mime;
 const Date = @import("lib.zig").Date;
@@ -28,10 +28,10 @@ pub const Response = struct {
     status: ?Status = null,
     mime: ?Mime = null,
     body: ?[]const u8 = null,
-    headers: Headers,
+    headers: AnyCaseStringMap,
 
-    pub fn init(allocator: std.mem.Allocator, header_count_max: usize) !Response {
-        const headers = try Headers.init(allocator, header_count_max);
+    pub fn init(allocator: std.mem.Allocator) Response {
+        const headers = AnyCaseStringMap.init(allocator);
         return Response{ .headers = headers };
     }
 
@@ -44,7 +44,7 @@ pub const Response = struct {
         self.mime = into.mime;
         self.body = into.body;
 
-        self.headers.clear();
+        self.headers.clearRetainingCapacity();
         for (into.headers) |pair| try self.headers.put(pair[0], pair[1]);
     }
 
@@ -52,7 +52,7 @@ pub const Response = struct {
         self.status = null;
         self.mime = null;
         self.body = null;
-        self.headers.clear();
+        self.headers.clearRetainingCapacity();
     }
 
     pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?usize) ![]u8 {
@@ -79,12 +79,12 @@ pub const Response = struct {
         // Headers
         var iter = self.headers.iterator();
         while (iter.next()) |entry| {
-            std.mem.copyForwards(u8, buffer[index..], entry.key);
-            index += entry.key.len;
+            std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
+            index += entry.key_ptr.len;
             std.mem.copyForwards(u8, buffer[index..], ": ");
             index += 2;
-            std.mem.copyForwards(u8, buffer[index..], entry.data);
-            index += entry.data.len;
+            std.mem.copyForwards(u8, buffer[index..], entry.value_ptr.*);
+            index += entry.value_ptr.len;
             std.mem.copyForwards(u8, buffer[index..], "\r\n");
             index += 2;
         }

@@ -17,7 +17,7 @@ const Mime = @import("mime.zig").Mime;
 const Context = @import("context.zig").Context;
 
 const RoutingTrie = @import("router/routing_trie.zig").RoutingTrie;
-const QueryMap = @import("router/routing_trie.zig").QueryMap;
+const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 
 /// Default not found handler: send a plain text response.
 pub const default_not_found_handler = struct {
@@ -67,9 +67,9 @@ pub const Router = struct {
         self: *const Router,
         path: []const u8,
         captures: []Capture,
-        queries: *QueryMap,
+        queries: *AnyCaseStringMap,
     ) !FoundBundle {
-        queries.clear();
+        queries.clearRetainingCapacity();
 
         return try self.routes.get_bundle(path, captures, queries) orelse {
             const not_found_bundle: Bundle = .{

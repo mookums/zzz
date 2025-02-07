@@ -6,7 +6,7 @@ pub const HTTP = @import("./http/lib.zig");
 
 test "zzz unit tests" {
     // Core
-    testing.refAllDecls(@import("./core/case_string_map.zig"));
+    testing.refAllDecls(@import("./core/any_case_string_map.zig"));
     testing.refAllDecls(@import("./core/pseudoslice.zig"));
 
     // HTTP

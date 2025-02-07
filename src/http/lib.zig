@@ -6,7 +6,6 @@ pub const Respond = @import("response.zig").Respond;
 pub const Mime = @import("mime.zig").Mime;
 pub const Encoding = @import("encoding.zig").Encoding;
 pub const Date = @import("date.zig").Date;
-pub const Headers = @import("../core/case_string_map.zig").CaseStringMap([]const u8);
 pub const Cookie = @import("cookie.zig").Cookie;
 
 pub const Context = @import("context.zig").Context;

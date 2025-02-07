@@ -5,6 +5,7 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/server");
 
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
+const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 
 const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
 const TLSContext = @import("../tls/lib.zig").TLSContext;
@@ -14,7 +15,6 @@ const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Capture = @import("router/routing_trie.zig").Capture;
-const QueryMap = @import("router/routing_trie.zig").QueryMap;
 const SSE = @import("sse.zig").SSE;
 
 const Mime = @import("mime.zig").Mime;
@@ -150,7 +150,7 @@ pub const Provision = struct {
     buffer: []u8,
     arena: std.heap.ArenaAllocator,
     captures: []Capture,
-    queries: QueryMap,
+    queries: AnyCaseStringMap,
     request: Request,
     response: Response,
 };
@@ -263,16 +263,9 @@ pub const Server = struct {
             provision.captures = rt.allocator.alloc(Capture, config.capture_count_max) catch {
                 @panic("attempting to allocate more memory than available. (Captures)");
             };
-            provision.queries = QueryMap.init(rt.allocator, config.query_count_max) catch {
-                @panic("attempting to allocate more memory than available. (QueryMap)");
-            };
-            provision.request = Request.init(rt.allocator, config.header_count_max) catch {
-                @panic("attempting to allocate more memory than available. (Request)");
-            };
-            provision.response = Response.init(rt.allocator, config.header_count_max) catch {
-                @panic("attempting to allocate more memory than available. (Response)");
-            };
-
+            provision.queries = AnyCaseStringMap.init(rt.allocator);
+            provision.request = Request.init(rt.allocator);
+            provision.response = Response.init(rt.allocator);
             provision.initalized = true;
         }
 
@@ -281,7 +274,7 @@ pub const Server = struct {
         else
             provision.recv_buffer.clear_retaining_capacity();
         defer _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
-        defer provision.queries.clear();
+        defer provision.queries.clearRetainingCapacity();
         defer provision.request.clear();
         defer provision.response.clear();
 
@@ -506,15 +499,9 @@ pub const Server = struct {
             provision.captures = rt.allocator.alloc(Capture, self.config.capture_count_max) catch {
                 @panic("attempting to allocate more memory than available. (Captures)");
             };
-            provision.queries = QueryMap.init(rt.allocator, self.config.query_count_max) catch {
-                @panic("attempting to allocate more memory than available. (QueryMap)");
-            };
-            provision.request = Request.init(rt.allocator, self.config.header_count_max) catch {
-                @panic("attempting to allocate more memory than available. (Request)");
-            };
-            provision.response = Response.init(rt.allocator, self.config.header_count_max) catch {
-                @panic("attempting to allocate more memory than available. (Response)");
-            };
+            provision.queries = AnyCaseStringMap.init(rt.allocator);
+            provision.request = Request.init(rt.allocator);
+            provision.response = Response.init(rt.allocator);
         }
 
         try rt.spawn(
