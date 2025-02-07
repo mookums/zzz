@@ -3,6 +3,7 @@ const log = std.log.scoped(.@"zzz/http/request");
 const assert = std.debug.assert;
 
 const Headers = @import("lib.zig").Headers;
+const CookieMap = @import("cookie.zig").CookieMap;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
 
@@ -12,19 +13,23 @@ pub const Request = struct {
     uri: ?[]const u8 = null,
     version: ?std.http.Version = .@"HTTP/1.1",
     headers: Headers,
+    cookies: CookieMap,
     body: ?[]const u8 = null,
 
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator, header_count_initial: usize) !Request {
         const headers = try Headers.init(allocator, header_count_initial);
+        const cookies = CookieMap.init(allocator);
 
         return Request{
             .allocator = allocator,
             .headers = headers,
+            .cookies = cookies,
         };
     }
 
     pub fn deinit(self: *Request) void {
+        self.cookies.deinit();
         self.headers.deinit();
     }
 
@@ -32,6 +37,7 @@ pub const Request = struct {
         self.method = null;
         self.uri = null;
         self.body = null;
+        self.cookies.clear();
         self.headers.clear();
     }
 
@@ -87,6 +93,8 @@ pub const Request = struct {
                 try self.headers.put(key, value);
             }
         }
+
+        if (self.headers.get("Cookie")) |cookies| try self.cookies.parse_from_header(cookies);
     }
 
     pub const RequestSetOptions = struct {
