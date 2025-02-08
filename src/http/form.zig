@@ -34,8 +34,6 @@ pub fn Form(comptime T: type) type {
             var m = AnyCaseStringMap.init(ctx.allocator);
             defer m.deinit();
 
-            std.log.debug("body: {?s}", .{ctx.request.body});
-
             var map: *const AnyCaseStringMap = if (ctx.request.body) |body| blk: {
                 var pairs = std.mem.splitScalar(u8, body, '&');
                 while (pairs.next()) |pair| {
@@ -65,11 +63,14 @@ pub fn Form(comptime T: type) type {
                         []const u8 => @field(ret, field.name) = value,
                         bool => @field(ret, field.name) = std.mem.eql(u8, value, "true"),
                         else => switch (@typeInfo(field.type)) {
-                            .Int => |int_info| {
-                                @field(ret, field.name) = switch (int_info.signedness) {
+                            .Int => |info| {
+                                @field(ret, field.name) = switch (info.signedness) {
                                     .unsigned => try std.fmt.parseUnsigned(field.type, value, 10),
                                     .signed => try std.fmt.parseInt(field.type, value, 10),
                                 };
+                            },
+                            .Float => |_| {
+                                @field(ret, field.name) = try std.fmt.parseFloat(field.type, value);
                             },
                             else => unreachable,
                         },
