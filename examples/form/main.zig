@@ -14,6 +14,7 @@ const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
 const Form = http.Form;
+const Query = http.Query;
 const Respond = http.Respond;
 
 fn base_handler(_: *const Context, _: void) !Respond {
@@ -25,6 +26,8 @@ fn base_handler(_: *const Context, _: void) !Respond {
         \\    <input type="text" id="lname" name="lname"><br><br>
         \\    <label for="age">Age:</label>
         \\    <input type="text" id="age" name="age"><br><br>
+        \\    <label for="height">Height:</label>
+        \\    <input type="text" id="height" name="height"><br><br>
         \\    <button formaction="/generate" formmethod="get">GET Submit</button>
         \\    <button formaction="/generate" formmethod="post">POST Submit</button>
         \\</form> 
@@ -37,24 +40,33 @@ fn base_handler(_: *const Context, _: void) !Respond {
     } };
 }
 
-const GenerateInfo = struct {
+const UserInfo = struct {
     fname: []const u8,
     mname: []const u8 = "Middle",
     lname: []const u8,
-    age: u8 = 0,
+    age: u8,
+    height: f32,
+    weight: ?[]const u8,
 };
 
 fn generate_handler(ctx: *const Context, _: void) !Respond {
-    var iter = ctx.queries.iterator();
-    while (iter.next()) |entry| {
-        log.debug("query -> {s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
+    const info = switch (ctx.request.method.?) {
+        .GET => try Query(UserInfo).parse(ctx),
+        .POST => try Form(UserInfo).parse(ctx),
+        else => return error.UnexpectedMethod,
+    };
 
-    const info = try Form(GenerateInfo).parse(ctx);
     const body = try std.fmt.allocPrint(
         ctx.allocator,
-        "First: {s} | Middle: {s} | Last: {s} | Age: {d}",
-        .{ info.fname, info.mname, info.lname, info.age },
+        "First: {s} | Middle: {s} | Last: {s} | Age: {d} | Height: {d} | Weight: {s}",
+        .{
+            info.fname,
+            info.mname,
+            info.lname,
+            info.age,
+            info.height,
+            info.weight orelse "none",
+        },
     );
     return Respond{ .standard = .{
         .status = .OK,
