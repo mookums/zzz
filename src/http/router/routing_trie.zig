@@ -9,7 +9,7 @@ const Respond = @import("../response.zig").Respond;
 const Context = @import("../lib.zig").Context;
 
 const MiddlewareWithData = @import("middleware.zig").MiddlewareWithData;
-const CaseStringMap = @import("../../core/case_string_map.zig").CaseStringMap;
+const AnyCaseStringMap = @import("../../core/any_case_string_map.zig").AnyCaseStringMap;
 
 pub const Bundle = struct {
     route: Route,
@@ -107,8 +107,6 @@ pub const Query = struct {
     value: []const u8,
 };
 
-pub const QueryMap = CaseStringMap([]const u8);
-
 pub const Capture = union(TokenMatch) {
     unsigned: TokenMatch.unsigned.as_type(),
     signed: TokenMatch.signed.as_type(),
@@ -121,7 +119,7 @@ pub const Capture = union(TokenMatch) {
 pub const FoundBundle = struct {
     bundle: Bundle,
     captures: []Capture,
-    queries: *QueryMap,
+    queries: *AnyCaseStringMap,
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
@@ -235,7 +233,7 @@ pub const RoutingTrie = struct {
         self: Self,
         path: []const u8,
         captures: []Capture,
-        queries: *QueryMap,
+        queries: *AnyCaseStringMap,
     ) !?FoundBundle {
         var capture_idx: usize = 0;
         const query_pos = std.mem.indexOfScalar(u8, path, '?');
@@ -297,8 +295,6 @@ pub const RoutingTrie = struct {
                 var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
 
                 while (query_iter.next()) |chunk| {
-                    if (queries.pool.clean() == 0) return null;
-
                     const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse break;
                     if (chunk.len < field_idx + 1) break;
 
@@ -404,7 +400,7 @@ test "Routing with Paths" {
     });
     defer s.deinit(testing.allocator);
 
-    var q = try QueryMap.init(testing.allocator, 8);
+    var q = AnyCaseStringMap.init(testing.allocator);
     defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
@@ -435,7 +431,7 @@ test "Routing with Remaining" {
     });
     defer s.deinit(testing.allocator);
 
-    var q = try QueryMap.init(testing.allocator, 8);
+    var q = AnyCaseStringMap.init(testing.allocator);
     defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
@@ -476,7 +472,7 @@ test "Routing with Queries" {
     });
     defer s.deinit(testing.allocator);
 
-    var q = try QueryMap.init(testing.allocator, 8);
+    var q = AnyCaseStringMap.init(testing.allocator);
     defer q.deinit();
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
@@ -484,42 +480,31 @@ test "Routing with Queries" {
     try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
 
     {
-        q.clear();
+        q.clearRetainingCapacity();
         const captured = (try s.get_bundle("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
-        try testing.expectEqual(2, q.dirty());
+        try testing.expectEqual(2, q.count());
         try testing.expectEqualStrings("muki", q.get("name").?);
         try testing.expectEqualStrings("waffle", q.get("food").?);
     }
 
     {
-        q.clear();
+        q.clearRetainingCapacity();
         // Purposefully bad format with no keys or values.
         const captured = (try s.get_bundle("/item/2112.22121/price_float?", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
-        try testing.expectEqual(0, q.dirty());
+        try testing.expectEqual(0, q.count());
     }
 
     {
-        q.clear();
+        q.clearRetainingCapacity();
         // Purposefully bad format with incomplete key/value pair.
         const captured = (try s.get_bundle("/item/100/price/283.21?help", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
-        try testing.expectEqual(0, q.dirty());
-    }
-
-    {
-        q.clear();
-        // Purposefully have too many queries.
-        const captured = try s.get_bundle(
-            "/item/100/price/283.21?a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8&i=9&j=10&k=11",
-            captures[0..],
-            &q,
-        );
-        try testing.expectEqual(null, captured);
+        try testing.expectEqual(0, q.count());
     }
 }

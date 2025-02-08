@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log.scoped(.@"examples/basic");
+const log = std.log.scoped(.@"examples/cookies");
 
 const zzz = @import("zzz");
 const http = zzz.HTTP;
@@ -13,13 +13,23 @@ const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
+const Middleware = http.Middleware;
 const Respond = http.Respond;
+const Cookie = http.Cookie;
 
-fn base_handler(_: *const Context, _: void) !Respond {
+fn base_handler(ctx: *const Context, _: void) !Respond {
+    var iter = ctx.request.cookies.iterator();
+    while (iter.next()) |kv| log.debug("cookie: k={s} v={s}", .{ kv.key_ptr.*, kv.value_ptr.* });
+
+    const cookie = Cookie.init("example_cookie", "abcdef123");
+
     return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "Hello, world!",
+        .headers = &.{
+            .{ "Set-Cookie", try cookie.to_string_alloc(ctx.allocator) },
+        },
     } };
 }
 
@@ -31,7 +41,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(allocator, .{ .threading = .auto });
+    var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
@@ -58,7 +68,7 @@ pub fn main() !void {
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
                     .keepalive_count_max = null,
-                    .connection_count_max = 1024,
+                    .connection_count_max = 10,
                 });
                 try server.serve(rt, p.router, p.socket);
             }

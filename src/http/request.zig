@@ -2,7 +2,8 @@ const std = @import("std");
 const log = std.log.scoped(.@"zzz/http/request");
 const assert = std.debug.assert;
 
-const Headers = @import("lib.zig").Headers;
+const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
+const CookieMap = @import("cookie.zig").CookieMap;
 const HTTPError = @import("lib.zig").HTTPError;
 const Method = @import("lib.zig").Method;
 
@@ -11,20 +12,24 @@ pub const Request = struct {
     method: ?Method = null,
     uri: ?[]const u8 = null,
     version: ?std.http.Version = .@"HTTP/1.1",
-    headers: Headers,
+    headers: AnyCaseStringMap,
+    cookies: CookieMap,
     body: ?[]const u8 = null,
 
     /// This is for constructing a Request.
-    pub fn init(allocator: std.mem.Allocator, header_count_initial: usize) !Request {
-        const headers = try Headers.init(allocator, header_count_initial);
+    pub fn init(allocator: std.mem.Allocator) Request {
+        const headers = AnyCaseStringMap.init(allocator);
+        const cookies = CookieMap.init(allocator);
 
         return Request{
             .allocator = allocator,
             .headers = headers,
+            .cookies = cookies,
         };
     }
 
     pub fn deinit(self: *Request) void {
+        self.cookies.deinit();
         self.headers.deinit();
     }
 
@@ -32,7 +37,8 @@ pub const Request = struct {
         self.method = null;
         self.uri = null;
         self.body = null;
-        self.headers.clear();
+        self.cookies.clear();
+        self.headers.clearRetainingCapacity();
     }
 
     const RequestParseOptions = struct {
@@ -82,11 +88,11 @@ pub const Request = struct {
                 const key = header_iter.next() orelse return HTTPError.MalformedRequest;
                 const value = std.mem.trimLeft(u8, header_iter.rest(), &.{' '});
                 if (value.len == 0) return HTTPError.MalformedRequest;
-
-                if (self.headers.num_clean() == 0) return HTTPError.TooManyHeaders;
                 try self.headers.put(key, value);
             }
         }
+
+        if (self.headers.get("Cookie")) |cookies| try self.cookies.parse_from_header(cookies);
     }
 
     pub const RequestSetOptions = struct {
@@ -128,7 +134,7 @@ test "Parse Request" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     try request.parse_headers(request_text[0..], .{
@@ -154,7 +160,7 @@ test "Expect ContentTooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
@@ -173,7 +179,7 @@ test "Expect URITooLong Error" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 4096});
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
@@ -192,7 +198,7 @@ test "Expect Malformed when URI missing /" {
     ;
 
     const request_text = std.fmt.comptimePrint(request_text_format, .{[_]u8{'a'} ** 256});
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
@@ -210,7 +216,7 @@ test "Expect Incorrect HTTP Version" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
@@ -220,7 +226,7 @@ test "Expect Incorrect HTTP Version" {
     try testing.expectError(HTTPError.HTTPVersionNotSupported, err);
 }
 
-test "Malformed Headers" {
+test "Malformed AnyCaseStringMap" {
     const request_text =
         \\GET / HTTP/1.1
         \\Host: localhost:9862
@@ -228,7 +234,7 @@ test "Malformed Headers" {
         \\Accept: text/html
     ;
 
-    var request = try Request.init(testing.allocator, 32);
+    var request = Request.init(testing.allocator);
     defer request.deinit();
 
     const err = request.parse_headers(request_text[0..], .{
