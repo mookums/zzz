@@ -66,10 +66,6 @@ pub const Security = union(enum) {
 /// for interacting with the underlying network.
 pub const ServerConfig = struct {
     security: Security = .plain,
-    /// Kernel Backlog Value
-    ///
-    /// Default: 4096
-    backlog_count: u31 = 4096,
     /// Stack Size
     ///
     /// If you have a large number of middlewares or
