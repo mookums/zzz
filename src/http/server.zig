@@ -14,6 +14,7 @@ const TLS = @import("../tls/lib.zig").TLS;
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
+const Respond = @import("response.zig").Respond;
 const Capture = @import("router/routing_trie.zig").Capture;
 const SSE = @import("sse.zig").SSE;
 
@@ -399,7 +400,28 @@ pub const Server = struct {
                     .handler = h_with_data,
                 };
 
-                switch (try next.run()) {
+                const next_respond: Respond = next.run() catch |e| blk: {
+                    log.warn("rt{d} - \"{s} {s}\" {} ({})", .{
+                        rt.id,
+                        @tagName(provision.request.method.?),
+                        provision.request.uri.?,
+                        e,
+                        socket.addr,
+                    });
+
+                    // If in Debug Mode, we will return the error name. In other modes,
+                    // we won't to avoid leaking implemenation details.
+                    const body = if (comptime builtin.mode == .Debug) @errorName(e) else "";
+                    break :blk Respond{
+                        .standard = .{
+                            .status = .@"Internal Server Error",
+                            .mime = Mime.TEXT,
+                            .body = body,
+                        },
+                    };
+                };
+
+                switch (next_respond) {
                     .standard => |respond| {
                         // applies the respond onto the response
                         try provision.response.apply(respond);
