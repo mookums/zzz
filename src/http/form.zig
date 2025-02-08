@@ -104,8 +104,6 @@ pub fn Form(comptime T: type) type {
 pub fn Query(comptime T: type) type {
     return struct {
         pub fn parse(ctx: *const Context) !T {
-            var m = AnyCaseStringMap.init(ctx.allocator);
-            defer m.deinit();
             return parse_struct(T, ctx.queries);
         }
     };

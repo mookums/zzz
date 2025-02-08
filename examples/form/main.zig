@@ -92,7 +92,6 @@ pub fn main() !void {
     }, .{});
     defer router.deinit(allocator);
 
-    // create socket for tardy
     var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
     defer socket.close_blocking();
     try socket.bind();
@@ -110,8 +109,6 @@ pub fn main() !void {
                 var server = Server.init(rt.allocator, .{
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
-                    .keepalive_count_max = null,
-                    .connection_count_max = 1024,
                 });
                 try server.serve(rt, p.router, p.socket);
             }
