@@ -68,12 +68,7 @@ pub const FsDir = struct {
         }
         const etag_hash = hash.final();
 
-        const calc_etag = try std.fmt.allocPrint(
-            ctx.allocator,
-            "\"{d}\"",
-            .{etag_hash},
-        );
-
+        const calc_etag = try std.fmt.allocPrint(ctx.allocator, "\"{d}\"", .{etag_hash});
         try header_list.append(ctx.allocator, .{ "ETag", calc_etag });
 
         // If we have an ETag on the request...
@@ -98,17 +93,17 @@ pub const FsDir = struct {
             .mime = mime,
         });
 
-        // ideally, this would return the fields but a Stream instead of a body.
-        // this stream would then just be the `file.stream()` but could also be
-        // like a arraylist in the future or whatever
-        //
-        // the issue with this is we can't encrypt it with TLS.
-        // ideally, we would return this "generator" of data back where it would send it
-        // encrypting at each step?
+        try ctx.response.headers_into_writer(ctx.header_buffer.writer(), stat.size);
+        const headers = ctx.header_buffer.items;
+        const length = try ctx.socket.send_all(ctx.runtime, headers);
+        if (headers.len != length) return error.SendingHeadersFailed;
 
-        const headers = try ctx.response.headers_into_buffer(ctx.buffer, stat.size);
-        _ = try ctx.socket.send_all(ctx.runtime, headers);
-        try Stream.copy(ctx.runtime, file.stream(), ctx.socket.stream(), ctx.buffer);
+        try Stream.copy(
+            ctx.runtime,
+            file.stream(),
+            ctx.socket.stream(),
+            ctx.header_buffer.allocatedSlice(),
+        );
         return .responded;
     }
 

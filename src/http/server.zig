@@ -122,18 +122,10 @@ pub const ServerConfig = struct {
     ///
     /// Default: 1 KB
     socket_buffer_bytes: u32 = 1024,
-    /// Maximum number of Headers in a Request/Response
-    ///
-    /// Default: 32
-    header_count_max: u16 = 32,
     /// Maximum number of Captures in a Route
     ///
     /// Default: 8
     capture_count_max: u16 = 8,
-    /// Maximum number of Queries in a URL
-    ///
-    /// Default: 8
-    query_count_max: u16 = 8,
     /// Maximum size (in bytes) of the Request.
     ///
     /// Default: 2MB
@@ -146,8 +138,9 @@ pub const ServerConfig = struct {
 
 pub const Provision = struct {
     initalized: bool = false,
-    recv_buffer: ZeroCopy(u8),
-    buffer: []u8,
+    recv_slice: []u8,
+    zc_recv_buffer: ZeroCopy(u8),
+    header_buffer: std.ArrayList(u8),
     arena: std.heap.ArenaAllocator,
     captures: []Capture,
     queries: AnyCaseStringMap,
@@ -200,10 +193,11 @@ pub const Server = struct {
     fn prepare_new_request(state: *State, provision: *Provision, config: ServerConfig) !void {
         provision.request.clear();
         provision.response.clear();
-        provision.recv_buffer.clear_retaining_capacity();
+        provision.zc_recv_buffer.clear_retaining_capacity();
+        provision.header_buffer.clearRetainingCapacity();
         _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
         state.* = .{ .request = .header };
-        provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+        provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
     }
 
     pub fn main_frame(
@@ -256,9 +250,10 @@ pub const Server = struct {
         // otherwise, it should be initalized.
         if (!provision.initalized) {
             log.debug("initalizing new provision", .{});
-            provision.recv_buffer = ZeroCopy(u8).init(rt.allocator, config.socket_buffer_bytes) catch {
+            provision.zc_recv_buffer = ZeroCopy(u8).init(rt.allocator, config.socket_buffer_bytes) catch {
                 @panic("attempting to allocate more memory than available. (ZeroCopyBuffer)");
             };
+            provision.header_buffer = std.ArrayList(u8).init(rt.allocator);
             provision.arena = std.heap.ArenaAllocator.init(rt.allocator);
             provision.captures = rt.allocator.alloc(Capture, config.capture_count_max) catch {
                 @panic("attempting to allocate more memory than available. (Captures)");
@@ -269,24 +264,27 @@ pub const Server = struct {
             provision.initalized = true;
         }
 
-        defer if (provision.recv_buffer.len > config.list_recv_bytes_retain)
-            provision.recv_buffer.shrink_clear_and_free(config.list_recv_bytes_retain) catch unreachable
+        defer if (provision.zc_recv_buffer.len > config.list_recv_bytes_retain)
+            provision.zc_recv_buffer.shrink_clear_and_free(config.list_recv_bytes_retain) catch unreachable
         else
-            provision.recv_buffer.clear_retaining_capacity();
+            provision.zc_recv_buffer.clear_retaining_capacity();
+        defer provision.header_buffer.clearRetainingCapacity();
         defer _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
         defer provision.queries.clearRetainingCapacity();
         defer provision.request.clear();
         defer provision.response.clear();
 
         var state: State = .{ .request = .header };
-        provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+        const buffer = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
+        _ = buffer;
+        provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
 
         var keepalive_count: u16 = 0;
 
         http_loop: while (true) switch (state) {
             .request => |*kind| switch (kind.*) {
                 .header => {
-                    const recv_count = secure.recv(rt, provision.buffer) catch |e| switch (e) {
+                    const recv_count = secure.recv(rt, provision.recv_slice) catch |e| switch (e) {
                         error.Closed => break,
                         else => {
                             log.debug("recv failed on socket | {}", .{e});
@@ -294,21 +292,21 @@ pub const Server = struct {
                         },
                     };
 
-                    provision.recv_buffer.mark_written(recv_count);
-                    provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
-                    if (provision.recv_buffer.len > config.request_bytes_max) break;
-                    const search_area_start = (provision.recv_buffer.len - recv_count) -| 4;
+                    provision.zc_recv_buffer.mark_written(recv_count);
+                    provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
+                    if (provision.zc_recv_buffer.len > config.request_bytes_max) break;
+                    const search_area_start = (provision.zc_recv_buffer.len - recv_count) -| 4;
 
                     if (std.mem.indexOf(
                         u8,
                         // Minimize the search area.
-                        provision.recv_buffer.subslice(.{ .start = search_area_start }),
+                        provision.zc_recv_buffer.subslice(.{ .start = search_area_start }),
                         "\r\n\r\n",
                     )) |header_end| {
                         const real_header_end = header_end + 4;
                         try provision.request.parse_headers(
                             // Add 4 to account for the actual header end sequence.
-                            provision.recv_buffer.subslice(.{ .end = real_header_end }),
+                            provision.zc_recv_buffer.subslice(.{ .end = real_header_end }),
                             .{
                                 .request_bytes_max = config.request_bytes_max,
                                 .request_uri_bytes_max = config.request_uri_bytes_max,
@@ -331,7 +329,7 @@ pub const Server = struct {
                             state = .{
                                 .request = .{
                                     .body = .{
-                                        .current_length = provision.recv_buffer.len - real_header_end,
+                                        .current_length = provision.zc_recv_buffer.len - real_header_end,
                                         .content_length = content_length,
                                     },
                                 },
@@ -345,7 +343,7 @@ pub const Server = struct {
                         continue;
                     }
 
-                    const recv_count = secure.recv(rt, provision.buffer) catch |e| switch (e) {
+                    const recv_count = secure.recv(rt, provision.recv_slice) catch |e| switch (e) {
                         error.Closed => break,
                         else => {
                             log.debug("recv failed on socket | {}", .{e});
@@ -353,9 +351,9 @@ pub const Server = struct {
                         },
                     };
 
-                    provision.recv_buffer.mark_written(recv_count);
-                    provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
-                    if (provision.recv_buffer.len > config.request_bytes_max) break;
+                    provision.zc_recv_buffer.mark_written(recv_count);
+                    provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
+                    if (provision.zc_recv_buffer.len > config.request_bytes_max) break;
 
                     info.current_length += recv_count;
                     assert(info.current_length <= info.content_length);
@@ -382,12 +380,12 @@ pub const Server = struct {
                 };
 
                 // we will just use the recv buffer zero copy as an impromptu buffer :)
-                provision.buffer = try provision.recv_buffer.get_write_area(config.socket_buffer_bytes);
+                provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
 
                 const context: Context = .{
                     .runtime = rt,
-                    .buffer = provision.buffer,
                     .allocator = provision.arena.allocator(),
+                    .header_buffer = &provision.header_buffer,
                     .request = &provision.request,
                     .response = &provision.response,
                     .socket = secure,
@@ -427,13 +425,15 @@ pub const Server = struct {
             .respond => {
                 const body = provision.response.body orelse "";
                 const content_length = body.len;
-                const headers = try provision.response.headers_into_buffer(provision.buffer, content_length);
+
+                try provision.response.headers_into_writer(provision.header_buffer.writer(), content_length);
+                const headers = provision.header_buffer.items;
 
                 var sent: usize = 0;
-                const pseudo = Pseudoslice.init(headers, body, provision.buffer);
+                const pseudo = Pseudoslice.init(headers, body, provision.recv_slice);
 
                 while (sent < pseudo.len) {
-                    const send_slice = pseudo.get(sent, sent + provision.buffer.len);
+                    const send_slice = pseudo.get(sent, sent + provision.recv_slice.len);
 
                     const sent_length = secure.send_all(rt, send_slice) catch |e| {
                         log.debug("send failed on socket | {}", .{e});
@@ -492,9 +492,10 @@ pub const Server = struct {
         // initialize first batch of provisions :)
         for (provision_pool.items) |*provision| {
             provision.initalized = true;
-            provision.recv_buffer = ZeroCopy(u8).init(rt.allocator, self.config.socket_buffer_bytes) catch {
+            provision.zc_recv_buffer = ZeroCopy(u8).init(rt.allocator, self.config.socket_buffer_bytes) catch {
                 @panic("attempting to allocate more memory than available. (ZeroCopy)");
             };
+            provision.header_buffer = std.ArrayList(u8).init(rt.allocator);
             provision.arena = std.heap.ArenaAllocator.init(rt.allocator);
             provision.captures = rt.allocator.alloc(Capture, self.config.capture_count_max) catch {
                 @panic("attempting to allocate more memory than available. (Captures)");

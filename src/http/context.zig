@@ -11,13 +11,17 @@ const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStrin
 pub const Context = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
-    buffer: []u8,
+    /// Not safe to access unless you are manually sending the headers
+    /// and returning the .responded variant of Respond.
+    header_buffer: *std.ArrayList(u8),
     runtime: *Runtime,
     /// The Request that triggered this handler.
     request: *const Request,
     response: *Response,
     /// Socket for this Connection.
     socket: SecureSocket,
+    /// Slice of the URL Slug Captures
     captures: []const Capture,
+    /// Map of the KV Query pairs in the URL
     queries: *const AnyCaseStringMap,
 };

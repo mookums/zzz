@@ -13,11 +13,7 @@ const Server = http.Server;
 const Router = http.Router;
 const Context = http.Context;
 const Route = http.Route;
-const Middleware = http.Middleware;
 const Respond = http.Respond;
-
-const RateLimitConfig = http.Middlewares.RateLimitConfig;
-const RateLimiting = http.Middlewares.RateLimiting;
 
 fn base_handler(_: *const Context, _: void) !Respond {
     return Respond{ .standard = .{
@@ -35,14 +31,10 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(allocator, .{ .threading = .single });
+    var t = try Tardy.init(allocator, .{ .threading = .auto });
     defer t.deinit();
 
-    var config = RateLimitConfig.init(allocator, 5, 30, null);
-    defer config.deinit();
-
     var router = try Router.init(allocator, &.{
-        RateLimiting(&config),
         Route.init("/").get({}, base_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
@@ -66,7 +58,7 @@ pub fn main() !void {
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
                     .keepalive_count_max = null,
-                    .connection_count_max = 10,
+                    .connection_count_max = 1024,
                 });
                 try server.serve(rt, p.router, p.socket);
             }

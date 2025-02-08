@@ -36,7 +36,9 @@ pub const SSE = struct {
         var list = try std.ArrayListUnmanaged(u8).initCapacity(ctx.allocator, 0);
         errdefer list.deinit(ctx.allocator);
 
-        const headers = try ctx.response.headers_into_buffer(ctx.buffer, null);
+        try ctx.response.headers_into_writer(ctx.header_buffer.writer(), null);
+        const headers = ctx.header_buffer.items;
+
         const sent = try ctx.socket.send_all(ctx.runtime, headers);
         if (sent != headers.len) return error.Closed;
 

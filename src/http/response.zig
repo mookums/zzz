@@ -55,70 +55,30 @@ pub const Response = struct {
         self.headers.clearRetainingCapacity();
     }
 
-    pub fn headers_into_buffer(self: *Response, buffer: []u8, content_length: ?usize) ![]u8 {
-        var index: usize = 0;
-
+    pub fn headers_into_writer(self: *Response, writer: anytype, content_length: ?usize) !void {
         // Status Line
-        std.mem.copyForwards(u8, buffer[index..], "HTTP/1.1 ");
-        index += 9;
-
-        if (self.status) |status| {
-            const status_code = @intFromEnum(status);
-            const code = try std.fmt.bufPrint(buffer[index..], "{d} ", .{status_code});
-            index += code.len;
-            const status_name = @tagName(status);
-            std.mem.copyForwards(u8, buffer[index..], status_name);
-            index += status_name.len;
-        } else {
-            return error.MissingStatus;
-        }
-
-        std.mem.copyForwards(u8, buffer[index..], "\r\nServer: zzz\r\nConnection: keep-alive\r\n");
-        index += 39;
+        const status = self.status.?;
+        try writer.print("HTTP/1.1 {d} {s}\r\n", .{ @intFromEnum(status), @tagName(status) });
 
         // Headers
+        try writer.writeAll("Server: zzz\r\nConnection: keep-alive\r\n");
         var iter = self.headers.iterator();
-        while (iter.next()) |entry| {
-            std.mem.copyForwards(u8, buffer[index..], entry.key_ptr.*);
-            index += entry.key_ptr.len;
-            std.mem.copyForwards(u8, buffer[index..], ": ");
-            index += 2;
-            std.mem.copyForwards(u8, buffer[index..], entry.value_ptr.*);
-            index += entry.value_ptr.len;
-            std.mem.copyForwards(u8, buffer[index..], "\r\n");
-            index += 2;
-        }
+        while (iter.next()) |entry| try writer.print(
+            "{s}: {s}\r\n",
+            .{ entry.key_ptr.*, entry.value_ptr.* },
+        );
 
         // Content-Type
-        std.mem.copyForwards(u8, buffer[index..], "Content-Type: ");
-        index += 14;
-        if (self.mime) |m| {
-            const content_type = switch (m.content_type) {
-                .single => |inner| inner,
-                .multiple => |content_types| content_types[0],
-            };
-            std.mem.copyForwards(u8, buffer[index..], content_type);
-            index += content_type.len;
-        } else {
-            std.mem.copyForwards(u8, buffer[index..], Mime.BIN.content_type.single);
-            index += Mime.BIN.content_type.single.len;
-        }
-        std.mem.copyForwards(u8, buffer[index..], "\r\n");
-        index += 2;
+        const mime = self.mime.?;
+        const content_type = switch (mime.content_type) {
+            .single => |inner| inner,
+            .multiple => |content_types| content_types[0],
+        };
+        try writer.print("Content-Type: {s}\r\n", .{content_type});
 
         // Content-Length
-        if (content_length) |length| {
-            std.mem.copyForwards(u8, buffer[index..], "Content-Length: ");
-            index += 16;
-            const length_str = try std.fmt.bufPrint(buffer[index..], "{d}", .{length});
-            index += length_str.len;
-            std.mem.copyForwards(u8, buffer[index..], "\r\n");
-            index += 2;
-        }
+        if (content_length) |length| try writer.print("Content-Length: {d}\r\n", .{length});
 
-        std.mem.copyForwards(u8, buffer[index..], "\r\n");
-        index += 2;
-
-        return buffer[0..index];
+        try writer.writeAll("\r\n");
     }
 };
