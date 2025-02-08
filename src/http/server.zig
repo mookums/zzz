@@ -367,6 +367,7 @@ pub const Server = struct {
                     &provision.queries,
                 );
                 defer rt.allocator.free(found.duped);
+                defer for (found.duped) |dupe| rt.allocator.free(dupe);
 
                 const h_with_data: HandlerWithData = found.bundle.route.get_handler(
                     provision.request.method.?,
