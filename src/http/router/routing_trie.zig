@@ -11,6 +11,8 @@ const Context = @import("../lib.zig").Context;
 const MiddlewareWithData = @import("middleware.zig").MiddlewareWithData;
 const AnyCaseStringMap = @import("../../core/any_case_string_map.zig").AnyCaseStringMap;
 
+const decode_alloc = @import("../form.zig").decode_alloc;
+
 pub const Bundle = struct {
     route: Route,
     middlewares: []const MiddlewareWithData,
@@ -120,6 +122,7 @@ pub const FoundBundle = struct {
     bundle: Bundle,
     captures: []Capture,
     queries: *AnyCaseStringMap,
+    duped: []const []const u8,
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
@@ -231,6 +234,7 @@ pub const RoutingTrie = struct {
 
     pub fn get_bundle(
         self: Self,
+        allocator: std.mem.Allocator,
         path: []const u8,
         captures: []Capture,
         queries: *AnyCaseStringMap,
@@ -290,6 +294,9 @@ pub const RoutingTrie = struct {
             return null;
         }
 
+        var duped = try std.ArrayListUnmanaged([]const u8).initCapacity(allocator, 0);
+        defer duped.deinit(allocator);
+
         if (query_pos) |pos| {
             if (path.len > pos + 1) {
                 var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
@@ -303,7 +310,13 @@ pub const RoutingTrie = struct {
 
                     assert(std.mem.indexOfScalar(u8, key, '=') == null);
                     assert(std.mem.indexOfScalar(u8, value, '=') == null);
-                    try queries.put(key, value);
+
+                    const decoded_key = try decode_alloc(allocator, key);
+                    try duped.append(allocator, decoded_key);
+
+                    const decoded_value = try decode_alloc(allocator, value);
+                    try duped.append(allocator, decoded_value);
+                    try queries.put(decoded_key, decoded_value);
                 }
             }
         }
@@ -312,6 +325,7 @@ pub const RoutingTrie = struct {
             .bundle = current.bundle orelse return null,
             .captures = captures[0..capture_idx],
             .queries = queries,
+            .duped = try duped.toOwnedSlice(allocator),
         };
     }
 };

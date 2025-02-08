@@ -65,18 +65,19 @@ pub const Router = struct {
 
     pub fn get_bundle_from_host(
         self: *const Router,
+        allocator: std.mem.Allocator,
         path: []const u8,
         captures: []Capture,
         queries: *AnyCaseStringMap,
     ) !FoundBundle {
         queries.clearRetainingCapacity();
 
-        return try self.routes.get_bundle(path, captures, queries) orelse {
+        return try self.routes.get_bundle(allocator, path, captures, queries) orelse {
             const not_found_bundle: Bundle = .{
                 .route = Route.init("").all({}, self.configuration.not_found),
                 .middlewares = &.{},
             };
-            return .{ .bundle = not_found_bundle, .captures = captures[0..0], .queries = queries };
+            return .{ .bundle = not_found_bundle, .captures = captures[0..0], .queries = queries, .duped = &.{} };
         };
     }
 };

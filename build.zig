@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
 
     add_example(b, "basic", false, target, optimize, zzz);
     add_example(b, "cookies", false, target, optimize, zzz);
+    add_example(b, "form", false, target, optimize, zzz);
     add_example(b, "fs", false, target, optimize, zzz);
     add_example(b, "middleware", false, target, optimize, zzz);
     add_example(b, "sse", false, target, optimize, zzz);

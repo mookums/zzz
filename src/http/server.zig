@@ -336,6 +336,9 @@ pub const Server = struct {
                 },
                 .body => |*info| {
                     if (info.current_length == info.content_length) {
+                        provision.request.body = provision.zc_recv_buffer.subslice(
+                            .{ .start = provision.zc_recv_buffer.len - info.content_length },
+                        );
                         state = .handler;
                         continue;
                     }
@@ -358,10 +361,12 @@ pub const Server = struct {
             },
             .handler => {
                 const found = try router.get_bundle_from_host(
+                    rt.allocator,
                     provision.request.uri.?,
                     provision.captures,
                     &provision.queries,
                 );
+                defer rt.allocator.free(found.duped);
 
                 const h_with_data: HandlerWithData = found.bundle.route.get_handler(
                     provision.request.method.?,
@@ -375,9 +380,6 @@ pub const Server = struct {
                     state = .respond;
                     continue;
                 };
-
-                // we will just use the recv buffer zero copy as an impromptu buffer :)
-                provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
 
                 const context: Context = .{
                     .runtime = rt,
