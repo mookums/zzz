@@ -68,6 +68,7 @@ fn generate_handler(ctx: *const Context, _: void) !Respond {
             info.weight orelse "none",
         },
     );
+
     return Respond{ .standard = .{
         .status = .OK,
         .mime = http.Mime.TEXT,

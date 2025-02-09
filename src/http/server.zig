@@ -513,7 +513,10 @@ pub const Server = struct {
         // initialize first batch of provisions :)
         for (provision_pool.items) |*provision| {
             provision.initalized = true;
-            provision.zc_recv_buffer = ZeroCopy(u8).init(rt.allocator, self.config.socket_buffer_bytes) catch {
+            provision.zc_recv_buffer = ZeroCopy(u8).init(
+                rt.allocator,
+                self.config.socket_buffer_bytes,
+            ) catch {
                 @panic("attempting to allocate more memory than available. (ZeroCopy)");
             };
             provision.header_buffer = std.ArrayList(u8).init(rt.allocator);
@@ -527,7 +530,16 @@ pub const Server = struct {
         }
 
         try rt.spawn(
-            .{ rt, self.config, router, socket, self.tls_ctx, provision_pool, connection_count, accept_queued },
+            .{
+                rt,
+                self.config,
+                router,
+                socket,
+                self.tls_ctx,
+                provision_pool,
+                connection_count,
+                accept_queued,
+            },
             main_frame,
             self.config.stack_size,
         );
