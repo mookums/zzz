@@ -369,7 +369,7 @@ pub const Server = struct {
                 defer rt.allocator.free(found.duped);
                 defer for (found.duped) |dupe| rt.allocator.free(dupe);
 
-                const h_with_data: HandlerWithData = found.bundle.route.get_handler(
+                const h_with_data: HandlerWithData = found.route.get_handler(
                     provision.request.method.?,
                 ) orelse {
                     try provision.response.apply(.{
@@ -395,7 +395,7 @@ pub const Server = struct {
 
                 var next: Next = .{
                     .context = &context,
-                    .middlewares = found.bundle.middlewares,
+                    .middlewares = h_with_data.middlewares,
                     .handler = h_with_data,
                 };
 

@@ -8,15 +8,11 @@ const Route = @import("route.zig").Route;
 const Respond = @import("../response.zig").Respond;
 const Context = @import("../lib.zig").Context;
 
+const HandlerWithData = @import("route.zig").HandlerWithData;
 const MiddlewareWithData = @import("middleware.zig").MiddlewareWithData;
 const AnyCaseStringMap = @import("../../core/any_case_string_map.zig").AnyCaseStringMap;
 
 const decode_alloc = @import("../form.zig").decode_alloc;
-
-pub const Bundle = struct {
-    route: Route,
-    middlewares: []const MiddlewareWithData,
-};
 
 fn TokenHashMap(comptime V: type) type {
     return std.HashMap(Token, V, struct {
@@ -118,8 +114,8 @@ pub const Capture = union(TokenMatch) {
 };
 
 /// Structure of a matched route.
-pub const FoundBundle = struct {
-    bundle: Bundle,
+pub const Bundle = struct {
+    route: Route,
     captures: []Capture,
     queries: *AnyCaseStringMap,
     duped: []const []const u8,
@@ -134,14 +130,14 @@ pub const RoutingTrie = struct {
         pub const ChildrenMap = TokenHashMap(Node);
 
         token: Token,
-        bundle: ?Bundle = null,
+        route: ?Route = null,
         children: ChildrenMap,
 
         /// Initialize a new empty node.
-        pub fn init(allocator: std.mem.Allocator, token: Token, bundle: ?Bundle) Node {
+        pub fn init(allocator: std.mem.Allocator, token: Token, route: ?Route) Node {
             return .{
                 .token = token,
-                .bundle = bundle,
+                .route = route,
                 .children = ChildrenMap.init(allocator),
             };
         }
@@ -183,9 +179,15 @@ pub const RoutingTrie = struct {
                         }
                     }
 
-                    current.bundle = .{
-                        .route = route,
-                        .middlewares = self.middlewares.items,
+                    const r: *Route = if (current.route) |*inner| inner else blk: {
+                        current.route = route;
+                        break :blk &current.route.?;
+                    };
+
+                    for (route.handlers, 0..) |handler, i| if (handler) |h| {
+                        const slot_ptr: *HandlerWithData = @ptrCast(&r.handlers[i]);
+                        slot_ptr.* = h;
+                        slot_ptr.middlewares = self.middlewares.items;
                     };
                 },
                 .middleware => |mw| try self.middlewares.append(allocator, mw),
@@ -200,45 +202,13 @@ pub const RoutingTrie = struct {
         self.middlewares.deinit(allocator);
     }
 
-    fn print_node(root: *const Node, depth: usize) void {
-        var i: usize = 0;
-        while (i < depth) : (i += 1) {
-            std.debug.print(" │  ", .{});
-        }
-
-        std.debug.print(" ├ ", .{});
-
-        switch (root.token) {
-            .fragment => |inner| std.debug.print("Token: \"{s}\"", .{inner}),
-            .match => |match| std.debug.print("Token: match {s}", .{@tagName(match)}),
-        }
-
-        if (root.bundle) |bundle| {
-            std.debug.print(" [x] ({d})", .{bundle.middlewares.len});
-        } else {
-            std.debug.print(" [ ]", .{});
-        }
-        std.debug.print("\n", .{});
-
-        var iter = root.children.valueIterator();
-
-        while (iter.next()) |node| {
-            print_node(node, depth + 1);
-        }
-    }
-
-    pub fn print(self: *const Self) void {
-        std.debug.print("Root: \n", .{});
-        print_node(&self.root, 0);
-    }
-
     pub fn get_bundle(
         self: Self,
         allocator: std.mem.Allocator,
         path: []const u8,
         captures: []Capture,
         queries: *AnyCaseStringMap,
-    ) !?FoundBundle {
+    ) !?Bundle {
         var capture_idx: usize = 0;
         const query_pos = std.mem.indexOfScalar(u8, path, '?');
         var iter = std.mem.tokenizeScalar(u8, path[0..(query_pos orelse path.len)], '/');
@@ -321,8 +291,8 @@ pub const RoutingTrie = struct {
             }
         }
 
-        return .{
-            .bundle = current.bundle orelse return null,
+        return Bundle{
+            .route = current.route orelse return null,
             .captures = captures[0..capture_idx],
             .queries = queries,
             .duped = try duped.toOwnedSlice(allocator),

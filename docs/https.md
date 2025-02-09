@@ -64,7 +64,6 @@ pub fn main() !void {
         ).layer(),
     }, .{});
     defer router.deinit(allocator);
-    router.print_route_tree();
 
     // create socket for tardy
     var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });

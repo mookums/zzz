@@ -69,7 +69,6 @@ pub fn main() !void {
         Route.init("/fail").get(num, root_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
-    router.print_route_tree();
 
     const EntryParams = struct {
         router: *const Router,
