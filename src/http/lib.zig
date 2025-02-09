@@ -8,6 +8,9 @@ pub const Encoding = @import("encoding.zig").Encoding;
 pub const Date = @import("date.zig").Date;
 pub const Cookie = @import("cookie.zig").Cookie;
 
+pub const Form = @import("form.zig").Form;
+pub const Query = @import("form.zig").Query;
+
 pub const Context = @import("context.zig").Context;
 
 pub const Router = @import("router.zig").Router;

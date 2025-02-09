@@ -11,6 +11,8 @@ const Context = @import("../lib.zig").Context;
 const MiddlewareWithData = @import("middleware.zig").MiddlewareWithData;
 const AnyCaseStringMap = @import("../../core/any_case_string_map.zig").AnyCaseStringMap;
 
+const decode_alloc = @import("../form.zig").decode_alloc;
+
 pub const Bundle = struct {
     route: Route,
     middlewares: []const MiddlewareWithData,
@@ -120,6 +122,7 @@ pub const FoundBundle = struct {
     bundle: Bundle,
     captures: []Capture,
     queries: *AnyCaseStringMap,
+    duped: []const []const u8,
 };
 
 // This RoutingTrie is deleteless. It only can create new routes or update existing ones.
@@ -231,6 +234,7 @@ pub const RoutingTrie = struct {
 
     pub fn get_bundle(
         self: Self,
+        allocator: std.mem.Allocator,
         path: []const u8,
         captures: []Capture,
         queries: *AnyCaseStringMap,
@@ -290,6 +294,9 @@ pub const RoutingTrie = struct {
             return null;
         }
 
+        var duped = try std.ArrayListUnmanaged([]const u8).initCapacity(allocator, 0);
+        defer duped.deinit(allocator);
+
         if (query_pos) |pos| {
             if (path.len > pos + 1) {
                 var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
@@ -303,7 +310,13 @@ pub const RoutingTrie = struct {
 
                     assert(std.mem.indexOfScalar(u8, key, '=') == null);
                     assert(std.mem.indexOfScalar(u8, value, '=') == null);
-                    try queries.put(key, value);
+
+                    const decoded_key = try decode_alloc(allocator, key);
+                    try duped.append(allocator, decoded_key);
+
+                    const decoded_value = try decode_alloc(allocator, value);
+                    try duped.append(allocator, decoded_value);
+                    try queries.put(decoded_key, decoded_value);
                 }
             }
         }
@@ -312,6 +325,7 @@ pub const RoutingTrie = struct {
             .bundle = current.bundle orelse return null,
             .captures = captures[0..capture_idx],
             .queries = queries,
+            .duped = try duped.toOwnedSlice(allocator),
         };
     }
 };
@@ -405,17 +419,17 @@ test "Routing with Paths" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle(testing.allocator, "/item/name", captures[0..], &q));
 
     {
-        const captured = (try s.get_bundle("/item/name/HELLO", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(testing.allocator, "/item/name/HELLO", captures[0..], &q)).?;
 
         try testing.expectEqual(Route.init("/item/name/%s"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
-        const captured = (try s.get_bundle("/item/2112.22121/price_float", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(testing.allocator, "/item/2112.22121/price_float", captures[0..], &q)).?;
 
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
@@ -436,27 +450,42 @@ test "Routing with Remaining" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle(testing.allocator, "/item/name", captures[0..], &q));
 
     {
-        const captured = (try s.get_bundle("/item/name/HELLO", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(testing.allocator, "/item/name/HELLO", captures[0..], &q)).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
-        const captured = (try s.get_bundle("/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/name/THIS/IS/A/FILE/SYSTEM/PATH.html",
+            captures[0..],
+            &q,
+        )).?;
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
     {
-        const captured = (try s.get_bundle("/item/2112.22121/price_float", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/2112.22121/price_float",
+            captures[0..],
+            &q,
+        )).?;
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
     {
-        const captured = (try s.get_bundle("/item/100/price/283.21", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/100/price/283.21",
+            captures[0..],
+            &q,
+        )).?;
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
@@ -477,11 +506,23 @@ test "Routing with Queries" {
 
     var captures: [8]Capture = [_]Capture{undefined} ** 8;
 
-    try testing.expectEqual(null, try s.get_bundle("/item/name", captures[0..], &q));
+    try testing.expectEqual(null, try s.get_bundle(
+        testing.allocator,
+        "/item/name",
+        captures[0..],
+        &q,
+    ));
 
     {
         q.clearRetainingCapacity();
-        const captured = (try s.get_bundle("/item/name/HELLO?name=muki&food=waffle", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/name/HELLO?name=muki&food=waffle",
+            captures[0..],
+            &q,
+        )).?;
+        defer testing.allocator.free(captured.duped);
+        defer for (captured.duped) |dupe| testing.allocator.free(dupe);
         try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
         try testing.expectEqual(2, q.count());
@@ -492,7 +533,14 @@ test "Routing with Queries" {
     {
         q.clearRetainingCapacity();
         // Purposefully bad format with no keys or values.
-        const captured = (try s.get_bundle("/item/2112.22121/price_float?", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/2112.22121/price_float?",
+            captures[0..],
+            &q,
+        )).?;
+        defer testing.allocator.free(captured.duped);
+        defer for (captured.duped) |dupe| testing.allocator.free(dupe);
         try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
         try testing.expectEqual(0, q.count());
@@ -501,7 +549,14 @@ test "Routing with Queries" {
     {
         q.clearRetainingCapacity();
         // Purposefully bad format with incomplete key/value pair.
-        const captured = (try s.get_bundle("/item/100/price/283.21?help", captures[0..], &q)).?;
+        const captured = (try s.get_bundle(
+            testing.allocator,
+            "/item/100/price/283.21?help",
+            captures[0..],
+            &q,
+        )).?;
+        defer testing.allocator.free(captured.duped);
+        defer for (captured.duped) |dupe| testing.allocator.free(dupe);
         try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
