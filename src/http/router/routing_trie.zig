@@ -394,14 +394,14 @@ test "Routing with Paths" {
     {
         const captured = (try s.get_bundle(testing.allocator, "/item/name/HELLO", captures[0..], &q)).?;
 
-        try testing.expectEqual(Route.init("/item/name/%s"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/name/%s"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].string);
     }
 
     {
         const captured = (try s.get_bundle(testing.allocator, "/item/2112.22121/price_float", captures[0..], &q)).?;
 
-        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 }
@@ -424,7 +424,7 @@ test "Routing with Remaining" {
 
     {
         const captured = (try s.get_bundle(testing.allocator, "/item/name/HELLO", captures[0..], &q)).?;
-        try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
     }
     {
@@ -434,7 +434,7 @@ test "Routing with Remaining" {
             captures[0..],
             &q,
         )).?;
-        try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("THIS/IS/A/FILE/SYSTEM/PATH.html", captured.captures[0].remaining);
     }
 
@@ -445,7 +445,7 @@ test "Routing with Remaining" {
             captures[0..],
             &q,
         )).?;
-        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
     }
 
@@ -456,7 +456,7 @@ test "Routing with Remaining" {
             captures[0..],
             &q,
         )).?;
-        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
     }
@@ -493,7 +493,7 @@ test "Routing with Queries" {
         )).?;
         defer testing.allocator.free(captured.duped);
         defer for (captured.duped) |dupe| testing.allocator.free(dupe);
-        try testing.expectEqual(Route.init("/item/name/%r"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/name/%r"), captured.route);
         try testing.expectEqualStrings("HELLO", captured.captures[0].remaining);
         try testing.expectEqual(2, q.count());
         try testing.expectEqualStrings("muki", q.get("name").?);
@@ -511,7 +511,7 @@ test "Routing with Queries" {
         )).?;
         defer testing.allocator.free(captured.duped);
         defer for (captured.duped) |dupe| testing.allocator.free(dupe);
-        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/%f/price_float"), captured.route);
         try testing.expectEqual(2112.22121, captured.captures[0].float);
         try testing.expectEqual(0, q.count());
     }
@@ -527,7 +527,7 @@ test "Routing with Queries" {
         )).?;
         defer testing.allocator.free(captured.duped);
         defer for (captured.duped) |dupe| testing.allocator.free(dupe);
-        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.bundle.route);
+        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
         try testing.expectEqual(100, captured.captures[0].signed);
         try testing.expectEqual(283.21, captured.captures[1].float);
         try testing.expectEqual(0, q.count());
