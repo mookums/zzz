@@ -66,6 +66,7 @@ pub fn main() !void {
         Middleware.init({}, passing_middleware).layer(),
         Route.init("/").get(num, root_handler).layer(),
         Middleware.init({}, failing_middleware).layer(),
+        Route.init("/").post(num, root_handler).layer(),
         Route.init("/fail").get(num, root_handler).layer(),
     }, .{});
     defer router.deinit(allocator);

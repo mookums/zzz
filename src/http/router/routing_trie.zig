@@ -127,18 +127,16 @@ pub const RoutingTrie = struct {
 
     /// Structure of a node of the trie.
     pub const Node = struct {
-        pub const ChildrenMap = TokenHashMap(Node);
-
         token: Token,
         route: ?Route = null,
-        children: ChildrenMap,
+        children: TokenHashMap(Node),
 
         /// Initialize a new empty node.
         pub fn init(allocator: std.mem.Allocator, token: Token, route: ?Route) Node {
             return .{
                 .token = token,
                 .route = route,
-                .children = ChildrenMap.init(allocator),
+                .children = TokenHashMap(Node).init(allocator),
             };
         }
 
@@ -185,9 +183,11 @@ pub const RoutingTrie = struct {
                     };
 
                     for (route.handlers, 0..) |handler, i| if (handler) |h| {
-                        const slot_ptr: *HandlerWithData = @ptrCast(&r.handlers[i]);
-                        slot_ptr.* = h;
-                        slot_ptr.middlewares = self.middlewares.items;
+                        r.handlers[i] = HandlerWithData{
+                            .handler = h.handler,
+                            .middlewares = self.middlewares.items,
+                            .data = h.data,
+                        };
                     };
                 },
                 .middleware => |mw| try self.middlewares.append(allocator, mw),

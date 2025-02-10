@@ -37,20 +37,6 @@ pub const Route = struct {
     /// Route Handlers.
     handlers: [9]?HandlerWithData = .{null} ** 9,
 
-    fn method_to_index(method: Method) u32 {
-        return switch (method) {
-            .GET => 0,
-            .HEAD => 1,
-            .POST => 2,
-            .PUT => 3,
-            .DELETE => 4,
-            .CONNECT => 5,
-            .OPTIONS => 6,
-            .TRACE => 7,
-            .PATCH => 8,
-        };
-    }
-
     /// Initialize a route for the given path.
     pub fn init(path: []const u8) Route {
         return Route{ .path = path };
@@ -91,7 +77,7 @@ pub const Route = struct {
     /// Get a defined request handler for the provided method.
     /// Return NULL if no handler is defined for this method.
     pub fn get_handler(self: Route, method: Method) ?HandlerWithData {
-        return self.handlers[method_to_index(method)];
+        return self.handlers[@intFromEnum(method)];
     }
 
     pub fn layer(self: Route) Layer {
@@ -107,7 +93,7 @@ pub const Route = struct {
     ) Route {
         const wrapped = wrap(usize, data);
         var new_handlers = self.handlers;
-        new_handlers[comptime method_to_index(method)] = .{
+        new_handlers[comptime @intFromEnum(method)] = .{
             .handler = @ptrCast(handler_fn),
             .middlewares = &.{},
             .data = wrapped,
