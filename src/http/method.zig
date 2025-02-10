@@ -1,16 +1,16 @@
 const std = @import("std");
 const log = std.log.scoped(.@"zzz/http/method");
 
-pub const Method = enum {
-    GET,
-    HEAD,
-    POST,
-    PUT,
-    DELETE,
-    CONNECT,
-    OPTIONS,
-    TRACE,
-    PATCH,
+pub const Method = enum(u8) {
+    GET = 0,
+    HEAD = 1,
+    POST = 2,
+    PUT = 3,
+    DELETE = 4,
+    CONNECT = 5,
+    OPTIONS = 6,
+    TRACE = 7,
+    PATCH = 8,
 
     fn encode(method: []const u8) u64 {
         var buffer = [1]u8{0} ** @sizeOf(u64);

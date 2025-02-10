@@ -57,7 +57,6 @@ pub fn main() !void {
         FsDir.serve("/", static_dir),
     }, .{});
     defer router.deinit(allocator);
-    router.print_route_tree();
 
     const EntryParams = struct {
         router: *const Router,

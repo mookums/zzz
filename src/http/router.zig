@@ -7,7 +7,6 @@ const Route = @import("router/route.zig").Route;
 const TypedHandlerFn = @import("router/route.zig").TypedHandlerFn;
 
 const Bundle = @import("router/routing_trie.zig").Bundle;
-const FoundBundle = @import("router/routing_trie.zig").FoundBundle;
 
 const Capture = @import("router/routing_trie.zig").Capture;
 const Request = @import("request.zig").Request;
@@ -59,25 +58,20 @@ pub const Router = struct {
         self.routes.deinit(allocator);
     }
 
-    pub fn print_route_tree(self: *const Router) void {
-        self.routes.print();
-    }
-
     pub fn get_bundle_from_host(
         self: *const Router,
         allocator: std.mem.Allocator,
         path: []const u8,
         captures: []Capture,
         queries: *AnyCaseStringMap,
-    ) !FoundBundle {
+    ) !Bundle {
         queries.clearRetainingCapacity();
 
-        return try self.routes.get_bundle(allocator, path, captures, queries) orelse {
-            const not_found_bundle: Bundle = .{
-                .route = Route.init("").all({}, self.configuration.not_found),
-                .middlewares = &.{},
-            };
-            return .{ .bundle = not_found_bundle, .captures = captures[0..0], .queries = queries, .duped = &.{} };
+        return try self.routes.get_bundle(allocator, path, captures, queries) orelse Bundle{
+            .route = Route.init("").all({}, self.configuration.not_found),
+            .captures = captures[0..],
+            .queries = queries,
+            .duped = &.{},
         };
     }
 };
