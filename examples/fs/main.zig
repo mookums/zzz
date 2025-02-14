@@ -19,7 +19,7 @@ const FsDir = http.FsDir;
 
 const Compression = http.Middlewares.Compression;
 
-fn base_handler(_: *const Context, _: void) !Respond {
+fn base_handler(ctx: *const Context, _: void) !Respond {
     const body =
         \\ <!DOCTYPE html>
         \\ <html>
@@ -29,11 +29,11 @@ fn base_handler(_: *const Context, _: void) !Respond {
         \\ </html>
     ;
 
-    return Respond{ .standard = .{
+    return try ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    } };
+    });
 }
 
 pub fn main() !void {

@@ -15,16 +15,14 @@ const Route = http.Route;
 const Router = http.Router;
 const Respond = http.Respond;
 
-pub const std_options = .{
-    .log_level = .err,
-};
+pub const std_options = .{ .log_level = .err };
 
-pub fn root_handler(_: *const Context, _: void) !Respond {
-    return Respond{ .standard = .{
+pub fn root_handler(ctx: *const Context, _: void) !Respond {
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "This is an HTTP benchmark",
-    } };
+    });
 }
 
 pub fn main() !void {

@@ -23,15 +23,13 @@ pub const SSE = struct {
     runtime: *Runtime,
 
     pub fn init(ctx: *const Context) !SSE {
-        try ctx.response.apply(.{
-            .status = .OK,
-            .mime = Mime{
-                .content_type = .{ .single = "text/event-stream" },
-                .extension = .{ .single = "" },
-                .description = "SSE",
-            },
-            .headers = &.{},
-        });
+        const response = ctx.response;
+        response.status = .OK;
+        response.mime = Mime{
+            .content_type = .{ .single = "text/event-stream" },
+            .extension = .{ .single = "" },
+            .description = "SSE",
+        };
 
         var list = try std.ArrayListUnmanaged(u8).initCapacity(ctx.allocator, 0);
         errdefer list.deinit(ctx.allocator);

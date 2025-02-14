@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Mime = @import("../mime.zig").Mime;
 const Respond = @import("../response.zig").Respond;
+const Response = @import("../response.zig").Response;
 const Middleware = @import("../router/middleware.zig").Middleware;
 const Next = @import("../router/middleware.zig").Next;
 const Layer = @import("../router/middleware.zig").Layer;
@@ -43,7 +44,7 @@ pub const RateLimitConfig = struct {
     map: std.AutoHashMap(u128, Bucket),
     tokens_per_sec: u16,
     max_tokens: u16,
-    response_on_limited: Respond,
+    response_on_limited: Response.Fields,
     mutex: std.Thread.Mutex = .{},
 
     pub fn init(
@@ -53,12 +54,10 @@ pub const RateLimitConfig = struct {
         response_on_limited: ?Respond,
     ) RateLimitConfig {
         const map = std.AutoHashMap(u128, Bucket).init(allocator);
-        const respond = response_on_limited orelse Respond{
-            .standard = .{
-                .status = .@"Too Many Requests",
-                .mime = Mime.TEXT,
-                .body = "",
-            },
+        const respond = response_on_limited orelse Response.Fields{
+            .status = .@"Too Many Requests",
+            .mime = Mime.TEXT,
+            .body = "",
         };
 
         return .{

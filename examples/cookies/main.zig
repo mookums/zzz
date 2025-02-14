@@ -22,15 +22,14 @@ fn base_handler(ctx: *const Context, _: void) !Respond {
     while (iter.next()) |kv| log.debug("cookie: k={s} v={s}", .{ kv.key_ptr.*, kv.value_ptr.* });
 
     const cookie = Cookie.init("example_cookie", "abcdef123");
-
-    return Respond{ .standard = .{
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "Hello, world!",
         .headers = &.{
             .{ "Set-Cookie", try cookie.to_string_alloc(ctx.allocator) },
         },
-    } };
+    });
 }
 
 pub fn main() !void {

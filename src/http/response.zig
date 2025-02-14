@@ -8,16 +8,9 @@ const Date = @import("lib.zig").Date;
 
 const Stream = @import("tardy").Stream;
 
-pub const Respond = union(enum) {
-    pub const Fields = struct {
-        status: Status = .OK,
-        mime: Mime = Mime.TEXT,
-        body: []const u8 = "",
-        headers: []const [2][]const u8 = &.{},
-    };
-
+pub const Respond = enum {
     // When we are returning a real HTTP request, we use this.
-    standard: Fields,
+    standard,
     // If we responded and we want to give control back to the HTTP engine.
     responded,
     // If we want the connection to close.
@@ -30,6 +23,13 @@ pub const Response = struct {
     body: ?[]const u8 = null,
     headers: AnyCaseStringMap,
 
+    pub const Fields = struct {
+        status: Status,
+        mime: Mime,
+        body: []const u8 = "",
+        headers: []const [2][]const u8 = &.{},
+    };
+
     pub fn init(allocator: std.mem.Allocator) Response {
         const headers = AnyCaseStringMap.init(allocator);
         return Response{ .headers = headers };
@@ -39,13 +39,12 @@ pub const Response = struct {
         self.headers.deinit();
     }
 
-    pub fn apply(self: *Response, into: Respond.Fields) !void {
+    pub fn apply(self: *Response, into: Fields) !Respond {
         self.status = into.status;
         self.mime = into.mime;
         self.body = into.body;
-
-        self.headers.clearRetainingCapacity();
         for (into.headers) |pair| try self.headers.put(pair[0], pair[1]);
+        return .standard;
     }
 
     pub fn clear(self: *Response) void {

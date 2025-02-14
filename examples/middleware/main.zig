@@ -32,11 +32,11 @@ fn root_handler(ctx: *const Context, id: i8) !Respond {
     // This is the standard response and what you
     // will usually be using. This will send to the
     // client and then continue to await more requests.
-    return Respond{ .standard = .{
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    } };
+    });
 }
 
 fn passing_middleware(next: *Next, _: void) !Respond {

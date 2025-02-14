@@ -17,7 +17,7 @@ const Respond = http.Respond;
 
 const Compression = http.Middlewares.Compression;
 
-fn root_handler(_: *const Context, _: void) !Respond {
+fn root_handler(ctx: *const Context, _: void) !Respond {
     const body =
         \\ <!DOCTYPE html>
         \\ <html>
@@ -30,11 +30,11 @@ fn root_handler(_: *const Context, _: void) !Respond {
         \\ </html>
     ;
 
-    return Respond{ .standard = .{
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body[0..],
-    } };
+    });
 }
 
 pub fn main() !void {

@@ -372,11 +372,10 @@ pub const Server = struct {
                 const h_with_data: HandlerWithData = found.route.get_handler(
                     provision.request.method.?,
                 ) orelse {
-                    try provision.response.apply(.{
-                        .status = .@"Method Not Allowed",
-                        .mime = Mime.TEXT,
-                        .body = "",
-                    });
+                    provision.response.headers.clearRetainingCapacity();
+                    provision.response.status = .@"Method Not Allowed";
+                    provision.response.mime = Mime.TEXT;
+                    provision.response.body = "";
 
                     state = .respond;
                     continue;
@@ -411,19 +410,18 @@ pub const Server = struct {
                     // If in Debug Mode, we will return the error name. In other modes,
                     // we won't to avoid leaking implemenation details.
                     const body = if (comptime builtin.mode == .Debug) @errorName(e) else "";
-                    break :blk Respond{
-                        .standard = .{
-                            .status = .@"Internal Server Error",
-                            .mime = Mime.TEXT,
-                            .body = body,
-                        },
-                    };
+
+                    break :blk try provision.response.apply(.{
+                        .status = .@"Internal Server Error",
+                        .mime = Mime.TEXT,
+                        .body = body,
+                    });
                 };
 
                 switch (next_respond) {
-                    .standard => |respond| {
+                    .standard => {
                         // applies the respond onto the response
-                        try provision.response.apply(respond);
+                        //try provision.response.apply(respond);
                         state = .respond;
                     },
                     .responded => {

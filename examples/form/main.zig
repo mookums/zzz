@@ -17,7 +17,7 @@ const Form = http.Form;
 const Query = http.Query;
 const Respond = http.Respond;
 
-fn base_handler(_: *const Context, _: void) !Respond {
+fn base_handler(ctx: *const Context, _: void) !Respond {
     const body =
         \\<form>
         \\    <label for="fname">First name:</label>
@@ -33,11 +33,11 @@ fn base_handler(_: *const Context, _: void) !Respond {
         \\</form> 
     ;
 
-    return Respond{ .standard = .{
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = body,
-    } };
+    });
 }
 
 const UserInfo = struct {
@@ -69,11 +69,11 @@ fn generate_handler(ctx: *const Context, _: void) !Respond {
         },
     );
 
-    return Respond{ .standard = .{
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.TEXT,
         .body = body,
-    } };
+    });
 }
 
 pub fn main() !void {
