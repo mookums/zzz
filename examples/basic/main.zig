@@ -15,12 +15,12 @@ const Context = http.Context;
 const Route = http.Route;
 const Respond = http.Respond;
 
-fn base_handler(_: *const Context, _: void) !Respond {
-    return Respond{ .standard = .{
+fn base_handler(ctx: *const Context, _: void) !Respond {
+    return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
         .body = "Hello, world!",
-    } };
+    });
 }
 
 pub fn main() !void {

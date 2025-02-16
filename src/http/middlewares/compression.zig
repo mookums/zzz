@@ -18,26 +18,25 @@ pub fn Compression(comptime compression: Kind) Layer {
     const func: TypedMiddlewareFn(void) = switch (compression) {
         .gzip => |inner| struct {
             fn gzip_mw(next: *Next, _: void) !Respond {
-                var response = try next.run();
-                switch (response) {
-                    .standard => |*respond| {
-                        var compressed = std.ArrayList(u8).init(next.context.allocator);
+                const respond = try next.run();
+                const response = next.context.response;
+                if (response.body) |body| if (respond == .standard) {
+                    var compressed = try std.ArrayListUnmanaged(u8).initCapacity(next.context.allocator, body.len);
+                    errdefer compressed.deinit(next.context.allocator);
 
-                        var body_stream = std.io.fixedBufferStream(respond.body);
-                        try std.compress.gzip.compress(body_stream.reader(), compressed.writer(), inner);
+                    var body_stream = std.io.fixedBufferStream(body);
+                    try std.compress.gzip.compress(
+                        body_stream.reader(),
+                        compressed.writer(next.context.allocator),
+                        inner,
+                    );
 
-                        // TODO: consider having the headers be a part of the provision?
-                        // might be nice to reuse them as things go on??
-                        var header_list = std.ArrayList([2][]const u8).init(next.context.allocator);
-                        try header_list.appendSlice(respond.headers);
-                        try header_list.append(.{ "Content-Encoding", "gzip" });
+                    try response.headers.put("Content-Encoding", "gzip");
+                    response.body = try compressed.toOwnedSlice(next.context.allocator);
+                    return .standard;
+                };
 
-                        respond.body = try compressed.toOwnedSlice();
-                        respond.headers = try header_list.toOwnedSlice();
-                        return .{ .standard = respond.* };
-                    },
-                    else => return response,
-                }
+                return respond;
             }
         }.gzip_mw,
     };

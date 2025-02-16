@@ -18,17 +18,13 @@ const Stream = @import("tardy").Stream;
 
 pub const FsDir = struct {
     fn fs_dir_handler(ctx: *const Context, dir: Dir) !Respond {
-        if (ctx.captures.len == 0) {
-            return Respond{
-                .standard = .{
-                    .status = .@"Not Found",
-                    .mime = Mime.HTML,
-                    .body = "",
-                },
-            };
-        }
+        if (ctx.captures.len == 0) return ctx.response.apply(.{
+            .status = .@"Not Found",
+            .mime = Mime.HTML,
+        });
 
-        var header_list = try std.ArrayListUnmanaged([2][]const u8).initCapacity(ctx.allocator, 3);
+        const response = ctx.response;
+
         // Resolving the requested file.
         const search_path = ctx.captures[0].remaining;
         const file_path_z = try ctx.allocator.dupeZ(u8, search_path);
@@ -47,14 +43,10 @@ pub const FsDir = struct {
 
         const file = dir.open_file(ctx.runtime, file_path_z, .{ .mode = .read }) catch |e| switch (e) {
             error.NotFound => {
-                return Respond{
-                    .standard = .{
-                        .status = .@"Not Found",
-                        .mime = Mime.HTML,
-                        .body = "",
-                        .headers = try header_list.toOwnedSlice(ctx.allocator),
-                    },
-                };
+                return ctx.response.apply(.{
+                    .status = .@"Not Found",
+                    .mime = Mime.HTML,
+                });
             },
             else => return e,
         };
@@ -69,31 +61,24 @@ pub const FsDir = struct {
         const etag_hash = hash.final();
 
         const calc_etag = try std.fmt.allocPrint(ctx.allocator, "\"{d}\"", .{etag_hash});
-        try header_list.append(ctx.allocator, .{ "ETag", calc_etag });
+        try response.headers.put("ETag", calc_etag);
 
         // If we have an ETag on the request...
         if (ctx.request.headers.get("If-None-Match")) |etag| {
             if (std.mem.eql(u8, etag, calc_etag)) {
                 // If the ETag matches.
-                return Respond{
-                    .standard = .{
-                        .status = .@"Not Modified",
-                        .mime = Mime.HTML,
-                        .headers = try header_list.toOwnedSlice(ctx.allocator),
-                        .body = "",
-                    },
-                };
+                return ctx.response.apply(.{
+                    .status = .@"Not Modified",
+                    .mime = Mime.HTML,
+                });
             }
         }
 
         // apply the fields.
-        try ctx.response.apply(Respond.Fields{
-            .status = .OK,
-            .headers = try header_list.toOwnedSlice(ctx.allocator),
-            .mime = mime,
-        });
+        response.status = .OK;
+        response.mime = mime;
 
-        try ctx.response.headers_into_writer(ctx.header_buffer.writer(), stat.size);
+        try response.headers_into_writer(ctx.header_buffer.writer(), stat.size);
         const headers = ctx.header_buffer.items;
         const length = try ctx.socket.send_all(ctx.runtime, headers);
         if (headers.len != length) return error.SendingHeadersFailed;

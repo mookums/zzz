@@ -20,14 +20,13 @@ const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStrin
 
 /// Default not found handler: send a plain text response.
 pub const default_not_found_handler = struct {
-    fn not_found_handler(_: *const Context, _: void) !Respond {
-        return Respond{
-            .standard = .{
-                .status = .@"Not Found",
-                .mime = Mime.TEXT,
-                .body = "404 | Not Found",
-            },
-        };
+    fn not_found_handler(ctx: *const Context, _: void) !Respond {
+        const response = ctx.response;
+        response.status = .@"Not Found";
+        response.mime = Mime.TEXT;
+        response.body = "404 | Not Found";
+
+        return .standard;
     }
 }.not_found_handler;
 
