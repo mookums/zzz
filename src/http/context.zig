@@ -5,11 +5,13 @@ const Runtime = @import("tardy").Runtime;
 const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
 
 const Capture = @import("router/routing_trie.zig").Capture;
+
+const TypedStorage = @import("../core/typed_storage.zig").TypedStorage;
 const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 
-// Context is dependent on the server that gets created.
+/// HTTP Context. Contains all of the various information
+/// that will persist throughout the lifetime of this Request/Response.
 pub const Context = struct {
-    const Self = @This();
     allocator: std.mem.Allocator,
     /// Not safe to access unless you are manually sending the headers
     /// and returning the .responded variant of Respond.
@@ -18,6 +20,8 @@ pub const Context = struct {
     /// The Request that triggered this handler.
     request: *const Request,
     response: *Response,
+    /// Storage
+    storage: *TypedStorage,
     /// Socket for this Connection.
     socket: SecureSocket,
     /// Slice of the URL Slug Captures

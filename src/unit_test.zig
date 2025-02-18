@@ -8,6 +8,7 @@ test "zzz unit tests" {
     // Core
     testing.refAllDecls(@import("./core/any_case_string_map.zig"));
     testing.refAllDecls(@import("./core/pseudoslice.zig"));
+    testing.refAllDecls(@import("./core/typed_storage.zig"));
 
     // HTTP
     testing.refAllDecls(@import("./http/context.zig"));

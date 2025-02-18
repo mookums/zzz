@@ -4,6 +4,7 @@ const tag = builtin.os.tag;
 const assert = std.debug.assert;
 const log = std.log.scoped(.@"zzz/http/server");
 
+const TypedStorage = @import("../core/typed_storage.zig").TypedStorage;
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 
@@ -139,6 +140,7 @@ pub const Provision = struct {
     zc_recv_buffer: ZeroCopy(u8),
     header_buffer: std.ArrayList(u8),
     arena: std.heap.ArenaAllocator,
+    storage: TypedStorage,
     captures: []Capture,
     queries: AnyCaseStringMap,
     request: Request,
@@ -187,14 +189,17 @@ pub const Server = struct {
         respond,
     };
 
-    fn prepare_new_request(state: *State, provision: *Provision, config: ServerConfig) !void {
+    fn prepare_new_request(state: ?*State, provision: *Provision, config: ServerConfig) !void {
+        assert(provision.initalized);
         provision.request.clear();
         provision.response.clear();
+        provision.storage.clear();
         provision.zc_recv_buffer.clear_retaining_capacity();
         provision.header_buffer.clearRetainingCapacity();
         _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
-        state.* = .{ .request = .header };
         provision.recv_slice = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
+
+        if (state) |s| s.* = .{ .request = .header };
     }
 
     pub fn main_frame(
@@ -256,20 +261,12 @@ pub const Server = struct {
                 @panic("attempting to allocate more memory than available. (Captures)");
             };
             provision.queries = AnyCaseStringMap.init(rt.allocator);
+            provision.storage = TypedStorage.init(rt.allocator);
             provision.request = Request.init(rt.allocator);
             provision.response = Response.init(rt.allocator);
             provision.initalized = true;
         }
-
-        defer if (provision.zc_recv_buffer.len > config.list_recv_bytes_retain)
-            provision.zc_recv_buffer.shrink_clear_and_free(config.list_recv_bytes_retain) catch unreachable
-        else
-            provision.zc_recv_buffer.clear_retaining_capacity();
-        defer provision.header_buffer.clearRetainingCapacity();
-        defer _ = provision.arena.reset(.{ .retain_with_limit = config.connection_arena_bytes_retain });
-        defer provision.queries.clearRetainingCapacity();
-        defer provision.request.clear();
-        defer provision.response.clear();
+        defer prepare_new_request(null, provision, config) catch unreachable;
 
         var state: State = .{ .request = .header };
         const buffer = try provision.zc_recv_buffer.get_write_area(config.socket_buffer_bytes);
@@ -387,6 +384,7 @@ pub const Server = struct {
                     .header_buffer = &provision.header_buffer,
                     .request = &provision.request,
                     .response = &provision.response,
+                    .storage = &provision.storage,
                     .socket = secure,
                     .captures = found.captures,
                     .queries = found.queries,
@@ -523,6 +521,7 @@ pub const Server = struct {
                 @panic("attempting to allocate more memory than available. (Captures)");
             };
             provision.queries = AnyCaseStringMap.init(rt.allocator);
+            provision.storage = TypedStorage.init(rt.allocator);
             provision.request = Request.init(rt.allocator);
             provision.response = Response.init(rt.allocator);
         }

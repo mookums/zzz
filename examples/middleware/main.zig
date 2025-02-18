@@ -24,10 +24,15 @@ fn root_handler(ctx: *const Context, id: i8) !Respond {
         \\ <body>
         \\ <h1>Hello, World!</h1>
         \\ <p>id: {d}</p>
+        \\ <p>stored: {d}</p>
         \\ </body>
         \\ </html>
     ;
-    const body = try std.fmt.allocPrint(ctx.allocator, body_fmt, .{id});
+    const body = try std.fmt.allocPrint(
+        ctx.allocator,
+        body_fmt,
+        .{ id, ctx.storage.get(usize).? },
+    );
 
     // This is the standard response and what you
     // will usually be using. This will send to the
@@ -41,6 +46,7 @@ fn root_handler(ctx: *const Context, id: i8) !Respond {
 
 fn passing_middleware(next: *Next, _: void) !Respond {
     log.info("pass middleware: {s}", .{next.context.request.uri.?});
+    try next.context.storage.put(usize, 100);
     return try next.run();
 }
 
