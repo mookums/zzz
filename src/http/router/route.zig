@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const log = std.log.scoped(.@"zzz/http/route");
 const assert = std.debug.assert;
 
-const wrap = @import("tardy").wrap;
+const wrap = @import("../../core/wrapping.zig").wrap;
 
 const Method = @import("../method.zig").Method;
 const Request = @import("../request.zig").Request;

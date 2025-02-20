@@ -3,8 +3,8 @@ const log = std.log.scoped(.@"zzz/router/middleware");
 const assert = std.debug.assert;
 
 const Runtime = @import("tardy").Runtime;
-const wrap = @import("tardy").wrap;
 
+const wrap = @import("../../core/wrapping.zig").wrap;
 const Pseudoslice = @import("../../core/pseudoslice.zig").Pseudoslice;
 const Server = @import("../server.zig").Server;
 
