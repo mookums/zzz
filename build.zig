@@ -41,8 +41,8 @@ pub fn build(b: *std.Build) void {
     }
 
     const tests = b.addTest(.{
-        .name = "unit-test",
-        .root_source_file = b.path("./src/unit_test.zig"),
+        .name = "tests",
+        .root_source_file = b.path("./src/tests.zig"),
     });
     tests.root_module.addImport("tardy", tardy);
     tests.root_module.linkLibrary(bearssl);

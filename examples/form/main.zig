@@ -51,8 +51,8 @@ const UserInfo = struct {
 
 fn generate_handler(ctx: *const Context, _: void) !Respond {
     const info = switch (ctx.request.method.?) {
-        .GET => try Query(UserInfo).parse(ctx),
-        .POST => try Form(UserInfo).parse(ctx),
+        .GET => try Query(UserInfo).parse(ctx.allocator, ctx),
+        .POST => try Form(UserInfo).parse(ctx.allocator, ctx),
         else => return error.UnexpectedMethod,
     };
 

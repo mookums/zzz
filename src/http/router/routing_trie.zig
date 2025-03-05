@@ -273,14 +273,13 @@ pub const RoutingTrie = struct {
                 var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
 
                 while (query_iter.next()) |chunk| {
-                    const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse return error.QueryMissingValue;
-                    if (chunk.len < field_idx + 2) return error.QueryMissingValue;
+                    const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse return error.MissingValue;
+                    if (chunk.len < field_idx + 2) return error.MissingValue;
 
                     const key = chunk[0..field_idx];
                     const value = chunk[(field_idx + 1)..];
 
-                    if (std.mem.indexOfScalar(u8, key, '=') != null) return error.MalformedQueryKey;
-                    if (std.mem.indexOfScalar(u8, value, '=') != null) return error.MalformedQueryValue;
+                    if (std.mem.indexOfScalar(u8, value, '=') != null) return error.MalformedPair;
 
                     const decoded_key = try decode_alloc(allocator, key);
                     try duped.append(allocator, decoded_key);
@@ -523,14 +522,14 @@ test "Routing with Queries" {
         q.clearRetainingCapacity();
         // Purposefully bad format with incomplete key/value pair.
         const captured = s.get_bundle(testing.allocator, "/item/100/price/283.21?help", captures[0..], &q);
-        try testing.expectError(error.QueryMissingValue, captured);
+        try testing.expectError(error.MissingValue, captured);
     }
 
     {
         q.clearRetainingCapacity();
         // Purposefully bad format with incomplete key/value pair.
         const captured = s.get_bundle(testing.allocator, "/item/100/price/283.21?help=", captures[0..], &q);
-        try testing.expectError(error.QueryMissingValue, captured);
+        try testing.expectError(error.MissingValue, captured);
     }
 
     {
@@ -542,6 +541,6 @@ test "Routing with Queries" {
             captures[0..],
             &q,
         );
-        try testing.expectError(error.MalformedQueryValue, captured);
+        try testing.expectError(error.MalformedPair, captured);
     }
 }

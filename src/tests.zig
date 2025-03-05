@@ -20,6 +20,7 @@ test "zzz unit tests" {
     testing.refAllDecls(@import("./http/server.zig"));
     testing.refAllDecls(@import("./http/sse.zig"));
     testing.refAllDecls(@import("./http/status.zig"));
+    testing.refAllDecls(@import("./http/form.zig"));
 
     // Router
     testing.refAllDecls(@import("./http/router.zig"));

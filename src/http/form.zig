@@ -28,37 +28,33 @@ pub fn decode_alloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8
     return list.toOwnedSlice(allocator);
 }
 
-fn parse_from(comptime name: []const u8, comptime T: type, value: []const u8) !T {
-    switch (@typeInfo(T)) {
-        .Int => |info| {
-            return switch (info.signedness) {
-                .unsigned => try std.fmt.parseUnsigned(T, value, 10),
-                .signed => try std.fmt.parseInt(T, value, 10),
-            };
+fn parse_from(allocator: std.mem.Allocator, comptime T: type, comptime name: []const u8, value: []const u8) !T {
+    return switch (@typeInfo(T)) {
+        .Int => |info| switch (info.signedness) {
+            .unsigned => try std.fmt.parseUnsigned(T, value, 10),
+            .signed => try std.fmt.parseInt(T, value, 10),
         },
-        .Float => |_| {
-            return try std.fmt.parseFloat(T, value);
-        },
-        .Optional => |info| {
-            return @as(T, try parse_from(name, info.child, value));
-        },
+        .Float => try std.fmt.parseFloat(T, value),
+        .Optional => |info| @as(T, try parse_from(allocator, info.child, name, value)),
+        .Enum => std.meta.stringToEnum(T, value) orelse return error.InvalidEnumValue,
+        .Bool => std.mem.eql(u8, value, "true"),
         else => switch (T) {
-            []const u8 => return value,
-            bool => return std.mem.eql(u8, value, "true"),
+            []const u8 => try allocator.dupe(u8, value),
+            [:0]const u8 => try allocator.dupeZ(u8, value),
             else => std.debug.panic("Unsupported field type \"{s}\"", .{@typeName(T)}),
         },
-    }
+    };
 }
 
-fn parse_struct(comptime T: type, map: *const AnyCaseStringMap) !T {
+fn parse_struct(allocator: std.mem.Allocator, comptime T: type, map: *const AnyCaseStringMap) !T {
     var ret: T = undefined;
     assert(@typeInfo(T) == .Struct);
     const struct_info = @typeInfo(T).Struct;
     inline for (struct_info.fields) |field| {
-        const maybe_value_str: ?[]const u8 = map.get(field.name);
+        const entry = map.getEntry(field.name);
 
-        if (maybe_value_str) |value| {
-            @field(ret, field.name) = try parse_from(field.name, field.type, value);
+        if (entry) |e| {
+            @field(ret, field.name) = try parse_from(allocator, field.type, field.name, e.value_ptr.*);
         } else if (field.default_value) |default| {
             @field(ret, field.name) = @as(*const field.type, @ptrCast(@alignCast(default))).*;
         } else if (@typeInfo(field.type) == .Optional) {
@@ -69,33 +65,55 @@ fn parse_struct(comptime T: type, map: *const AnyCaseStringMap) !T {
     return ret;
 }
 
+fn construct_map_from_body(allocator: std.mem.Allocator, m: *AnyCaseStringMap, body: []const u8) !void {
+    var pairs = std.mem.splitScalar(u8, body, '&');
+
+    while (pairs.next()) |pair| {
+        const field_idx = std.mem.indexOfScalar(u8, pair, '=') orelse return error.MissingValue;
+        if (pair.len < field_idx + 2) return error.MissingValue;
+
+        const key = pair[0..field_idx];
+        const value = pair[(field_idx + 1)..];
+
+        if (std.mem.indexOfScalar(u8, value, '=') != null) return error.MalformedPair;
+
+        const decoded_key = try decode_alloc(allocator, key);
+        errdefer allocator.free(decoded_key);
+
+        const decoded_value = try decode_alloc(allocator, value);
+        errdefer allocator.free(decoded_value);
+
+        // Allow for duplicates (like with the URL params),
+        // The last one just takes precedent.
+        const entry = try m.getOrPut(decoded_key);
+        if (entry.found_existing) {
+            allocator.free(decoded_key);
+            allocator.free(entry.value_ptr.*);
+        }
+        entry.value_ptr.* = decoded_value;
+    }
+}
+
 /// Parses Form data from a request body in `x-www-form-urlencoded` format.
 pub fn Form(comptime T: type) type {
     return struct {
-        pub fn parse(ctx: *const Context) !T {
+        pub fn parse(allocator: std.mem.Allocator, ctx: *const Context) !T {
             var m = AnyCaseStringMap.init(ctx.allocator);
-            defer m.deinit();
+            defer {
+                var it = m.iterator();
+                while (it.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);
+                    allocator.free(entry.value_ptr.*);
+                }
+                m.deinit();
+            }
 
-            const map: *const AnyCaseStringMap = map: {
-                if (ctx.request.body) |body| {
-                    var pairs = std.mem.splitScalar(u8, body, '&');
-                    while (pairs.next()) |pair| {
-                        var kv = std.mem.splitScalar(u8, pair, '=');
+            if (ctx.request.body) |body|
+                try construct_map_from_body(allocator, &m, body)
+            else
+                return error.BodyEmpty;
 
-                        const key = kv.next() orelse return error.MalformedForm;
-                        const decoded_key = try decode_alloc(ctx.allocator, key);
-
-                        const value = kv.next() orelse return error.MalformedForm;
-                        const decoded_value = try decode_alloc(ctx.allocator, value);
-
-                        assert(kv.next() == null);
-                        try m.putNoClobber(decoded_key, decoded_value);
-                    }
-                } else return error.BodyEmpty;
-                break :map &m;
-            };
-
-            return parse_struct(T, map);
+            return parse_struct(allocator, T, &m);
         }
     };
 }
@@ -103,8 +121,72 @@ pub fn Form(comptime T: type) type {
 /// Parses Form data from request URL query parameters.
 pub fn Query(comptime T: type) type {
     return struct {
-        pub fn parse(ctx: *const Context) !T {
-            return parse_struct(T, ctx.queries);
+        pub fn parse(allocator: std.mem.Allocator, ctx: *const Context) !T {
+            return parse_struct(allocator, T, ctx.queries);
         }
     };
+}
+
+const testing = std.testing;
+
+test "FormData: Parsing from Body" {
+    const UserRole = enum { admin, visitor };
+    const User = struct { id: u32, name: []const u8, age: u8, role: UserRole };
+    const body: []const u8 = "id=10&name=John&age=12&role=visitor";
+
+    var m = AnyCaseStringMap.init(testing.allocator);
+    defer {
+        var it = m.iterator();
+        while (it.next()) |entry| {
+            testing.allocator.free(entry.key_ptr.*);
+            testing.allocator.free(entry.value_ptr.*);
+        }
+        m.deinit();
+    }
+    try construct_map_from_body(testing.allocator, &m, body);
+
+    const parsed = try parse_struct(testing.allocator, User, &m);
+    defer testing.allocator.free(parsed.name);
+
+    try testing.expectEqual(10, parsed.id);
+    try testing.expectEqualSlices(u8, "John", parsed.name);
+    try testing.expectEqual(12, parsed.age);
+    try testing.expectEqual(UserRole.visitor, parsed.role);
+}
+
+test "FormData: Parsing Missing Fields" {
+    const User = struct { id: u32, name: []const u8, age: u8 };
+    const body: []const u8 = "id=10";
+
+    var m = AnyCaseStringMap.init(testing.allocator);
+    defer {
+        var it = m.iterator();
+        while (it.next()) |entry| {
+            testing.allocator.free(entry.key_ptr.*);
+            testing.allocator.free(entry.value_ptr.*);
+        }
+        m.deinit();
+    }
+
+    try construct_map_from_body(testing.allocator, &m, body);
+
+    const parsed = parse_struct(testing.allocator, User, &m);
+    try testing.expectError(error.FieldEmpty, parsed);
+}
+
+test "FormData: Parsing Missing Value" {
+    const body: []const u8 = "abc=abc&id=";
+
+    var m = AnyCaseStringMap.init(testing.allocator);
+    defer {
+        var it = m.iterator();
+        while (it.next()) |entry| {
+            testing.allocator.free(entry.key_ptr.*);
+            testing.allocator.free(entry.value_ptr.*);
+        }
+        m.deinit();
+    }
+
+    const result = construct_map_from_body(testing.allocator, &m, body);
+    try testing.expectError(error.MissingValue, result);
 }
