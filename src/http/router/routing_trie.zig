@@ -266,26 +266,29 @@ pub const RoutingTrie = struct {
 
         var duped = try std.ArrayListUnmanaged([]const u8).initCapacity(allocator, 0);
         defer duped.deinit(allocator);
+        errdefer for (duped.items) |d| allocator.free(d);
 
         if (query_pos) |pos| {
             if (path.len > pos + 1) {
                 var query_iter = std.mem.tokenizeScalar(u8, path[pos + 1 ..], '&');
 
                 while (query_iter.next()) |chunk| {
-                    const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse break;
-                    if (chunk.len < field_idx + 1) break;
+                    const field_idx = std.mem.indexOfScalar(u8, chunk, '=') orelse return error.QueryMissingValue;
+                    if (chunk.len < field_idx + 2) return error.QueryMissingValue;
 
                     const key = chunk[0..field_idx];
                     const value = chunk[(field_idx + 1)..];
 
-                    assert(std.mem.indexOfScalar(u8, key, '=') == null);
-                    assert(std.mem.indexOfScalar(u8, value, '=') == null);
+                    if (std.mem.indexOfScalar(u8, key, '=') != null) return error.MalformedQueryKey;
+                    if (std.mem.indexOfScalar(u8, value, '=') != null) return error.MalformedQueryValue;
 
                     const decoded_key = try decode_alloc(allocator, key);
                     try duped.append(allocator, decoded_key);
 
                     const decoded_value = try decode_alloc(allocator, value);
                     try duped.append(allocator, decoded_value);
+
+                    // Later values will clobber earlier ones.
                     try queries.put(decoded_key, decoded_value);
                 }
             }
@@ -519,17 +522,26 @@ test "Routing with Queries" {
     {
         q.clearRetainingCapacity();
         // Purposefully bad format with incomplete key/value pair.
-        const captured = (try s.get_bundle(
+        const captured = s.get_bundle(testing.allocator, "/item/100/price/283.21?help", captures[0..], &q);
+        try testing.expectError(error.QueryMissingValue, captured);
+    }
+
+    {
+        q.clearRetainingCapacity();
+        // Purposefully bad format with incomplete key/value pair.
+        const captured = s.get_bundle(testing.allocator, "/item/100/price/283.21?help=", captures[0..], &q);
+        try testing.expectError(error.QueryMissingValue, captured);
+    }
+
+    {
+        q.clearRetainingCapacity();
+        // Purposefully bad format with invalid charactes.
+        const captured = s.get_bundle(
             testing.allocator,
-            "/item/100/price/283.21?help",
+            "/item/999/price/100.221?page_count=pages=2020&abc=200",
             captures[0..],
             &q,
-        )).?;
-        defer testing.allocator.free(captured.duped);
-        defer for (captured.duped) |dupe| testing.allocator.free(dupe);
-        try testing.expectEqual(Route.init("/item/%i/price/%f"), captured.route);
-        try testing.expectEqual(100, captured.captures[0].signed);
-        try testing.expectEqual(283.21, captured.captures[1].float);
-        try testing.expectEqual(0, q.count());
+        );
+        try testing.expectError(error.MalformedQueryValue, captured);
     }
 }
