@@ -69,7 +69,7 @@ fn construct_map_from_body(allocator: std.mem.Allocator, m: *AnyCaseStringMap, b
     var pairs = std.mem.splitScalar(u8, body, '&');
 
     while (pairs.next()) |pair| {
-        const field_idx = std.mem.indexOfScalar(u8, pair, '=') orelse return error.MissingValue;
+        const field_idx = std.mem.indexOfScalar(u8, pair, '=') orelse return error.MissingSeperator;
         if (pair.len < field_idx + 2) return error.MissingValue;
 
         const key = pair[0..field_idx];
