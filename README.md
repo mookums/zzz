@@ -7,7 +7,7 @@ Latest Zig Stable: `0.13.0`
 
 Latest zzz release: `0.3.0`
 ```
-zig fetch --save git+https://github.com/mookums/zzz#v0.3.0
+zig fetch --save git+https://github.com/tardy-org/zzz#v0.3.0
 ```
 
 You can then add the dependency in your `build.zig` file:
@@ -37,7 +37,7 @@ For more information, look here:
 ## Optimization
 zzz is **very** fast. Through a combination of methods, such as allocation at start up and avoiding thread contention, we are able to extract tons of performance out of a fairly simple implementation. zzz is quite robust currently but is still early stage software. It's currently been running in production, serving my [site](https://muki.gg).
 
-With the recent migration to [tardy](https://github.com/mookums/tardy), zzz is about as fast as gnet, the fastest plaintext HTTP server according to [TechEmpower](https://www.techempower.com/benchmarks/#hw=ph&test=plaintext&section=data-r22), while consuming only ~22% of the memory that gnet requires.
+With the recent migration to [tardy](https://github.com/tardy-org/tardy), zzz is about as fast as gnet, the fastest plaintext HTTP server according to [TechEmpower](https://www.techempower.com/benchmarks/#hw=ph&test=plaintext&section=data-r22), while consuming only ~22% of the memory that gnet requires.
 
 ![benchmark (request per sec)](./docs/benchmark/req_per_sec_ccx63_24.png)
 
@@ -52,7 +52,7 @@ On the CCX63 instance on Hetzner with 2000 max connections, we are 70.9% faster 
 zzz can be configured to utilize minimal memory while remaining performant. The provided `minram` example only uses 256 kB!
 
 ## Features
-- Built on top of [Tardy](https://github.com/mookums/tardy), an asynchronous runtime.
+- Built on top of [Tardy](https://github.com/tardy-org/tardy), an asynchronous runtime.
 - [Modular Asynchronous Implementation](https://muki.gg/post/modular-async)
     - `io_uring` for Linux (>= 5.1.0).
     - `epoll` for Linux (>= 2.5.45).
