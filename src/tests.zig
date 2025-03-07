@@ -1,9 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub const Core = @import("./core/lib.zig");
-pub const HTTP = @import("./http/lib.zig");
-
 test "zzz unit tests" {
     // Core
     testing.refAllDecls(@import("./core/any_case_string_map.zig"));
