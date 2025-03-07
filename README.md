@@ -5,9 +5,9 @@
 ## Installing
 Latest Zig Stable: `0.13.0`
 
-Latest zzz release: `0.3.0`
+Latest zzz release: `0.2.0`
 ```
-zig fetch --save git+https://github.com/tardy-org/zzz#v0.3.0
+zig fetch --save git+https://github.com/tardy-org/zzz#v0.2.0
 ```
 
 You can then add the dependency in your `build.zig` file:
