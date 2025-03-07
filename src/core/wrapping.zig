@@ -7,11 +7,12 @@ const Wrapped = enum(usize) { null = 0, true = 1, false = 2, void = 3 };
 /// Wraps the given value into a specified integer type.
 /// The value must fit within the size of the given I.
 pub fn wrap(comptime I: type, value: anytype) I {
+    const T = @TypeOf(value);
     assert(@typeInfo(I) == .Int);
     assert(@typeInfo(I).Int.signedness == .unsigned);
 
     if (comptime @bitSizeOf(@TypeOf(value)) > @bitSizeOf(I)) {
-        @compileError("type: " ++ @typeName(value) ++ " is larger than given integer (" ++ @typeName(I) ++ ")");
+        @compileError("type: " ++ @typeName(T) ++ " is larger than given integer (" ++ @typeName(I) ++ ")");
     }
 
     return context: {
@@ -61,7 +62,7 @@ pub fn unwrap(comptime T: type, value: anytype) T {
     assert(@typeInfo(I) == .Int);
     assert(@typeInfo(I).Int.signedness == .unsigned);
     if (comptime @bitSizeOf(@TypeOf(T)) > @bitSizeOf(I)) {
-        @compileError("type: " ++ @typeName(value) ++ "is larger than given integer (" ++ @typeName(T) ++ ")");
+        @compileError("type: " ++ @typeName(T) ++ "is larger than given integer (" ++ @typeName(I) ++ ")");
     }
 
     return context: {
