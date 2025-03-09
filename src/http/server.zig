@@ -8,10 +8,6 @@ const TypedStorage = @import("../core/typed_storage.zig").TypedStorage;
 const Pseudoslice = @import("../core/pseudoslice.zig").Pseudoslice;
 const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 
-const TLSFileOptions = @import("../tls/lib.zig").TLSFileOptions;
-const TLSContext = @import("../tls/lib.zig").TLSContext;
-const TLS = @import("../tls/lib.zig").TLS;
-
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
@@ -32,7 +28,6 @@ const Next = @import("router/middleware.zig").Next;
 
 pub const Runtime = @import("tardy").Runtime;
 pub const Task = @import("tardy").Task;
-pub const AsyncIOType = @import("tardy").AsyncIOType;
 const TardyCreator = @import("tardy").Tardy;
 
 const Cross = @import("tardy").Cross;
@@ -45,18 +40,14 @@ const AcceptResult = @import("tardy").AcceptResult;
 const RecvResult = @import("tardy").RecvResult;
 const SendResult = @import("tardy").SendResult;
 
-const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
+const secsock = @import("secsock");
+const SecureSocket = secsock.SecureSocket;
 
-/// Security Model to use.
-///
-/// Default: .plain (plaintext)
-pub const Security = union(enum) {
-    plain,
-    tls: struct {
-        cert: TLSFileOptions,
-        key: TLSFileOptions,
-        cert_name: []const u8 = "CERTIFICATE",
-        key_name: []const u8 = "PRIVATE KEY",
+pub const TLSFileOptions = union(enum) {
+    buffer: []const u8,
+    file: struct {
+        path: []const u8,
+        size_buffer_max: u32 = 1024 * 1024,
     },
 };
 
@@ -66,7 +57,6 @@ pub const Security = union(enum) {
 /// This includes various different options and limits
 /// for interacting with the underlying network.
 pub const ServerConfig = struct {
-    security: Security = .plain,
     /// Stack Size
     ///
     /// If you have a large number of middlewares or
@@ -150,21 +140,9 @@ pub const Provision = struct {
 pub const Server = struct {
     const Self = @This();
     config: ServerConfig,
-    tls_ctx: ?TLSContext,
 
-    pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Self {
-        const tls_ctx = switch (config.security) {
-            .tls => |inner| TLSContext.init(allocator, .{
-                .cert = inner.cert,
-                .cert_name = inner.cert_name,
-                .key = inner.key,
-                .key_name = inner.key_name,
-                .size_tls_buffer_max = config.socket_buffer_bytes * 2,
-            }) catch unreachable,
-            .plain => null,
-        };
-
-        return Self{ .config = config, .tls_ctx = tls_ctx };
+    pub fn init(config: ServerConfig) Self {
+        return Self{ .config = config };
     }
 
     pub fn deinit(self: *const Self) void {
@@ -206,21 +184,31 @@ pub const Server = struct {
         rt: *Runtime,
         config: ServerConfig,
         router: *const Router,
-        server: Socket,
-        tls_ctx: ?TLSContext,
+        server_socket: SecureSocket,
         provisions: *Pool(Provision),
         connection_count: *usize,
         accept_queued: *bool,
     ) !void {
-        const socket = try server.accept(rt);
-        defer socket.close_blocking();
+        accept_queued.* = false;
+        const secure = server_socket.accept(rt) catch |e| {
+            if (!accept_queued.*) {
+                try rt.spawn(
+                    .{ rt, config, router, server_socket, provisions, connection_count, accept_queued },
+                    main_frame,
+                    config.stack_size,
+                );
+                accept_queued.* = true;
+            }
+            return e;
+        };
+        defer secure.socket.close_blocking();
+        defer secure.deinit();
 
         connection_count.* += 1;
         defer connection_count.* -= 1;
-        accept_queued.* = false;
 
-        if (socket.addr.any.family != std.posix.AF.UNIX) {
-            try Cross.socket.disable_nagle(socket.handle);
+        if (secure.socket.addr.any.family != std.posix.AF.UNIX) {
+            try Cross.socket.disable_nagle(secure.socket.handle);
         }
 
         if (config.connection_count_max) |max| if (connection_count.* > max) {
@@ -230,19 +218,11 @@ pub const Server = struct {
 
         log.debug("queuing up a new accept request", .{});
         try rt.spawn(
-            .{ rt, config, router, server, tls_ctx, provisions, connection_count, accept_queued },
+            .{ rt, config, router, server_socket, provisions, connection_count, accept_queued },
             main_frame,
             config.stack_size,
         );
         accept_queued.* = true;
-
-        // if we have TLS setup...
-        var tls: ?TLS = if (tls_ctx) |ctx| try ctx.create() else null;
-        defer if (tls) |t| t.deinit(rt.allocator);
-        const secure = SecureSocket.init(socket, &tls, rt) catch {
-            log.debug("tls handshake failed!", .{});
-            return;
-        };
 
         const index = try provisions.borrow();
         defer provisions.release(index);
@@ -312,7 +292,7 @@ pub const Server = struct {
                             @tagName(provision.request.method.?),
                             provision.request.uri.?,
                             provision.request.headers.get("User-Agent") orelse "N/A",
-                            socket.addr,
+                            secure.socket.addr,
                         });
 
                         const content_length_str = provision.request.headers.get("Content-Length") orelse "0";
@@ -402,7 +382,7 @@ pub const Server = struct {
                         @tagName(provision.request.method.?),
                         provision.request.uri.?,
                         e,
-                        socket.addr,
+                        secure.socket.addr,
                     });
 
                     // If in Debug Mode, we will return the error name. In other modes,
@@ -475,11 +455,11 @@ pub const Server = struct {
             },
         };
 
-        log.info("connection ({}) closed", .{socket.addr});
+        log.info("connection ({}) closed", .{secure.socket.addr});
 
         if (!accept_queued.*) {
             try rt.spawn(
-                .{ rt, config, router, server, tls_ctx, provisions, connection_count, accept_queued },
+                .{ rt, config, router, server_socket, provisions, connection_count, accept_queued },
                 main_frame,
                 config.stack_size,
             );
@@ -487,9 +467,19 @@ pub const Server = struct {
         }
     }
 
+    const SocketKind = union(enum) {
+        normal: Socket,
+        secure: SecureSocket,
+    };
+
     /// Serve an HTTP server.
-    pub fn serve(self: *Self, rt: *Runtime, router: *const Router, socket: Socket) !void {
-        log.info("security mode: {s}", .{@tagName(self.config.security)});
+    pub fn serve(self: *Self, rt: *Runtime, router: *const Router, sock: SocketKind) !void {
+        log.info("security mode: {s}", .{@tagName(sock)});
+
+        const secure: SecureSocket = switch (sock) {
+            .normal => |s| SecureSocket.unsecured(s),
+            .secure => |sec| sec,
+        };
 
         const count = self.config.connection_count_max orelse 1024;
         const pooling: PoolKind = if (self.config.connection_count_max == null) .grow else .static;
@@ -531,8 +521,7 @@ pub const Server = struct {
                 rt,
                 self.config,
                 router,
-                socket,
-                self.tls_ctx,
+                secure,
                 provision_pool,
                 connection_count,
                 accept_queued,

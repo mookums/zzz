@@ -53,8 +53,8 @@ pub fn main() !void {
         EntryParams{ .router = &router, .socket = socket },
         struct {
             fn entry(rt: *Runtime, p: EntryParams) !void {
-                var server = Server.init(rt.allocator, .{});
-                try server.serve(rt, p.router, p.socket);
+                var server = Server.init(.{});
+                try server.serve(rt, p.router, .{ .normal = p.socket });
             }
         }.entry,
     );
