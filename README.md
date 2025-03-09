@@ -3,9 +3,11 @@
 
 
 ## Installing
-Latest Zig Stable: `0.13.0`
+Compatible Zig Version: `0.13.0`
 
-Latest zzz release: `0.2.0`
+Compatible [tardy](https://github.com/tardy-org/tardy) Version: `95239a7d9547161869f365bd6cd3f0255b37c49b`
+
+Latest Release: `0.2.0`
 ```
 zig fetch --save git+https://github.com/tardy-org/zzz#v0.2.0
 ```
@@ -21,7 +23,7 @@ exe.root_module.addImport(zzz);
 ```
 
 ## zzz?
-zzz is a framework for writing performant and reliable networked services in Zig. It supports both HTTP and HTTPS (using BearSSL for TLS).
+zzz is a framework for writing performant and reliable networked services in Zig. It supports both HTTP and HTTPS.
 
 zzz currently supports Linux, Mac and Windows. Linux is currently the recommended target for deployments.
 
@@ -60,7 +62,7 @@ zzz can be configured to utilize minimal memory while remaining performant. The 
     - `poll` for Linux, Mac and Windows.
 - Layered Router, including Middleware
 - Single and Multithreaded Support
-- TLS using BearSSL
+- TLS using [secsock](https://github.com/tardy-org/secsock) 
 - Memory Pooling for minimal allocations 
 
 ## Contribution

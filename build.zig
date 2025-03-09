@@ -17,16 +17,12 @@ pub fn build(b: *std.Build) void {
 
     zzz.addImport("tardy", tardy);
 
-    const bearssl = b.dependency("bearssl", .{
+    const secsock = b.dependency("secsock", .{
         .target = target,
         .optimize = optimize,
-        // Without this, you get an illegal instruction error on certain paths.
-        // This makes it slightly slower but prevents faults.
-        .BR_LE_UNALIGNED = false,
-        .BR_BE_UNALIGNED = false,
-    }).artifact("bearssl");
+    }).module("secsock");
 
-    zzz.linkLibrary(bearssl);
+    zzz.addImport("secsock", secsock);
 
     add_example(b, "basic", false, target, optimize, zzz);
     add_example(b, "cookies", false, target, optimize, zzz);
@@ -45,7 +41,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("./src/tests.zig"),
     });
     tests.root_module.addImport("tardy", tardy);
-    tests.root_module.linkLibrary(bearssl);
+    tests.root_module.addImport("secsock", secsock);
 
     const run_test = b.addRunArtifact(tests);
     run_test.step.dependOn(&tests.step);

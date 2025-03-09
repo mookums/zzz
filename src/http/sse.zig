@@ -7,7 +7,9 @@ const Context = @import("context.zig").Context;
 const Mime = @import("mime.zig").Mime;
 
 const Runtime = @import("tardy").Runtime;
-const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
+
+const secsock = @import("secsock");
+const SecureSocket = secsock.SecureSocket;
 
 const SSEMessage = struct {
     id: ?[]const u8 = null,

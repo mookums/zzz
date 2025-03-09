@@ -2,7 +2,9 @@ const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Runtime = @import("tardy").Runtime;
-const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
+
+const secsock = @import("secsock");
+const SecureSocket = secsock.SecureSocket;
 
 const Capture = @import("router/routing_trie.zig").Capture;
 

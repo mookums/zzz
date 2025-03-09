@@ -83,12 +83,19 @@ pub const FsDir = struct {
         const length = try ctx.socket.send_all(ctx.runtime, headers);
         if (headers.len != length) return error.SendingHeadersFailed;
 
-        try Stream.copy(
-            ctx.runtime,
-            file.stream(),
-            ctx.socket.stream(),
-            ctx.header_buffer.allocatedSlice(),
-        );
+        var buffer = ctx.header_buffer.allocatedSlice();
+        while (true) {
+            const read_count = file.read(ctx.runtime, buffer, null) catch |e| switch (e) {
+                error.EndOfFile => break,
+                else => return e,
+            };
+
+            _ = ctx.socket.send(ctx.runtime, buffer[0..read_count]) catch |e| switch (e) {
+                error.Closed => break,
+                else => return e,
+            };
+        }
+
         return .responded;
     }
 
