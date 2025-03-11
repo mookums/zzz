@@ -11,25 +11,25 @@ const MimeOption = union(enum) {
 };
 
 fn generate_mime_helper(any: anytype) MimeOption {
-    assert(@typeInfo(@TypeOf(any)) == .Pointer);
-    const ptr_info = @typeInfo(@TypeOf(any)).Pointer;
+    assert(@typeInfo(@TypeOf(any)) == .pointer);
+    const ptr_info = @typeInfo(@TypeOf(any)).pointer;
     assert(ptr_info.is_const);
 
     switch (ptr_info.size) {
         else => unreachable,
-        .One => {
+        .one => {
             switch (@typeInfo(ptr_info.child)) {
                 else => unreachable,
-                .Array => |arr_info| {
+                .array => |arr_info| {
                     assert(arr_info.child == u8);
                     return MimeOption{ .single = any };
                 },
-                .Struct => |struct_info| {
+                .@"struct" => |struct_info| {
                     for (struct_info.fields) |field| {
-                        assert(@typeInfo(field.type) == .Pointer);
-                        const p_info = @typeInfo(field.type).Pointer;
-                        assert(@typeInfo(p_info.child) == .Array);
-                        const a_info = @typeInfo(p_info.child).Array;
+                        assert(@typeInfo(field.type) == .pointer);
+                        const p_info = @typeInfo(field.type).pointer;
+                        assert(@typeInfo(p_info.child) == .array);
+                        const a_info = @typeInfo(p_info.child).array;
                         assert(a_info.child == u8);
                     }
 
@@ -126,7 +126,7 @@ pub const Mime = struct {
 };
 
 const all_mime_types = blk: {
-    const decls = @typeInfo(Mime).Struct.decls;
+    const decls = @typeInfo(Mime).@"struct".decls;
     var mimes: [decls.len]Mime = undefined;
     var index: usize = 0;
     for (decls) |decl| {

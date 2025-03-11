@@ -68,10 +68,15 @@ pub fn main() !void {
     try socket.bind();
     try socket.listen(1024);
 
-    var s2n = try secsock.s2n.init(allocator);
-    defer s2n.deinit();
-    try s2n.add_cert_chain(@embedFile("certs/cert.pem"), @embedFile("certs/key.pem"));
-    const secure = try s2n.to_secure_socket(socket, .server);
+    var bearssl = secsock.BearSSL.init(allocator);
+    defer bearssl.deinit();
+    try bearssl.add_cert_chain(
+        "CERTIFICATE",
+        @embedFile("certs/cert.pem"),
+        "EC PRIVATE KEY",
+        @embedFile("certs/key.pem"),
+    );
+    const secure = try bearssl.to_secure_socket(socket, .server);
 
     const EntryParams = struct {
         router: *const Router,

@@ -58,7 +58,7 @@ pub const SSE = struct {
         if (message.id) |id| try writer.print("id: {s}\n", .{id});
         if (message.event) |event| try writer.print("event: {s}\n", .{event});
         if (message.data) |data| {
-            var iter = std.mem.split(u8, data, "\n");
+            var iter = std.mem.splitScalar(u8, data, '\n');
             while (iter.next()) |line| try writer.print("data: {s}\n", .{line});
         }
         if (message.retry) |retry| try writer.print("retry: {d}\n", .{retry});

@@ -30,14 +30,14 @@ pub fn decode_alloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8
 
 fn parse_from(allocator: std.mem.Allocator, comptime T: type, comptime name: []const u8, value: []const u8) !T {
     return switch (@typeInfo(T)) {
-        .Int => |info| switch (info.signedness) {
+        .int => |info| switch (info.signedness) {
             .unsigned => try std.fmt.parseUnsigned(T, value, 10),
             .signed => try std.fmt.parseInt(T, value, 10),
         },
-        .Float => try std.fmt.parseFloat(T, value),
-        .Optional => |info| @as(T, try parse_from(allocator, info.child, name, value)),
-        .Enum => std.meta.stringToEnum(T, value) orelse return error.InvalidEnumValue,
-        .Bool => std.mem.eql(u8, value, "true"),
+        .float => try std.fmt.parseFloat(T, value),
+        .optional => |info| @as(T, try parse_from(allocator, info.child, name, value)),
+        .@"enum" => std.meta.stringToEnum(T, value) orelse return error.InvalidEnumValue,
+        .bool => std.mem.eql(u8, value, "true"),
         else => switch (T) {
             []const u8 => try allocator.dupe(u8, value),
             [:0]const u8 => try allocator.dupeZ(u8, value),
@@ -48,16 +48,16 @@ fn parse_from(allocator: std.mem.Allocator, comptime T: type, comptime name: []c
 
 fn parse_struct(allocator: std.mem.Allocator, comptime T: type, map: *const AnyCaseStringMap) !T {
     var ret: T = undefined;
-    assert(@typeInfo(T) == .Struct);
-    const struct_info = @typeInfo(T).Struct;
+    assert(@typeInfo(T) == .@"struct");
+    const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields) |field| {
         const entry = map.getEntry(field.name);
 
         if (entry) |e| {
             @field(ret, field.name) = try parse_from(allocator, field.type, field.name, e.value_ptr.*);
-        } else if (field.default_value) |default| {
-            @field(ret, field.name) = @as(*const field.type, @ptrCast(@alignCast(default))).*;
-        } else if (@typeInfo(field.type) == .Optional) {
+        } else if (field.defaultValue()) |default| {
+            @field(ret, field.name) = default;
+        } else if (@typeInfo(field.type) == .optional) {
             @field(ret, field.name) = null;
         } else return error.FieldEmpty;
     }

@@ -15,7 +15,7 @@ const Route = http.Route;
 const Router = http.Router;
 const Respond = http.Respond;
 
-pub const std_options = .{ .log_level = .err };
+pub const std_options: std.Options = .{ .log_level = .err };
 
 pub fn root_handler(ctx: *const Context, _: void) !Respond {
     return ctx.response.apply(.{
