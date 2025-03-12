@@ -25,7 +25,6 @@ const Respond = http.Respond;
 
 const secsock = zzz.secsock;
 const SecureSocket = secsock.SecureSocket;
-const Compression = http.Middlewares.Compression;
 
 fn root_handler(ctx: *const Context, _: void) !Respond {
     const body =
@@ -51,9 +50,7 @@ pub fn main() !void {
     const host: []const u8 = "0.0.0.0";
     const port: u16 = 9862;
 
-    var gpa = std.heap.GeneralPurposeAllocator(
-        .{ .thread_safe = true },
-    ){ .backing_allocator = std.heap.c_allocator };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -62,11 +59,6 @@ pub fn main() !void {
 
     var router = try Router.init(allocator, &.{
         Route.init("/").get({}, root_handler).layer(),
-        Compression(.{ .gzip = .{} }),
-        Route.init("/embed/pico.min.css").embed_file(
-            .{ .mime = http.Mime.CSS },
-            @embedFile("embed/pico.min.css"),
-        ).layer(),
     }, .{});
     defer router.deinit(allocator);
 
@@ -76,10 +68,15 @@ pub fn main() !void {
     try socket.bind();
     try socket.listen(1024);
 
-    var s2n = try secsock.s2n.init(allocator);
-    defer s2n.deinit();
-    try s2n.add_cert_chain(@embedFile("certs/cert.pem"), @embedFile("certs/key.pem"));
-    const secure = try s2n.to_secure_socket(socket, .server);
+    var bearssl = secsock.BearSSL.init(allocator);
+    defer bearssl.deinit();
+    try bearssl.add_cert_chain(
+        "CERTIFICATE",
+        @embedFile("certs/cert.pem"),
+        "EC PRIVATE KEY",
+        @embedFile("certs/key.pem"),
+    );
+    const secure = try bearssl.to_secure_socket(socket, .server);
 
     const EntryParams = struct {
         router: *const Router,
