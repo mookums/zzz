@@ -15,6 +15,8 @@ const Route = http.Route;
 const Router = http.Router;
 const Respond = http.Respond;
 
+const secsock = zzz.secsock;
+const SecureSocket = secsock.SecureSocket;
 const Compression = http.Middlewares.Compression;
 
 fn root_handler(ctx: *const Context, _: void) !Respond {
@@ -47,7 +49,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var t = try Tardy.init(allocator, .{ .threading = .single });
+    var t = try Tardy.init(allocator, .{ .threading = .auto });
     defer t.deinit();
 
     var router = try Router.init(allocator, &.{
@@ -66,25 +68,27 @@ pub fn main() !void {
     try socket.bind();
     try socket.listen(1024);
 
+    var bearssl = secsock.BearSSL.init(allocator);
+    defer bearssl.deinit();
+    try bearssl.add_cert_chain(
+        "CERTIFICATE",
+        @embedFile("certs/cert.pem"),
+        "EC PRIVATE KEY",
+        @embedFile("certs/key.pem"),
+    );
+    const secure = try bearssl.to_secure_socket(socket, .server);
+
     const EntryParams = struct {
         router: *const Router,
-        socket: Socket,
+        socket: SecureSocket,
     };
 
     try t.entry(
-        EntryParams{ .router = &router, .socket = socket },
+        EntryParams{ .router = &router, .socket = secure },
         struct {
             fn entry(rt: *Runtime, p: EntryParams) !void {
-                var server = Server.init(rt.allocator, .{
-                    .security = .{ .tls = .{
-                        .cert = .{ .file = .{ .path = "./examples/tls/certs/cert.pem" } },
-                        .key = .{ .file = .{ .path = "./examples/tls/certs/key.pem" } },
-                        .cert_name = "CERTIFICATE",
-                        .key_name = "EC PRIVATE KEY",
-                    } },
-                    .stack_size = 1024 * 1024 * 8,
-                });
-                try server.serve(rt, p.router, p.socket);
+                var server = Server.init(.{ .stack_size = 1024 * 1024 * 8 });
+                try server.serve(rt, p.router, .{ .secure = p.socket });
             }
         }.entry,
     );

@@ -7,7 +7,9 @@ const Context = @import("context.zig").Context;
 const Mime = @import("mime.zig").Mime;
 
 const Runtime = @import("tardy").Runtime;
-const SecureSocket = @import("../core/secure_socket.zig").SecureSocket;
+
+const secsock = @import("secsock");
+const SecureSocket = secsock.SecureSocket;
 
 const SSEMessage = struct {
     id: ?[]const u8 = null,
@@ -56,7 +58,7 @@ pub const SSE = struct {
         if (message.id) |id| try writer.print("id: {s}\n", .{id});
         if (message.event) |event| try writer.print("event: {s}\n", .{event});
         if (message.data) |data| {
-            var iter = std.mem.split(u8, data, "\n");
+            var iter = std.mem.splitScalar(u8, data, '\n');
             while (iter.next()) |line| try writer.print("data: {s}\n", .{line});
         }
         if (message.retry) |retry| try writer.print("retry: {d}\n", .{retry});

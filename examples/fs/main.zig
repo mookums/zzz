@@ -72,11 +72,11 @@ pub fn main() !void {
         EntryParams{ .router = &router, .socket = socket },
         struct {
             fn entry(rt: *Runtime, p: EntryParams) !void {
-                var server = Server.init(rt.allocator, .{
+                var server = Server.init(.{
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 4,
                 });
-                try server.serve(rt, p.router, p.socket);
+                try server.serve(rt, p.router, .{ .normal = p.socket });
             }
         }.entry,
     );
