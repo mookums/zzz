@@ -126,7 +126,7 @@ pub const Route = struct {
     }
 
     pub fn head(self: Route, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Route {
-        return inner_route(.HEAD, self, handler_fn);
+        return inner_route(.HEAD, self, data, handler_fn);
     }
 
     pub fn post(self: Route, data: anytype, handler_fn: TypedHandlerFn(@TypeOf(data))) Route {
